@@ -10,14 +10,16 @@ import (
 )
 
 type FakeProvider struct {
-	mu                   sync.Mutex
-	Calls                []CompletionRequest
-	Models               []string
-	ChatResponse         string
-	ClassifierResponse   string
-	ClassifierResponses  []string
-	Err                  error
-	classifierCallIdx    int
+	mu                  sync.Mutex
+	Calls               []CompletionRequest
+	Models              []string
+	ChatResponse        string
+	ChatResponses       []string
+	ClassifierResponse  string
+	ClassifierResponses []string
+	Err                 error
+	chatCallIdx         int
+	classifierCallIdx   int
 }
 
 func NewFakeProvider() *FakeProvider {
@@ -61,9 +63,25 @@ func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (Com
 		}
 		return newAssistantMessage(content, req.Model, "fake"), nil
 	}
-	content := p.ChatResponse
+	var content string
+	if len(p.ChatResponses) > 0 {
+		p.mu.Lock()
+		if p.chatCallIdx < len(p.ChatResponses) {
+			content = p.ChatResponses[p.chatCallIdx]
+			p.chatCallIdx++
+		}
+		p.mu.Unlock()
+	}
 	if content == "" {
-		content = defaultChatAnswer(joinMessages(sanitized.Messages))
+		content = p.ChatResponse
+	}
+	if content == "" {
+		prompt := joinMessages(sanitized.Messages)
+		if req.JSONMode {
+			content = defaultStructuredChatAnswer(prompt)
+		} else {
+			content = defaultChatAnswer(prompt)
+		}
 	}
 	return newAssistantMessage(content, req.Model, "fake"), nil
 }
@@ -118,6 +136,22 @@ func defaultChatAnswer(prompt string) string {
 		parts = append(parts, "задача paused: нужна /task resume")
 	}
 	return strings.Join(parts, "; ")
+}
+
+func defaultStructuredChatAnswer(prompt string) string {
+	lower := strings.ToLower(prompt)
+	switch {
+	case strings.Contains(lower, "current stage: planning"):
+		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"needs_user_input"}`
+	case strings.Contains(lower, "current stage: execution"):
+		return `{"stage":"execution","summary":"fake execution response","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+	case strings.Contains(lower, "current stage: validation"):
+		return `{"stage":"validation","findings":[],"passed_checks":[],"missing_evidence":["no tool evidence provided"],"residual_risks":[],"verdict":"blocked_missing_evidence"}`
+	case strings.Contains(lower, "current stage: done"):
+		return `{"stage":"done","summary":"fake done response","acceptance_status":[],"validation_evidence":[],"follow_up_task_proposals":[]}`
+	default:
+		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"needs_user_input"}`
+	}
 }
 
 func defaultClassifierJSON(prompt string) string {

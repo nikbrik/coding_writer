@@ -17,7 +17,20 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 		t.Fatal(err)
 	}
 	rendered := RenderMessages(messages)
-	order := []string{"minimal CLI code assistant", "Security and memory policy", `id="profile.active"`, "Invariants", `id="task.current"`, `id="memory.working"`, `id="memory.long"`, `id="memory.short"`, "query"}
+	order := []string{
+		"minimal CLI code assistant",
+		"Security and memory policy",
+		"Process rules",
+		"Invariants",
+		"Current stage: execution",
+		"Tool and side-effect policy",
+		`id="profile.active"`,
+		`id="task.current"`,
+		`id="memory.working"`,
+		`id="memory.long"`,
+		`id="memory.short"`,
+		"query",
+	}
 	last := -1
 	for _, needle := range order {
 		idx := strings.Index(rendered, needle)
@@ -28,5 +41,14 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	}
 	if !strings.Contains(rendered, `trust="untrusted"`) || !strings.Contains(rendered, "task paused") {
 		t.Fatalf("missing untrusted tags or paused warning:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Role: implementer") {
+		t.Fatalf("missing execution stage role:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Return output using the execution schema") {
+		t.Fatalf("answer_question prompt must not request execution schema:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Selected action is answer_question") {
+		t.Fatalf("missing answer_question stage guidance:\n%s", rendered)
 	}
 }

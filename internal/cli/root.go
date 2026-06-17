@@ -16,12 +16,12 @@ import (
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/memory"
+	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/profiles"
 	"github.com/nikbrik/coding_writer/internal/prompting"
 	"github.com/nikbrik/coding_writer/internal/providers"
 	"github.com/nikbrik/coding_writer/internal/storage"
 	"github.com/nikbrik/coding_writer/internal/tasks"
-	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
 var Version = "dev"
@@ -48,6 +48,11 @@ type runtime struct {
 	Provider        providers.LLMProvider
 	Builder         *prompting.Builder
 	Classifier      *memory.Classifier
+	Process         *process.ProcessController
+	PolicyRegistry  *process.StagePolicyRegistry
+	TransitionGate  *process.TransitionGate
+	RetryController *process.RetryController
+	AuditStore      *process.AuditStore
 	DisclosureShown bool
 	Quiet           bool
 }
@@ -80,7 +85,7 @@ func newRootCommand(opts *globalOptions) *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.TrustOpenRouterBaseURL, "trust-openrouter-base-url", false, "trust non-default OpenRouter-compatible base URL for this invocation")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON")
 	cmd.PersistentFlags().BoolVar(&opts.Quiet, "quiet", false, "suppress diagnostic output")
-	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), taskCommand(opts), privacyCommand(opts))
+	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
 	return cmd
 }
 
@@ -157,6 +162,38 @@ func (rt *runtime) ensureBuilder() *prompting.Builder {
 	return rt.Builder
 }
 
+func (rt *runtime) ensureProcessController() *process.ProcessController {
+	if rt.PolicyRegistry == nil {
+		rt.PolicyRegistry = process.NewStagePolicyRegistry()
+	}
+	if rt.TransitionGate == nil {
+		rt.TransitionGate = &process.TransitionGate{Tasks: rt.Tasks}
+	}
+	if rt.RetryController == nil {
+		rt.RetryController = process.NewRetryController()
+	}
+	if rt.AuditStore == nil {
+		rt.AuditStore = process.NewAuditStore(rt.StorageDir)
+	}
+	if rt.Process == nil {
+		rt.Process = &process.ProcessController{}
+	}
+	rt.Process.Tasks = rt.Tasks
+	rt.Process.Profiles = rt.Profiles
+	rt.Process.Memory = rt.Memory
+	rt.Process.Proposals = rt.Proposals
+	rt.Process.Classifier = rt.ensureClassifier()
+	rt.Process.Provider = rt.ensureProvider()
+	rt.Process.Model = rt.Config.ActiveModel
+	rt.Process.MemoryModel = rt.Config.MemoryModel
+	rt.Process.Builder = rt.ensureBuilder()
+	rt.Process.PolicyRegistry = rt.PolicyRegistry
+	rt.Process.TransitionGate = rt.TransitionGate
+	rt.Process.RetryController = rt.RetryController
+	rt.Process.AuditStore = rt.AuditStore
+	return rt.Process
+}
+
 func chooseProvider(cfg app.AppConfig) providers.LLMProvider {
 	if os.Getenv("ASSISTANT_PROVIDER") == "fake" || os.Getenv("ASSISTANT_FAKE_PROVIDER") == "1" {
 		return providers.NewFakeProvider()
@@ -202,27 +239,27 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-		if chatOpts.Once {
-			if strings.TrimSpace(chatOpts.Input) == "" {
-				return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
+			if chatOpts.Once {
+				if strings.TrimSpace(chatOpts.Input) == "" {
+					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
+				}
+				if !chatOpts.RenderPrompt {
+					rt.ensureProvider()
+					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
+				}
+				result, err := runChatExchange(cmd.Context(), rt, app.NewID("session"), chatOpts.Input, chatOpts.RenderPrompt)
+				if err != nil {
+					return err
+				}
+				for _, warning := range result.Warnings {
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
+				}
+				if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.Messages, result.RenderedPrompt); err != nil {
+					result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
+				}
+				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
 			}
-			if !chatOpts.RenderPrompt {
-				rt.ensureProvider()
-				ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
-			}
-			result, err := runChatExchange(cmd.Context(), rt, app.NewID("session"), chatOpts.Input, chatOpts.RenderPrompt)
-			if err != nil {
-				return err
-			}
-			for _, warning := range result.Warnings {
-				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
-			}
-			if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.Messages, result.RenderedPrompt); err != nil {
-				result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
-			}
-			return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
-		}
-		return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
+			return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
 		},
 	}
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
@@ -243,79 +280,35 @@ type chatResult struct {
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool) (chatResult, error) {
-	if validation.HasSecret(input) {
-		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
+	pc := rt.ensureProcessController()
+	if err := pc.Preflight(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
+		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
-	profile, err := rt.Profiles.Active()
-	if err != nil {
-		return chatResult{}, err
-	}
-	taskState, taskErr := rt.Tasks.Current()
-	var taskPtr *app.TaskState
-	if taskErr != nil {
-		appErr := app.AsError(taskErr)
-		if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
-			return chatResult{}, taskErr
+	if !renderOnly {
+		if rt.Config.ActiveModel == "" {
+			return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, app.NewError(app.CategoryProvider, "missing_model", "active model is required", nil)
 		}
-	} else if taskState.ID != "" {
-		taskPtr = &taskState
+		if err := validateModelID(ctx, rt.ensureProvider(), rt.Config.ActiveModel); err != nil {
+			return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
+		}
 	}
-	bundle, err := rt.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly})
+	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel}
+	if procResult != nil {
+		result.Answer = procResult.Answer
+		result.Model = procResult.Model
+		if result.Model == "" {
+			result.Model = rt.Config.ActiveModel
+		}
+		result.RenderedPrompt = procResult.RenderedPrompt
+		result.Messages = procResult.Messages
+		result.Proposal = procResult.Proposal
+		result.Warnings = procResult.Warnings
+	}
 	if err != nil {
-		return chatResult{}, err
-	}
-	messages, err := rt.ensureBuilder().Build(prompting.BuildInput{Profile: profile, Task: taskPtr, Memory: bundle, Query: input})
-	if err != nil {
-		return chatResult{}, err
-	}
-	rendered := prompting.RenderMessages(messages)
-	result := chatResult{OK: true, SessionID: sessionID, RenderedPrompt: rendered, Messages: messages, Model: rt.Config.ActiveModel}
-	if renderOnly {
-		return result, nil
-	}
-	if rt.Config.ActiveModel == "" {
-		return result, app.NewError(app.CategoryProvider, "missing_model", "active model is required", nil)
-	}
-	provider := rt.ensureProvider()
-	if err := validateModelID(ctx, provider, rt.Config.ActiveModel); err != nil {
+		result.OK = false
 		return result, err
 	}
-	res, err := provider.Complete(ctx, providers.CompletionRequest{Purpose: providers.PurposeChat, Model: rt.Config.ActiveModel, Messages: messages})
-	if err != nil {
-		return result, err
-	}
-	result.Answer = res.Message.Content
-	result.Model = res.Model
-	userRecord, err := rt.Memory.Save(ctx, memory.SaveInput{Layer: app.LayerShort, Kind: "message_user", Content: input, Source: "chat", SessionID: sessionID})
-	if err != nil {
-		return result, err
-	}
-	assistantRecord, err := rt.Memory.Save(ctx, memory.SaveInput{Layer: app.LayerShort, Kind: "message_assistant", Content: res.Message.Content, Source: "chat", SessionID: sessionID})
-	if err != nil {
-		return result, err
-	}
-	proposal, err := rt.ensureClassifier().Propose(ctx, memory.ClassificationInput{
-		SessionID:          sessionID,
-		UserMessageID:      userRecord.ID,
-		AssistantMessageID: assistantRecord.ID,
-		UserMessage:        input,
-		AssistantMessage:   res.Message.Content,
-		Profile:            profile,
-		Task:               taskPtr,
-		Model:              rt.Config.MemoryModel,
-		ExistingShort:      bundle.Short,
-		ExistingWork:       bundle.Work,
-		ExistingLong:       bundle.Long,
-	})
-	if err != nil {
-		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
-		return result, nil
-	}
-	if err := rt.Proposals.Save(ctx, proposal); err != nil {
-		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
-		return result, nil
-	}
-	result.Proposal = &proposal
 	return result, nil
 }
 
@@ -824,6 +817,38 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+func processCommand(opts *globalOptions) *cobra.Command {
+	cmd := &cobra.Command{Use: "process", Short: "Inspect process controller audit"}
+	cmd.AddCommand(processAuditCommand(opts))
+	return cmd
+}
+
+func processAuditCommand(opts *globalOptions) *cobra.Command {
+	var latest bool
+	var limit int
+	cmd := &cobra.Command{
+		Use:   "audit",
+		Short: "Show process audit events",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			if latest {
+				limit = 1
+			}
+			events, err := process.NewAuditStore(rt.StorageDir).Latest(limit)
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "events": events}, processAuditText(events))
+		},
+	}
+	cmd.Flags().BoolVar(&latest, "latest", false, "show latest process audit event")
+	cmd.Flags().IntVar(&limit, "limit", 20, "number of events to show")
+	return cmd
+}
+
 func privacyCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "privacy",
@@ -926,6 +951,7 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
   /memory apply --accept all     apply pending memory proposal
   /memory apply --accept <id>|--reject <id>|--edit <id>:layer=<l>,content=<c>
   /clear short                   clear short-term memory
+	/process audit                  show latest process audit event
   /privacy                       show privacy summary
   /exit                          leave REPL`
 		_, _ = fmt.Fprintln(out, help)
@@ -1040,6 +1066,16 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		_, _ = fmt.Fprintf(out, "saved: %s\n", record.ID)
 	case "/memory":
 		return false, handleMemorySlash(ctx, out, diag, rt, sessionID, parts, line)
+	case "/process":
+		if len(parts) >= 2 && parts[1] == "audit" {
+			events, err := process.NewAuditStore(rt.StorageDir).Latest(1)
+			if err != nil {
+				return false, err
+			}
+			_, _ = fmt.Fprint(out, processAuditText(events))
+			return false, nil
+		}
+		return false, app.NewError(app.CategoryCLI, "unknown_process_command", "unknown process command", nil)
 	case "/clear":
 		if len(parts) == 2 && parts[1] == "short" {
 			return false, rt.Memory.ClearShort(ctx, sessionID)
@@ -1556,6 +1592,25 @@ func proposalsText(proposals []app.MemoryProposal) string {
 	var b strings.Builder
 	for _, p := range proposals {
 		b.WriteString(fmt.Sprintf("proposal=%s session=%s records=%d\n", p.ID, p.SessionID, len(p.Records)))
+	}
+	return b.String()
+}
+
+func processAuditText(events []process.ProcessAuditEvent) string {
+	if len(events) == 0 {
+		return "no process audit events\n"
+	}
+	var b strings.Builder
+	for _, e := range events {
+		b.WriteString(fmt.Sprintf("%s session=%s task=%s stage=%s action=%s decision=%s", e.CreatedAt.Format(time.RFC3339), e.SessionID, e.TaskID, e.Stage, e.ActionKind, e.Decision))
+		if len(e.ValidatorErrors) > 0 {
+			b.WriteString(" errors=")
+			b.WriteString(safeTerminalText(strings.Join(e.ValidatorErrors, "; ")))
+		}
+		if e.TransitionFrom != "" || e.TransitionTo != "" {
+			b.WriteString(fmt.Sprintf(" transition=%s->%s", e.TransitionFrom, e.TransitionTo))
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

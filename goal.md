@@ -1,80 +1,102 @@
-# Goal: Реализация всех изменений из финального вердикта консенсуса
+# Goal: Deterministic Stateful Agent Loop (Process Controller)
 
 ## Context
 
-Финальный вердикт консенсуса (12-final-verdict.md) содержит 30 изменений:
-- 11 обязательных (required changes)
-- 19 рекомендуемых (recommended changes)
+Implement the `ProcessController` layer so the assistant becomes process-deterministic: for the same persisted task state, selected action and validator configuration, the application makes the same allow/block/transition decisions regardless of model wording.
+
+Source of truth:
+- `docs/deterministic-stateful-agent-loop-epic.md`
+- `.kilo/plans/deterministic-stateful-agent-loop-epic.md`
+
+The recent commit only updated documentation; no process-control code exists yet. The current chat loop in `internal/cli/root.go` builds a prompt and calls the provider immediately. We are adding a new `internal/process` package and wiring it into the existing `runtime` struct without splitting `root.go` (F006 is deferred).
 
 ## Acceptance Criteria
 
-### Обязательные изменения (11 шт.)
-
-- [x] **1. F001**: Пользовательский запрос обёрнут в `<context_block trust="untrusted">` с `EscapeUntrusted`
-- [x] **2. F002**: Retry-сообщение классификатора содержит полную JSON-схему
-- [x] **3. F013**: Текст ошибки исправлен: убрана ссылка на `--non-interactive`
-- [x] **4. F014**: Флаги `--reject` и `--edit` в `memory apply` стали `StringArrayVar`
-- [x] **5. F004**: `LatestSessionID` валидирует имена директорий через `storage.ValidateID`
-- [x] **6. F005**: Явные скобки в булевом выражении `purgePrivacyData`
-- [x] **7. F007**: `DisallowUnknownFields` удалён из `ReadJSON`
-- [x] **8. F030**: Trust-метка профиля: `trust="untrusted" priority="high"`
-- [x] **9. F017**: `Temperature=0` для классификатора
-- [x] **10. F016**: `ErrorWithHint` для `invalid_model`, `forbidden_transition`, `unknown_command`
-- [x] **11. F015**: Парсинг пробелов в `/memory apply --edit` — реализован `splitShellTokens` с поддержкой кавычек
-
-### Рекомендуемые изменения (19 шт.)
-
-- [x] **12. F010**: Классификатор получает сводку существующей памяти (последние 5 на слой)
-- [x] **13. F011**: Команда `memory proposals` для списка всех предложений
-- [x] **14. F003**: Паттерны секретов расширены: AWS AKIA*, GCP service_account
-- [ ] **15. F006**: `root.go` разбит на файлы — ОТЛОЖЕНО (крупный рефакторинг, не блокирует релиз)
-- [x] **16. F009**: `LongTermKinds` — единый источник истины для типов long-term памяти
-- [x] **17. F018**: FakeProvider поддерживает `ClassifierResponses []string` для последовательных ответов
-- [x] **18. F019**: Память рендерится для промпта как `promptMemoryRecord{kind, content, time}`
-- [x] **19. F012**: `HistoryLog []string` в TaskState, заполняется при смене стадии
-- [x] **20. AI-NEW1**: Few-shot примеры в `classifierInstructions()`
-- [x] **21. F024**: REPL `/profile create` принимает `--style`/`--format`/`--constraint`
-- [x] **22. F025**: Первое `message_user` закреплено в `latestWithinBudget`
-- [x] **23. F027**: Флаг `--quiet` подавляет provider disclosure
-- [x] **24. F028**: `/help` обновлён: повторяемые флаги, `/clear` только short, `/proposals`
-- [x] **25. F029**: Дефолты `profiles create` задокументированы в help-тексте флагов
-- [x] **26. CLI8**: `--accept` поддерживает конкретные ID через `StringArrayVar`
-- [x] **27. F020**: Пути в ошибках маскируются через `redactHomePath` (`~` вместо home dir)
-- [x] **28. AI-NEW2**: Профиль рендерится как естественный язык (детерминированно, с сортировкой ключей)
-- [x] **29. F022**: Отступы в `chatCommand` исправлены
-- [x] **30. F023**: Кастомная `func min()` удалена, используется встроенная Go 1.22
-
-### Верификация
-
-- [x] `go build ./...` проходит без ошибок
-- [x] `go test ./...` проходит без ошибок (все 10 пакетов)
-- [x] Все существующие тесты проходят
-- [x] Тесты обновлены для F030 (profiles/manager_test.go, prompting/builder_test.go)
-- [x] Day11/12/13 требования не нарушены (подтверждено passing acceptance tests)
+- [x] Phase 1 — Policy and Types
+  - `internal/process` defines `ActionKind`, `StagePolicy`, `StagePolicyRegistry`, stage schemas and P0 permission constants.
+  - Every canonical stage returns a non-nil policy; unknown stage fails closed with typed `validation` error.
+  - `paused` is not represented as a stage policy.
+- [x] Phase 2 — StagePromptFactory
+  - Trusted base + process + stage + tool prompts are inserted before untrusted profile/task/memory/user blocks.
+  - Profile/task/memory/user blocks keep `trust="untrusted"` and `EscapeUntrusted`.
+  - Existing Day 12 profile-difference test still passes.
+- [x] Phase 3 — ProcessController Hard Gates
+  - `ProcessController.RunExchange` replaces the direct provider call in `runChatExchange`.
+  - Paused task normal chat returns `task_paused` error without calling provider.
+  - Done task mutation request is blocked before provider call.
+  - Forbidden action for current stage is blocked before provider call.
+- [x] Phase 4 — Structured Output Parser
+  - JSON-first parsing for controlled actions; text fallback only for `answer_question`.
+  - Parsed `stage` must match current stage; parser never mutates task state.
+- [x] Phase 5 — Response Validators
+  - Stage-specific validators reject implementation in planning, fake test claims in execution, fixes/features in validation, mutation in done.
+  - Validation `ready_for_done` is blocked by blocker/high findings or missing evidence.
+- [x] Phase 6 — RetryController
+  - Fixable schema/stage violations retry up to 2 times.
+  - Hard gate/security violations do not retry.
+  - Failed response is not saved as accepted assistant short memory.
+- [x] Phase 7 — TransitionGate
+  - Only `TransitionGate` applies chat-driven stage transitions through `tasks.Manager.Move`.
+  - LLM cannot directly move stage; forbidden transition preserves task state.
+- [x] Phase 8 — Audit Log
+  - `ProcessAuditStore` appends events to `<storage_root>/process_audit.jsonl`.
+  - Every provider call, rejected output and transition is recorded.
+  - CLI `process audit [--latest]` (or `/process audit`) inspects events without provider call.
+- [x] Phase 9 — Integration Tests
+  - `tests/process_acceptance_test.go` covers planning/execution/validation/done, pause gate, wrong stage, retry, transition gate.
+  - Day 11/12/13 acceptance tests keep passing.
+- [x] Final verification
+  - `go build ./...` succeeds.
+  - `go test ./...` passes.
+  - `go test ./tests/...` passes.
 
 ## Constraints
 
-- Не менять структуру 3-слойной памяти (day11) ✅
-- Не менять модель UserProfile (day12) ✅
-- Не менять FSM задач и переходы (day13) ✅
-- Не добавлять тяжёлые зависимости ✅
-- Следовать существующему стилю кода ✅
+- Do not change Day 11/12/13 acceptance contracts.
+- `paused` stays `TaskStatus`; `done` stays `stage=done + expected_action=none`.
+- LLM does not mutate task state or memory directly.
+- P0 side effects remain forbidden: no LLM-owned file edits, shell execution or git commits.
+- Follow existing error conventions (`*app.Error`, `CategoryValidation`, etc.), file locks, atomic JSON writes and `EscapeUntrusted`.
+- Wire into existing `runtime` struct in `root.go` without major refactor.
+
+## Blast Radius
+
+- New package `internal/process` and its tests.
+- `internal/prompting/builder.go` and `builder_test.go`.
+- `internal/providers/fake.go` (multi-response chat support).
+- `internal/cli/root.go` (runtime struct, `runChatExchange`, new `process` command).
+- New test file `tests/process_acceptance_test.go`.
 
 ## Execution Log
 
-### Iteration 1 — Обязательные изменения (1-11)
-- **Changed**: builder.go, classifier.go, json.go, paths.go, render.go, secrets.go, root.go, tasks/manager.go
-- **Verified**: `go build ./...` OK, `go test ./...` — 2 test failures (trust label assertions)
-- **Fixed**: profiles/manager_test.go, prompting/builder_test.go — обновлены assertions под новые trust-метки
-- **Result**: все тесты проходят ✅
+### Iteration 0 — Goal and discovery
+- Read plan, epic, `root.go`, `builder.go`, `manager.go`, `fake.go`, `models.go`, tests.
+- Updated `goal.md` with checklist and constraints.
+- Next: Phase 1 Policy and Types.
 
-### Iteration 2 — Рекомендуемые изменения (12-30, кроме F006)
-- **Changed**: fake.go, paths.go, manager.go, builder.go, render.go, classifier.go, root.go, errors.go, models.go, tasks/manager.go
-- **Verified**: `go build ./...` — 1 compile error (redactHomePath signature), исправлен
-- **Verified**: `go test ./...` — 2 test failures (profile render non-deterministic, day12 acceptance)
-- **Fixed**: render.go — добавлена сортировка ключей мапы + Profile ID в рендер
-- **Fixed**: fake.go — обновлены паттерны матчинга профилей под natural language формат
-- **Result**: все тесты проходят ✅
+### Iteration 1 — Process controller implementation
+- Added `internal/process` with action kinds, stage policies, schemas, trusted stage prompts, parser, validators, retry controller, transition gate and audit store.
+- Refactored `prompting.Builder` to insert trusted process/stage/tool prompts before untrusted profile/task/memory/user blocks.
+- Extended `providers.FakeProvider` with sequential `ChatResponses` for retry tests.
+- Replaced direct chat provider flow in `root.go` with `ProcessController.RunExchange` and added `assistant process audit [--latest]` plus `/process audit`.
+- Added process acceptance tests for planning rejection, validation role, paused hard gate, retry block and validation-to-done transition.
+- Verified: `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.
+- Smoke: `ASSISTANT_FAKE_PROVIDER=1 go run ./cmd/assistant --storage-dir <tmp> --model fake/model chat --once --input "спланируй MVP"` OK.
+- Smoke: `ASSISTANT_FAKE_PROVIDER=1 go run ./cmd/assistant --storage-dir <tmp> --model fake/model chat --once --input "реализуй шаг 1"` OK.
 
-### Not done
-- **F006** (split root.go): крупный рефакторинг 1397-строчного файла. Не блокирует релиз, все остальные 29 изменений реализованы и протестированы.
+### Iteration 2 — Review fixes
+- Fixed `answer_question` validation so text fallback runs only common validators, not stage schema validators.
+- Added process preflight hard gates before CLI model/provider validation, preserving `task_paused`/`task_done`/`forbidden_action` ordering.
+- Added `MemoryModel` to `ProcessController` and restored classifier use of configured memory model.
+- Strengthened planning validation to reject code patches/implementation claims outside `summary`.
+- Added regression tests for all four review findings.
+- Verified: `go test ./internal/process/...` OK, `go test ./internal/cli/...` OK, `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.
+- Smoke: active task normal chat with fake provider now succeeds.
+- Smoke: paused task with invalid model returns `task_paused` before model validation.
+
+### Iteration 3 — Second review fixes
+- Fixed execution-stage question routing so ordinary questions resolve to `answer_question`, not `execute_plan_step`.
+- Made stage prompts action-aware: `answer_question` no longer requests stage JSON schema.
+- Moved `accepted` audit after transition gate; transition precondition errors now audit as `rejected` and do not write accepted events.
+- Added regression tests for all three findings.
+- Verified: `go test ./internal/process/...` OK, `go test ./internal/prompting/...` OK, `go test ./internal/cli/...` OK, `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.

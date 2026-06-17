@@ -100,7 +100,7 @@ func TestInvalidModelSyntaxRejectedWithoutProviderCall(t *testing.T) {
 	}
 }
 
-func TestPausedTaskBlocksMutationsNotGeneralChat(t *testing.T) {
+func TestPausedTaskBlocksNormalChatAndMutations(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
 	args := [][]string{
@@ -123,8 +123,8 @@ func TestPausedTaskBlocksMutationsNotGeneralChat(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Объясни memory layers."})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("general chat should be allowed while paused, got %v", err)
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "task_paused") {
+		t.Fatalf("want task_paused for normal chat while paused, got %v", err)
 	}
 	cmd = newRootCommand(&globalOptions{})
 	out.Reset()
@@ -133,6 +133,32 @@ func TestPausedTaskBlocksMutationsNotGeneralChat(t *testing.T) {
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "task_paused") {
 		t.Fatalf("want task_paused for memory apply while paused, got %v output=%s", err, out.String())
+	}
+}
+
+func TestPausedTaskHardGateBeforeModelValidation(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	args := [][]string{
+		{"--storage-dir", storageDir, "--json", "task", "start", "CLI assistant MVP"},
+		{"--storage-dir", storageDir, "--json", "task", "pause"},
+	}
+	for _, arg := range args {
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs(arg)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v", arg, err)
+		}
+	}
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "missing/model", "--json", "chat", "--once", "--input", "hello"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "task_paused") {
+		t.Fatalf("want task_paused before invalid_model, got %v output=%s", err, out.String())
 	}
 }
 

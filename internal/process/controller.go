@@ -1,0 +1,319 @@
+package process
+
+import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/memory"
+	"github.com/nikbrik/coding_writer/internal/profiles"
+	"github.com/nikbrik/coding_writer/internal/providers"
+	"github.com/nikbrik/coding_writer/internal/tasks"
+	"github.com/nikbrik/coding_writer/internal/validation"
+)
+
+// ProcessController owns the deterministic chat exchange flow.
+type ProcessController struct {
+	Tasks           *tasks.Manager
+	Profiles        *profiles.Manager
+	Memory          *memory.Manager
+	Proposals       *memory.ProposalStore
+	Classifier      *memory.Classifier
+	Provider        providers.LLMProvider
+	Model           string
+	MemoryModel     string
+	Builder         PromptBuilder
+	PolicyRegistry  *StagePolicyRegistry
+	TransitionGate  *TransitionGate
+	RetryController *RetryController
+	AuditStore      *AuditStore
+}
+
+// ExchangeInput controls a single process-controlled exchange.
+type ExchangeInput struct {
+	SessionID              string
+	Input                  string
+	RenderOnly             bool
+	ActionKind             ActionKind
+	AutoApproveTransitions bool
+}
+
+// RunExchange executes the gated process loop.
+func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput) (*ExchangeResult, error) {
+	if validation.HasSecret(input.Input) {
+		return nil, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
+	}
+
+	preflight, err := c.resolveProcessState(input)
+	if err != nil {
+		return nil, err
+	}
+	taskPtr := preflight.Task
+	stage := preflight.Stage
+	action := preflight.Action
+
+	profile, err := c.Profiles.Active()
+	if err != nil {
+		return nil, err
+	}
+
+	// Profile and memory are intentionally loaded only after local hard gates pass.
+	// This keeps paused/done/forbidden decisions provider-independent.
+
+	if c.Memory == nil {
+		return nil, app.NewError(app.CategoryInternal, "missing_memory_manager", "memory manager is required", nil)
+	}
+
+	sessionID := input.SessionID
+	if sessionID == "" {
+		sessionID = app.NewID("session")
+	}
+
+	bundle, err := c.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	messages, err := c.Builder.Build(PromptBuildInput{
+		Profile:    profile,
+		Task:       taskPtr,
+		Memory:     bundle,
+		Query:      input.Input,
+		Stage:      stage,
+		ActionKind: action,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	rendered := renderMessages(messages)
+	result := &ExchangeResult{
+		Model:          "",
+		Messages:       messages,
+		RenderedPrompt: rendered,
+	}
+
+	if input.RenderOnly {
+		return result, nil
+	}
+
+	if c.Provider == nil {
+		return nil, app.NewError(app.CategoryProvider, "missing_provider", "provider is required", nil)
+	}
+	if c.Model == "" {
+		return result, app.NewError(app.CategoryProvider, "missing_model", "active model is required", nil)
+	}
+	if c.RetryController == nil {
+		c.RetryController = NewRetryController()
+	}
+
+	var lastRaw string
+	var parsed ParsedResponse
+	var parseErr error
+	attempt := 0
+	maxRetries := c.RetryController.MaxRetries
+
+	for {
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:  providers.PurposeChat,
+			Model:    c.Model,
+			Messages: messages,
+			JSONMode: RequiresSchema(action),
+		})
+		if err != nil {
+			return result, err
+		}
+		lastRaw = res.Message.Content
+		result.Model = res.Model
+
+		parsed, parseErr = Parse(stage, action, lastRaw)
+		if parseErr == nil {
+			break
+		}
+		if !c.RetryController.ShouldRetry(parseErr) || attempt >= maxRetries {
+			break
+		}
+		c.saveAudit(sessionID, taskPtr, stage, action, "retried", []string{app.AsError(parseErr).Message}, "", "", result.Model)
+		attempt++
+		messages = append(messages,
+			app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: lastRaw, CreatedAt: time.Now().UTC()},
+			app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt([]string{app.AsError(parseErr).Message}), CreatedAt: time.Now().UTC()},
+		)
+	}
+
+	if parseErr != nil {
+		c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(parseErr).Message}, "", "", result.Model)
+		return result, app.ErrorWithHint(app.CategoryValidation, app.AsError(parseErr).Code, app.AsError(parseErr).Message, "output rejected after validation", parseErr)
+	}
+
+	validatorErrors := RunValidators(parsed)
+	if len(validatorErrors) > 0 {
+		c.saveAudit(sessionID, taskPtr, stage, action, "rejected", validatorErrors, "", "", result.Model)
+		return result, app.NewError(app.CategoryValidation, "validation_failed", "response rejected: "+strings.Join(validatorErrors, "; "), nil)
+	}
+
+	result.Answer = lastRaw
+	result.Messages = messages
+	result.RenderedPrompt = renderMessages(messages)
+
+	if c.TransitionGate != nil && taskPtr != nil && action != ActionAnswerQuestion {
+		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
+		if err != nil {
+			c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", result.Model)
+			return result, err
+		}
+		if transition.Moved {
+			result.Transition = &transition
+			c.saveAudit(sessionID, taskPtr, stage, action, "transitioned", nil, transition.From, transition.To, result.Model)
+			taskPtr = &transition.State
+		}
+	}
+	c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model)
+
+	userRecord, err := c.Memory.Save(ctx, memory.SaveInput{Layer: app.LayerShort, Kind: "message_user", Content: input.Input, Source: "chat", SessionID: sessionID})
+	if err != nil {
+		return result, err
+	}
+	assistantRecord, err := c.Memory.Save(ctx, memory.SaveInput{Layer: app.LayerShort, Kind: "message_assistant", Content: lastRaw, Source: "chat", SessionID: sessionID})
+	if err != nil {
+		return result, err
+	}
+
+	memoryModel := c.MemoryModel
+	if memoryModel == "" {
+		memoryModel = c.Model
+	}
+	proposal, err := c.Classifier.Propose(ctx, memory.ClassificationInput{
+		SessionID:          sessionID,
+		UserMessageID:      userRecord.ID,
+		AssistantMessageID: assistantRecord.ID,
+		UserMessage:        input.Input,
+		AssistantMessage:   lastRaw,
+		Profile:            profile,
+		Task:               taskPtr,
+		Model:              memoryModel,
+		ExistingShort:      bundle.Short,
+		ExistingWork:       bundle.Work,
+		ExistingLong:       bundle.Long,
+	})
+	if err != nil {
+		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
+		return result, nil
+	}
+	if err := c.Proposals.Save(ctx, proposal); err != nil {
+		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
+		return result, nil
+	}
+	result.Proposal = &proposal
+
+	return result, nil
+}
+
+// Preflight runs local hard gates without loading provider/profile/memory.
+func (c *ProcessController) Preflight(input ExchangeInput) error {
+	_, err := c.resolveProcessState(input)
+	return err
+}
+
+type resolvedProcessState struct {
+	Task   *app.TaskState
+	Stage  app.TaskStage
+	Action ActionKind
+}
+
+func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedProcessState, error) {
+	taskState, taskErr := c.Tasks.Current()
+	var taskPtr *app.TaskState
+	if taskErr != nil {
+		appErr := app.AsError(taskErr)
+		if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
+			return resolvedProcessState{}, taskErr
+		}
+	} else if taskState.ID != "" {
+		taskPtr = &taskState
+	}
+
+	stage := app.TaskStage("")
+	if taskPtr != nil {
+		stage = taskPtr.Stage
+	}
+
+	action := input.ActionKind
+	if action == "" {
+		var expected app.ExpectedAction
+		if taskPtr != nil {
+			expected = taskPtr.ExpectedAction
+		}
+		action = ResolveActionKind(input.Input, stage, expected)
+	}
+	if !action.Valid() {
+		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "invalid_action", "invalid process action", nil)
+	}
+
+	if stage == "" && action != ActionAnswerQuestion {
+		return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "missing_task", "no active task; start a task before process actions", "use /task start <title> to create a task", nil)
+	}
+
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused {
+		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "task_paused", "task is paused; resume before continuing", nil)
+	}
+
+	if stage == app.StageDone {
+		if action != ActionAnswerQuestion && action != ActionSummarizeDone {
+			return resolvedProcessState{}, app.NewError(app.CategoryValidation, "task_done", "done task is terminal; no mutations allowed", nil)
+		}
+	}
+
+	if stage != "" {
+		if c.PolicyRegistry == nil {
+			c.PolicyRegistry = NewStagePolicyRegistry()
+		}
+		policy, err := c.PolicyRegistry.PolicyFor(stage)
+		if err != nil {
+			return resolvedProcessState{}, err
+		}
+		if !policy.Allows(action) {
+			return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "forbidden_action", "action is not allowed in current stage", string(action)+" is not allowed in "+string(stage), nil)
+		}
+	}
+	return resolvedProcessState{Task: taskPtr, Stage: stage, Action: action}, nil
+}
+
+func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, decision string, validatorErrors []string, from, to app.TaskStage, model string) {
+	if c == nil || c.AuditStore == nil {
+		return
+	}
+	taskID := ""
+	if task != nil {
+		taskID = task.ID
+	}
+	_ = c.AuditStore.Save(ProcessAuditEvent{
+		TaskID:          taskID,
+		SessionID:       sessionID,
+		Stage:           stage,
+		ActionKind:      action,
+		Decision:        decision,
+		ValidatorErrors: validatorErrors,
+		TransitionFrom:  string(from),
+		TransitionTo:    string(to),
+		Model:           model,
+		CreatedAt:       time.Now().UTC(),
+	})
+}
+
+func taskID(task *app.TaskState) string {
+	if task == nil {
+		return ""
+	}
+	return task.ID
+}
+
+func renderMessages(messages []app.ChatMessage) string {
+	// Duplicated from prompting.RenderMessages to keep process self-contained.
+	var out string
+	for _, msg := range messages {
+		out += string(msg.Role) + "\n" + msg.Content + "\n\n"
+	}
+	return out
+}

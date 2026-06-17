@@ -4,7 +4,8 @@ description: >
   Goal-driven execution loop for coding agents. Use this skill when the user defines
   a goal with explicit acceptance criteria (build, tests, specific behavior in code).
   Your job is to keep working in iterations until every acceptance criterion is
-  satisfied and verified by commands/tests/logs, or until you are hard-blocked.
+  satisfied, verified by commands/tests/logs, and clean after the latest iterative
+  self-review / re-review loop, or until you are hard-blocked.
 license: MIT
 compatibility: kilocode, codex, pi
 metadata:
@@ -62,12 +63,29 @@ Operate in a strict loop:
      - linters / static analyzers,
      - custom scripts mentioned in the goal.
    - Inspect outputs and logs.
-5. **Update status**
+5. **Self-review**
+   - Review the changed diff/files against:
+     - acceptance criteria,
+     - constraints / forbidden changes,
+     - regression risk,
+     - edge cases,
+     - missing or weak evidence.
+   - Emit findings as `severity`, `location`, `problem`, `fix`.
+   - A valid finding must have a concrete fix or a clear reason it is a blocker.
+6. **Convert findings**
+   - If any actionable finding exists, treat it as a failing checklist item.
+   - Fix findings in severity / impact order through the same goal loop.
+   - Re-run verification after each fix batch.
+   - Re-review until the latest review has no unresolved findings.
+   - If a finding is out of scope, contradicts constraints, or cannot be fixed locally,
+     report it as a blocker or explicit deferral; do not silently count it as clean.
+7. **Update status**
    - Mark checklist items as done/failed/blocked based on evidence.
    - Append a short note to `goal.md` (or a dedicated log section) describing:
      - What you changed.
      - What commands you ran.
      - What passed/failed.
+     - Latest self-review result: `no findings` or unresolved findings/blocker.
 
 Repeat this loop until all checklist items are DONE or a hard blocker is reached.
 
@@ -80,11 +98,13 @@ You may consider the goal complete **only if**:
   - successful command outputs,
   - passing tests,
   - required logic present in the codebase.
+- The most recent self-review after the final verification produced no unresolved findings.
 - You can point the user to:
   - which files were changed,
   - how to run the same verification locally.
 
-If any acceptance criterion is not satisfied or unverified, you must continue the loop.
+If any acceptance criterion is not satisfied, unverified, or the latest self-review has
+unresolved findings, you must continue the loop.
 
 If you hit a **hard blocker** (missing secrets, offline dependency, unknown command, broken environment):
 
@@ -108,6 +128,8 @@ If you hit a **hard blocker** (missing secrets, offline dependency, unknown comm
   - `STATUS`
 - Never claim "done" without explicitly restating each acceptance criterion and
   confirming how it was verified.
+- Include the final self-review result: `no findings` or the unresolved
+  findings/blocker that prevents DONE.
 
 ## 6. Safety and constraints
 
