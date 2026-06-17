@@ -1,0 +1,1 @@
+always use ast-index for search files and words first

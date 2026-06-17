@@ -11,5 +11,6 @@
       "enabled": true,
       "timeout": 30000
     }
-  }
+  },
+  "instructions": [".kilo/rules/ast-index.md", ".kilo/rules/*.md"]
 }
