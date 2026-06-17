@@ -1,0 +1,142 @@
+package providers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/nikbrik/coding_writer/internal/app"
+)
+
+type OpenRouterProvider struct {
+	BaseURL string
+	Client  *http.Client
+}
+
+func NewOpenRouterProvider(baseURL string) *OpenRouterProvider {
+	if baseURL == "" {
+		baseURL = app.DefaultOpenRouterBaseURL
+	}
+	return &OpenRouterProvider{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 45 * time.Second}}
+}
+
+func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]string, error) {
+	key := os.Getenv("OPENROUTER_API_KEY")
+	if key == "" {
+		return nil, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "export OPENROUTER_API_KEY=...", nil)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL+"/models", nil)
+	if err != nil {
+		return nil, app.NewError(app.CategoryProvider, "request_build", err.Error(), err)
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	res, err := p.client().Do(req)
+	if err != nil {
+		return nil, app.NewError(app.CategoryProvider, "network", err.Error(), err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+		return nil, app.NewError(app.CategoryProvider, "auth", "OpenRouter authorization failed", nil)
+	}
+	if res.StatusCode >= 400 {
+		return nil, app.NewError(app.CategoryProvider, "http", fmt.Sprintf("OpenRouter status %d", res.StatusCode), nil)
+	}
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&parsed); err != nil {
+		return nil, app.NewError(app.CategoryProvider, "malformed_response", err.Error(), err)
+	}
+	models := make([]string, 0, len(parsed.Data))
+	for _, model := range parsed.Data {
+		models = append(models, model.ID)
+	}
+	return models, nil
+}
+
+func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	key := os.Getenv("OPENROUTER_API_KEY")
+	if key == "" {
+		return CompletionResponse{}, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "export OPENROUTER_API_KEY=...", nil)
+	}
+	if req.Model == "" {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "missing_model", "active model is required", nil)
+	}
+	req.Messages = sanitizeMessages(req.Messages)
+	body := map[string]any{
+		"model":    req.Model,
+		"messages": toOpenRouterMessages(req.Messages),
+	}
+	if req.JSONMode {
+		body["response_format"] = map[string]string{"type": "json_object"}
+	}
+	if req.Temperature != nil {
+		body["temperature"] = *req.Temperature
+	}
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(body); err != nil {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "request_encode", err.Error(), err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", &buf)
+	if err != nil {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "request_build", err.Error(), err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+key)
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpRes, err := p.client().Do(httpReq)
+	if err != nil {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "network", err.Error(), err)
+	}
+	defer httpRes.Body.Close()
+	if httpRes.StatusCode == http.StatusUnauthorized || httpRes.StatusCode == http.StatusForbidden {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "auth", "OpenRouter authorization failed", nil)
+	}
+	if httpRes.StatusCode == http.StatusNotFound {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "model_not_found", "model not found", nil)
+	}
+	if httpRes.StatusCode >= 400 {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "http", fmt.Sprintf("OpenRouter status %d", httpRes.StatusCode), nil)
+	}
+	var parsed struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(httpRes.Body).Decode(&parsed); err != nil {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "malformed_response", err.Error(), err)
+	}
+	if len(parsed.Choices) == 0 {
+		return CompletionResponse{}, app.NewError(app.CategoryProvider, "malformed_response", "missing choices", nil)
+	}
+	model := parsed.Model
+	if model == "" {
+		model = req.Model
+	}
+	return newAssistantMessage(parsed.Choices[0].Message.Content, model, parsed.ID), nil
+}
+
+func (p *OpenRouterProvider) client() *http.Client {
+	if p.Client != nil {
+		return p.Client
+	}
+	return &http.Client{Timeout: 45 * time.Second}
+}
+
+func toOpenRouterMessages(messages []app.ChatMessage) []map[string]string {
+	out := make([]map[string]string, 0, len(messages))
+	for _, msg := range messages {
+		out = append(out, map[string]string{"role": string(msg.Role), "content": msg.Content})
+	}
+	return out
+}

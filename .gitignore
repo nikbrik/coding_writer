@@ -11,6 +11,7 @@ Thumbs.db
 *~
 
 # Local caches / build output
+.assistant/
 .cache/
 .idea/
 .vscode/
