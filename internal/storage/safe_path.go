@@ -9,6 +9,11 @@ import (
 	"strings"
 )
 
+// NOTE: Path safety below assumes Unix-like filesystems. It explicitly rejects
+// backslashes in path elements and IDs, which is correct for IDs that become
+// filenames but means the tool is not currently portable to Windows without
+// replacing these checks with OS-specific validation (e.g. filepath.IsLocal).
+
 var safeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 func ValidateID(id string) error {
@@ -62,6 +67,7 @@ func EnsureNoSymlinkParents(path string) error {
 		parts[0] = string(filepath.Separator)
 	}
 	current := ""
+	resolvedAbs := abs
 	for _, part := range parts {
 		if part == "" {
 			continue
@@ -79,23 +85,26 @@ func EnsureNoSymlinkParents(path string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			if isAllowedSystemSymlink(current) {
+			target, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			target = filepath.Clean(target)
+			if resolvedAbs == current {
+				resolvedAbs = target
+			} else if strings.HasPrefix(resolvedAbs, current+string(filepath.Separator)) {
+				resolvedAbs = target + resolvedAbs[len(current):]
+			}
+			if resolvedAbs == target || strings.HasPrefix(resolvedAbs, target+string(filepath.Separator)) {
 				continue
 			}
 			return errors.New("symlink parent rejected")
 		}
 	}
 	return nil
-}
-
-func isAllowedSystemSymlink(path string) bool {
-	clean := filepath.Clean(path)
-	switch clean {
-	case "/var", "/tmp", "/etc":
-		return true
-	default:
-		return false
-	}
 }
 
 func RejectSymlinkTarget(path string) error {

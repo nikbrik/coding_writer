@@ -1,7 +1,13 @@
 package validation
 
-import "html"
+import "strings"
 
 func EscapeUntrusted(text string) string {
-	return html.EscapeString(text)
+	replacer := strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"'", "&#39;",
+	)
+	return replacer.Replace(text)
 }

@@ -57,7 +57,7 @@ func TestProfileRenderDeterministicAndTagged(t *testing.T) {
 	if one != two {
 		t.Fatal("render not deterministic")
 	}
-	if !strings.Contains(one, `id="profile.active"`) || !strings.Contains(one, `trust="untrusted"`) {
+	if !strings.Contains(one, `id="profile.active"`) || !strings.Contains(one, `trust="trusted_preference"`) {
 		t.Fatalf("missing canonical tags: %s", one)
 	}
 }

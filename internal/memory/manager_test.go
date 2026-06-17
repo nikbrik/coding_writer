@@ -103,3 +103,37 @@ func TestSecretBlockedInManualSave(t *testing.T) {
 		t.Fatalf("want secret blocked, got %v", err)
 	}
 }
+
+func TestLongMemoryScopeRulesAreExplicit(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(t.TempDir())
+	cases := []struct {
+		name            string
+		scope           string
+		profileID       string
+		activeProfileID string
+		wantIncluded    bool
+	}{
+		{"global always visible", "global", "", "student", true},
+		{"global with profileID still global", "global", "senior", "student", true},
+		{"profile matching active", "profile", "student", "student", true},
+		{"profile mismatch excluded", "profile", "senior", "student", false},
+		{"profile empty profileID excluded", "profile", "", "student", false},
+		{"empty scope defaults to global", "", "", "student", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := mgr.Save(ctx, SaveInput{Layer: app.LayerLong, Kind: "preference", Content: tc.name, Source: "test", Scope: tc.scope, ProfileID: tc.profileID}); err != nil {
+				t.Fatal(err)
+			}
+			bundle, err := mgr.SelectForPrompt(ctx, "", "", tc.activeProfileID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := containsContent(bundle.Long, tc.name)
+			if got != tc.wantIncluded {
+				t.Fatalf("want included=%v, got %v for %+v; long=%+v", tc.wantIncluded, got, tc, bundle.Long)
+			}
+		})
+	}
+}

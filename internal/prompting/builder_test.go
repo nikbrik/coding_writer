@@ -26,7 +26,7 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 		}
 		last = idx
 	}
-	if !strings.Contains(rendered, `trust="untrusted"`) || !strings.Contains(rendered, "task paused") {
+	if !strings.Contains(rendered, `trust="untrusted"`) || !strings.Contains(rendered, `trust="trusted_preference"`) || !strings.Contains(rendered, "task paused") {
 		t.Fatalf("missing untrusted tags or paused warning:\n%s", rendered)
 	}
 }

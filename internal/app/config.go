@@ -46,12 +46,12 @@ func NewConfigManager(storageDir string) *ConfigManager {
 	return &ConfigManager{StorageDir: storageDir}
 }
 
-func (m *ConfigManager) ConfigPath() string {
+func (m *ConfigManager) ConfigPath() (string, error) {
 	path, err := storage.SafeJoin(m.StorageDir, "config.json")
 	if err != nil {
-		return filepath.Join(m.StorageDir, "config.json")
+		return "", NewError(CategoryValidation, "unsafe_storage_path", "unsafe config path", err)
 	}
-	return path
+	return path, nil
 }
 
 func (m *ConfigManager) EnsureStorageTree() error {
@@ -69,13 +69,17 @@ func (m *ConfigManager) EnsureStorageTree() error {
 
 func (m *ConfigManager) Load() (AppConfig, error) {
 	cfg := AppConfig{StorageDir: m.StorageDir, OpenRouterBaseURL: DefaultOpenRouterBaseURL}
-	if _, err := os.Stat(m.ConfigPath()); err != nil {
+	configPath, err := m.ConfigPath()
+	if err != nil {
+		return cfg, err
+	}
+	if _, err := os.Stat(configPath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return cfg, nil
 		}
 		return cfg, NewError(CategoryStorage, "config_stat", err.Error(), err)
 	}
-	if err := storage.ReadJSON(m.ConfigPath(), &cfg); err != nil {
+	if err := storage.ReadJSON(configPath, &cfg); err != nil {
 		return cfg, NewError(CategoryStorage, "config_read", err.Error(), err)
 	}
 	if cfg.StorageDir == "" {
@@ -149,7 +153,14 @@ func (m *ConfigManager) Save(cfg AppConfig) error {
 	if err := validateBaseURL(cfg.OpenRouterBaseURL); err != nil {
 		return err
 	}
-	if err := storage.AtomicWriteJSON(m.ConfigPath(), cfg); err != nil {
+	if err := validateTrustedBaseURL(cfg.OpenRouterBaseURL, cfg.TrustedOpenRouterBaseURLs, false); err != nil {
+		return err
+	}
+	configPath, err := m.ConfigPath()
+	if err != nil {
+		return err
+	}
+	if err := storage.AtomicWriteJSON(configPath, cfg); err != nil {
 		return NewError(CategoryStorage, "config_write", err.Error(), err)
 	}
 	return nil

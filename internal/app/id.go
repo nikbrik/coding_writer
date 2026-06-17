@@ -10,7 +10,9 @@ import (
 
 func NewID(prefix string) string {
 	var b [4]byte
-	_, _ = rand.Read(b[:])
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("failed to read entropy for id: %v", err))
+	}
 	prefix = strings.Trim(prefix, "_")
 	if prefix == "" {
 		prefix = "id"

@@ -3,7 +3,6 @@ package tasks
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,12 +23,12 @@ type currentSnapshot struct {
 
 func NewManager(storageDir string) *Manager { return &Manager{StorageDir: storageDir} }
 
-func (m *Manager) currentPath() string {
+func (m *Manager) currentPath() (string, error) {
 	path, err := storage.SafeJoin(m.StorageDir, "tasks", "current.json")
 	if err != nil {
-		return filepath.Join(m.StorageDir, "tasks", "current.json")
+		return "", app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe current task path", err)
 	}
-	return path
+	return path, nil
 }
 
 func (m *Manager) taskPath(id string) (string, error) {
@@ -49,6 +48,9 @@ func (m *Manager) Start(title string) (app.TaskState, error) {
 	}
 	if validation.HasSecret(title) {
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "task_already_exists", "a current task already exists; finish or archive it before starting a new one", nil)
 	}
 	now := time.Now().UTC()
 	state := app.TaskState{
@@ -78,7 +80,10 @@ func (m *Manager) Current() (app.TaskState, error) {
 
 func (m *Manager) currentSnapshot() (currentSnapshot, error) {
 	var state app.TaskState
-	path := m.currentPath()
+	path, err := m.currentPath()
+	if err != nil {
+		return currentSnapshot{}, err
+	}
 	before, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -118,12 +123,26 @@ func (m *Manager) Move(next app.TaskStage) (app.TaskState, error) {
 		return state, app.NewError(app.CategoryValidation, "forbidden_transition", "forbidden task stage transition", nil)
 	}
 	state.Stage = next
+	state.ExpectedAction = defaultExpectedAction(next)
 	state.UpdatedAt = time.Now().UTC()
 	if next == app.StageDone {
-		state.ExpectedAction = app.ExpectedNone
 		state.Status = app.TaskStatusActive
 	}
 	return state, m.saveBothIfUnchanged(state, &snapshot)
+}
+
+func defaultExpectedAction(stage app.TaskStage) app.ExpectedAction {
+	switch stage {
+	case app.StagePlanning:
+		return app.ExpectedUserInput
+	case app.StageExecution:
+		return app.ExpectedLLMResponse
+	case app.StageValidation:
+		return app.ExpectedUserConfirmation
+	case app.StageDone:
+		return app.ExpectedNone
+	}
+	return app.ExpectedUserInput
 }
 
 func (m *Manager) SetStep(step string) (app.TaskState, error) {
@@ -167,6 +186,12 @@ func (m *Manager) SetExpectedAction(action app.ExpectedAction) (app.TaskState, e
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "invalid_expected_action", "invalid expected action", nil)
 	}
 	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage == app.StageDone && action != app.ExpectedNone {
+			return app.NewError(app.CategoryValidation, "invalid_expected_action", "done task only allows expected_action none", nil)
+		}
+		if state.Stage != app.StageDone && action == app.ExpectedNone {
+			return app.NewError(app.CategoryValidation, "invalid_expected_action", "expected_action none is only valid for done tasks", nil)
+		}
 		state.ExpectedAction = action
 		return nil
 	})
@@ -238,7 +263,11 @@ func (m *Manager) saveBoth(state app.TaskState) error {
 }
 
 func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnapshot) error {
-	return storage.WithFileLock(m.currentPath(), true, func() error {
+	currentPath, err := m.currentPath()
+	if err != nil {
+		return err
+	}
+	return storage.WithFileLock(currentPath, true, func() error {
 		tasksDir, err := storage.SafeJoin(m.StorageDir, "tasks")
 		if err != nil {
 			return app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe task path", err)
@@ -258,7 +287,7 @@ func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnap
 		if err := storage.AtomicWriteJSON(path, state); err != nil {
 			return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
 		}
-		if err := storage.AtomicWriteJSON(m.currentPath(), state); err != nil {
+		if err := storage.AtomicWriteJSON(currentPath, state); err != nil {
 			return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
 		}
 		return nil
@@ -266,7 +295,11 @@ func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnap
 }
 
 func (m *Manager) ensureCurrentUnchanged(expected currentSnapshot) error {
-	info, err := os.Stat(m.currentPath())
+	currentPath, err := m.currentPath()
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(currentPath)
 	if err != nil {
 		return app.NewError(app.CategoryStorage, "task_stat", err.Error(), err)
 	}

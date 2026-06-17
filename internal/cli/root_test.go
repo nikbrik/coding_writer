@@ -75,11 +75,14 @@ func TestInvalidModelSlashDoesNotMutateConfig(t *testing.T) {
 func TestInvalidModelFlagDoesNotMutateConfig(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
-	if _, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "missing/model"}); err == nil {
-		t.Fatal("expected invalid model error")
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "missing/model", "chat", "--once", "--input", "hi"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "invalid_model") {
+		t.Fatalf("want invalid_model, got %v", err)
 	}
 	cfg, err := app.NewConfigManager(storageDir).Load()
 	if err != nil {
@@ -97,7 +100,7 @@ func TestInvalidModelSyntaxRejectedWithoutProviderCall(t *testing.T) {
 	}
 }
 
-func TestTopLevelTaskCommandsAndPausedGate(t *testing.T) {
+func TestPausedTaskBlocksMutationsNotGeneralChat(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
 	args := [][]string{
@@ -119,18 +122,17 @@ func TestTopLevelTaskCommandsAndPausedGate(t *testing.T) {
 	cmd := newRootCommand(&globalOptions{})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Продолжай задачу."})
-	err := cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "task_paused") {
-		t.Fatalf("want paused gate error, got %v output=%s", err, out.String())
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Объясни memory layers."})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("general chat should be allowed while paused, got %v", err)
 	}
 	cmd = newRootCommand(&globalOptions{})
 	out.Reset()
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Объясни memory layers."})
-	err = cmd.Execute()
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "memory", "apply", "--accept", "all"})
+	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "task_paused") {
-		t.Fatalf("want paused gate for all chat, got %v output=%s", err, out.String())
+		t.Fatalf("want task_paused for memory apply while paused, got %v output=%s", err, out.String())
 	}
 }
 
@@ -185,6 +187,7 @@ func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
 	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false)
 	if err != nil {
@@ -285,6 +288,7 @@ func TestProviderDisclosurePrintedOnceForOpenRouter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rt.Provider = providers.NewOpenRouterProvider(rt.Config.OpenRouterBaseURL)
 	var out bytes.Buffer
 	ensureProviderDisclosure(&out, rt)
 	ensureProviderDisclosure(&out, rt)

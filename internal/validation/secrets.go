@@ -1,5 +1,10 @@
 package validation
 
+// Secret detection is a regex-based defense-in-depth layer. It can miss secrets
+// that do not match the patterns, and it may false-positive on benign strings
+// that look like secrets. Do not rely on it as the only protection for
+// credential material.
+
 import (
 	"regexp"
 	"strings"

@@ -2,6 +2,8 @@ package memory
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -79,13 +81,18 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 			return record, app.NewError(app.CategoryValidation, "missing_session", "short memory requires session id", nil)
 		}
 		path, err = shortPath(m.StorageDir, input.SessionID)
+		if err == nil {
+			if dir, err := sessionDir(m.StorageDir, input.SessionID); err == nil {
+				_ = os.WriteFile(filepath.Join(dir, ".last_activity"), []byte{}, 0o600)
+			}
+		}
 	case app.LayerWork:
 		if input.TaskID == "" {
 			return record, app.NewError(app.CategoryValidation, "missing_current_task", "work memory requires active task", nil)
 		}
 		path, err = workPath(m.StorageDir, input.TaskID)
 	case app.LayerLong:
-		path = longPath(m.StorageDir, input.Kind)
+		path, err = longPath(m.StorageDir, input.Kind)
 	}
 	if err != nil {
 		return record, err
@@ -123,7 +130,11 @@ func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, ta
 	case app.LayerLong:
 		var all []app.MemoryRecord
 		for _, kind := range []string{"preference", "decision", "constraint", "knowledge"} {
-			records, err := storage.ReadJSONL[app.MemoryRecord](longPath(m.StorageDir, kind))
+			path, err := longPath(m.StorageDir, kind)
+			if err != nil {
+				return nil, err
+			}
+			records, err := storage.ReadJSONL[app.MemoryRecord](path)
 			if err != nil {
 				return nil, err
 			}
@@ -153,6 +164,15 @@ func (m *Manager) ClearShort(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+const (
+	shortMemoryMaxRecords  = 12
+	shortMemoryMaxBytes    = 6000
+	workMemoryMaxRecords   = 20
+	workMemoryMaxBytes     = 12000
+	longMemoryMaxRecords   = 20
+	longMemoryMaxBytes     = 12000
+)
+
 func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID, profileID string) (app.MemoryBundle, error) {
 	var bundle app.MemoryBundle
 	if sessionID != "" {
@@ -160,20 +180,20 @@ func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID, profil
 		if err != nil {
 			return bundle, err
 		}
-		bundle.Short = latest(short, 12)
+		bundle.Short = latestWithinBudget(short, shortMemoryMaxRecords, shortMemoryMaxBytes)
 	}
 	if taskID != "" {
 		work, err := m.List(ctx, app.LayerWork, "", taskID)
 		if err != nil {
 			return bundle, err
 		}
-		bundle.Work = latest(work, 20)
+		bundle.Work = latestWithinBudget(work, workMemoryMaxRecords, workMemoryMaxBytes)
 	}
 	long, err := m.List(ctx, app.LayerLong, "", "")
 	if err != nil {
 		return bundle, err
 	}
-	bundle.Long = latest(filterLongForProfile(long, profileID), 20)
+	bundle.Long = latestWithinBudget(filterLongForProfile(long, profileID), longMemoryMaxRecords, longMemoryMaxBytes)
 	return bundle, nil
 }
 
@@ -185,19 +205,38 @@ func latest(records []app.MemoryRecord, n int) []app.MemoryRecord {
 	return records[len(records)-n:]
 }
 
-func filterLongForProfile(records []app.MemoryRecord, profileID string) []app.MemoryRecord {
+func latestWithinBudget(records []app.MemoryRecord, maxCount, maxBytes int) []app.MemoryRecord {
+	sort.SliceStable(records, func(i, j int) bool { return records[i].CreatedAt.Before(records[j].CreatedAt) })
+	if len(records) > maxCount {
+		records = records[len(records)-maxCount:]
+	}
+	var total int
+	start := len(records)
+	for i := len(records) - 1; i >= 0; i-- {
+		total += len(records[i].Content)
+		if total > maxBytes {
+			start = i + 1
+			break
+		}
+		start = i
+	}
+	return records[start:]
+}
+
+func filterLongForProfile(records []app.MemoryRecord, activeProfileID string) []app.MemoryRecord {
 	out := make([]app.MemoryRecord, 0, len(records))
 	for _, record := range records {
-		if record.Layer != app.LayerLong {
-			out = append(out, record)
-			continue
-		}
 		scope := record.Scope
 		if scope == "" {
 			scope = "global"
 		}
-		if scope == "global" || record.ProfileID == "" && scope != "profile" || record.ProfileID == profileID {
+		switch scope {
+		case "global":
 			out = append(out, record)
+		case "profile":
+			if record.ProfileID != "" && record.ProfileID == activeProfileID {
+				out = append(out, record)
+			}
 		}
 	}
 	return out

@@ -87,6 +87,17 @@ type classifierJSON struct {
 	} `json:"records"`
 }
 
+var allowedClassifierKinds = map[string]bool{
+	"preference": true,
+	"requirement": true,
+	"decision": true,
+	"constraint": true,
+	"context": true,
+	"smalltalk": true,
+	"other": true,
+	"ignore": true,
+}
+
 func parseProposal(content string) (app.MemoryProposal, error) {
 	var parsed classifierJSON
 	dec := json.NewDecoder(strings.NewReader(content))
@@ -112,17 +123,21 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 		if confidence > 1 {
 			confidence = 1
 		}
+		kind := strings.ToLower(strings.TrimSpace(item.Kind))
+		if kind == "" {
+			kind = "other"
+		}
+		if !allowedClassifierKinds[kind] {
+			return proposal, app.NewError(app.CategoryClassifier, "unknown_kind", "classifier returned unknown memory kind", nil)
+		}
 		record := app.ProposedMemoryRecord{
 			ID:         app.NewID("pmem"),
 			Layer:      layer,
-			Kind:       strings.TrimSpace(item.Kind),
+			Kind:       kind,
 			Content:    strings.TrimSpace(item.Content),
 			Reason:     strings.TrimSpace(item.Reason),
 			Confidence: confidence,
 			Status:     app.ProposalPending,
-		}
-		if record.Kind == "" {
-			record.Kind = "other"
 		}
 		if findings := validation.DetectSecrets(record.Content); len(findings) > 0 {
 			record.Content = "[REDACTED_SECRET]"

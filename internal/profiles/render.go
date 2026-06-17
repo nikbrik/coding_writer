@@ -12,5 +12,5 @@ func Render(profile app.UserProfile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return `<context_block id="profile.active" type="profile" source="storage" trust="untrusted">` + "\n" + validation.EscapeUntrusted(string(data)) + "\n</context_block>", nil
+	return `<context_block id="profile.active" type="profile" source="storage" trust="trusted_preference">` + "\n" + validation.EscapeUntrusted(string(data)) + "\n</context_block>", nil
 }

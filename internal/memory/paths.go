@@ -48,7 +48,7 @@ func workPath(root, taskID string) (string, error) {
 	return path, nil
 }
 
-func longPath(root, kind string) string {
+func longPath(root, kind string) (string, error) {
 	file := "knowledge.jsonl"
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	switch kind {
@@ -61,9 +61,9 @@ func longPath(root, kind string) string {
 	}
 	path, err := storage.SafeJoin(root, "long_term", file)
 	if err != nil {
-		return filepath.Join(root, "long_term", file)
+		return "", app.NewError(app.CategoryValidation, "unsafe_long_path", "unsafe long-term memory path", err)
 	}
-	return path
+	return path, nil
 }
 
 func LatestSessionID(root string) (string, error) {
@@ -91,7 +91,12 @@ func LatestSessionID(root string) (string, error) {
 		if err != nil {
 			continue
 		}
-		candidates = append(candidates, candidate{id: entry.Name(), mtime: info.ModTime().UnixNano()})
+		mtime := info.ModTime().UnixNano()
+		activityPath := filepath.Join(dir, entry.Name(), ".last_activity")
+		if activityInfo, err := os.Stat(activityPath); err == nil {
+			mtime = activityInfo.ModTime().UnixNano()
+		}
+		candidates = append(candidates, candidate{id: entry.Name(), mtime: mtime})
 	}
 	if len(candidates) == 0 {
 		return "", app.NewError(app.CategoryValidation, "missing_session", "no session exists", nil)

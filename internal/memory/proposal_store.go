@@ -18,6 +18,7 @@ type ProposalStore struct {
 type ApplyOptions struct {
 	ProposalID string
 	AcceptAll  bool
+	AcceptIDs  map[string]bool
 	RejectAll  bool
 	RejectIDs  map[string]bool
 	Edits      map[string]ProposalEdit
@@ -123,6 +124,7 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 			if record.Status == app.ProposalAccepted || record.Status == app.ProposalEdited || record.Status == app.ProposalRejected || record.Status == app.ProposalBlocked {
 				continue
 			}
+			accepted := opts.AcceptAll || opts.AcceptIDs != nil && opts.AcceptIDs[record.ID]
 			if opts.RejectAll || opts.RejectIDs != nil && opts.RejectIDs[record.ID] {
 				record.Status = app.ProposalRejected
 				continue
@@ -137,7 +139,7 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 					appliedContent = strings.TrimSpace(edit.Content)
 				}
 				record.Status = app.ProposalEdited
-			} else if opts.AcceptAll {
+			} else if accepted {
 				record.Status = app.ProposalAccepted
 			} else {
 				continue
@@ -251,6 +253,7 @@ func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
 		if record.Status == app.ProposalAccepted || record.Status == app.ProposalEdited || record.Status == app.ProposalRejected || record.Status == app.ProposalBlocked {
 			continue
 		}
+		accepted := opts.AcceptAll || opts.AcceptIDs != nil && opts.AcceptIDs[record.ID]
 		if opts.RejectAll || opts.RejectIDs != nil && opts.RejectIDs[record.ID] {
 			continue
 		}
@@ -263,7 +266,7 @@ func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
 			if strings.TrimSpace(edit.Content) != "" {
 				appliedContent = strings.TrimSpace(edit.Content)
 			}
-		} else if !opts.AcceptAll {
+		} else if !accepted {
 			continue
 		}
 		if validation.HasSecret(appliedContent) || appliedLayer == app.ProposedLayerIgnore {
