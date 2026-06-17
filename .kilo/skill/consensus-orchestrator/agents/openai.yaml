@@ -1,0 +1,3 @@
+display_name: Consensus Orchestrator
+short_description: Run multi-agent consensus reviews
+default_prompt: Review the provided plan, docs, code, architecture, or other target with the consensus pipeline and produce artifacts plus final verdict.
