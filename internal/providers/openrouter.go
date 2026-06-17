@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -37,7 +38,7 @@ func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]string, error) {
 	req.Header.Set("Authorization", "Bearer "+key)
 	res, err := p.client().Do(req)
 	if err != nil {
-		return nil, app.NewError(app.CategoryProvider, "network", err.Error(), err)
+		return nil, providerTransportError(err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
@@ -84,25 +85,50 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 	if err := json.NewEncoder(&buf).Encode(body); err != nil {
 		return CompletionResponse{}, app.NewError(app.CategoryProvider, "request_encode", err.Error(), err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", &buf)
+	bodyBytes := buf.Bytes()
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		response, retry, err := p.completeOnce(ctx, key, req.Model, bodyBytes)
+		if err == nil {
+			response.RetryCount = attempt
+			return response, nil
+		}
+		lastErr = err
+		if !retry || ctx.Err() != nil {
+			return CompletionResponse{}, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+	}
+	if lastErr != nil {
+		return CompletionResponse{}, lastErr
+	}
+	return CompletionResponse{}, app.NewError(app.CategoryProvider, "network", "OpenRouter request failed", nil)
+}
+
+func (p *OpenRouterProvider) completeOnce(ctx context.Context, key, model string, body []byte) (CompletionResponse, bool, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.BaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "request_build", err.Error(), err)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "request_build", err.Error(), err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+key)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpRes, err := p.client().Do(httpReq)
 	if err != nil {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "network", err.Error(), err)
+		return CompletionResponse{}, true, providerTransportError(err)
 	}
 	defer httpRes.Body.Close()
 	if httpRes.StatusCode == http.StatusUnauthorized || httpRes.StatusCode == http.StatusForbidden {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "auth", "OpenRouter authorization failed", nil)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "auth", "OpenRouter authorization failed", nil)
 	}
 	if httpRes.StatusCode == http.StatusNotFound {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "model_not_found", "model not found", nil)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "model_not_found", "model not found", nil)
+	}
+	if httpRes.StatusCode == http.StatusTooManyRequests || httpRes.StatusCode >= 500 {
+		_, _ = io.Copy(io.Discard, httpRes.Body)
+		return CompletionResponse{}, true, app.NewError(app.CategoryProvider, "temporary_http", fmt.Sprintf("OpenRouter status %d", httpRes.StatusCode), nil)
 	}
 	if httpRes.StatusCode >= 400 {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "http", fmt.Sprintf("OpenRouter status %d", httpRes.StatusCode), nil)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "http", fmt.Sprintf("OpenRouter status %d", httpRes.StatusCode), nil)
 	}
 	var parsed struct {
 		ID      string `json:"id"`
@@ -114,16 +140,23 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(httpRes.Body).Decode(&parsed); err != nil {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "malformed_response", err.Error(), err)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "malformed_response", err.Error(), err)
 	}
 	if len(parsed.Choices) == 0 {
-		return CompletionResponse{}, app.NewError(app.CategoryProvider, "malformed_response", "missing choices", nil)
+		return CompletionResponse{}, false, app.NewError(app.CategoryProvider, "malformed_response", "missing choices", nil)
 	}
-	model := parsed.Model
-	if model == "" {
-		model = req.Model
+	responseModel := parsed.Model
+	if responseModel == "" {
+		responseModel = model
 	}
-	return newAssistantMessage(parsed.Choices[0].Message.Content, model, parsed.ID), nil
+	return newAssistantMessage(parsed.Choices[0].Message.Content, responseModel, parsed.ID), false, nil
+}
+
+func providerTransportError(err error) *app.Error {
+	if os.IsTimeout(err) {
+		return app.NewError(app.CategoryProvider, "timeout", "OpenRouter request timed out", err)
+	}
+	return app.NewError(app.CategoryProvider, "network", err.Error(), err)
 }
 
 func (p *OpenRouterProvider) client() *http.Client {

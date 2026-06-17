@@ -1,0 +1,1 @@
+If you haven't completed the task fully, never stop, ask questions, or wait for approval. Always continue writing code or testing until the task is 100% finished and you output a completion statement.

@@ -79,10 +79,23 @@ func EnsureNoSymlinkParents(path string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if isAllowedSystemSymlink(current) {
+				continue
+			}
 			return errors.New("symlink parent rejected")
 		}
 	}
 	return nil
+}
+
+func isAllowedSystemSymlink(path string) bool {
+	clean := filepath.Clean(path)
+	switch clean {
+	case "/var", "/tmp", "/etc":
+		return true
+	default:
+		return false
+	}
 }
 
 func RejectSymlinkTarget(path string) error {

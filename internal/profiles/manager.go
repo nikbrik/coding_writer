@@ -10,6 +10,7 @@ import (
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/storage"
+	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
 type Manager struct {
@@ -25,7 +26,11 @@ func (m *Manager) profilePath(id string) (string, error) {
 	if err := storage.ValidateID(id); err != nil {
 		return "", app.NewError(app.CategoryValidation, "unsafe_profile_id", "unsafe profile id", err)
 	}
-	return filepath.Join(m.StorageDir, "profiles", id+".json"), nil
+	path, err := storage.SafeJoin(m.StorageDir, "profiles", id+".json")
+	if err != nil {
+		return "", app.NewError(app.CategoryValidation, "unsafe_profile_path", "unsafe profile path", err)
+	}
+	return path, nil
 }
 
 func (m *Manager) EnsureDefaults() error {
@@ -33,6 +38,11 @@ func (m *Manager) EnsureDefaults() error {
 	for _, profile := range DefaultProfiles(now) {
 		if _, err := m.Get(profile.ID); err == nil {
 			continue
+		} else {
+			appErr := app.AsError(err)
+			if appErr.Category != app.CategoryValidation || appErr.Code != "unknown_profile" {
+				return err
+			}
 		}
 		if err := m.Create(profile); err != nil {
 			return err
@@ -142,6 +152,24 @@ func Validate(profile app.UserProfile) error {
 	}
 	if strings.TrimSpace(profile.DisplayName) == "" || len(profile.Style) == 0 || len(profile.ResponseFormat) == 0 || len(profile.Constraints) == 0 {
 		return app.NewError(app.CategoryValidation, "invalid_profile", "profile requires display_name, style, response_format, constraints", nil)
+	}
+	if validation.HasSecret(profile.ID) || validation.HasSecret(profile.DisplayName) || validation.HasSecret(profile.DefaultModel) {
+		return app.NewError(app.CategoryValidation, "secret_blocked", "secret-like profile content cannot be saved", nil)
+	}
+	for key, value := range profile.Style {
+		if validation.HasSecret(key) || validation.HasSecret(value) {
+			return app.NewError(app.CategoryValidation, "secret_blocked", "secret-like profile content cannot be saved", nil)
+		}
+	}
+	for key, value := range profile.ResponseFormat {
+		if validation.HasSecret(key) || validation.HasSecret(value) {
+			return app.NewError(app.CategoryValidation, "secret_blocked", "secret-like profile content cannot be saved", nil)
+		}
+	}
+	for _, constraint := range profile.Constraints {
+		if validation.HasSecret(constraint) {
+			return app.NewError(app.CategoryValidation, "secret_blocked", "secret-like profile content cannot be saved", nil)
+		}
 	}
 	return nil
 }

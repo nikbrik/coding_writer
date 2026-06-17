@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 )
@@ -48,6 +50,28 @@ func TestTaskStateMachinePauseResume(t *testing.T) {
 	}
 	if state.Status != app.TaskStatusActive || state.Stage != app.StageExecution || state.ExpectedAction != app.ExpectedLLMResponse {
 		t.Fatalf("resume lost state: %+v", state)
+	}
+}
+
+func TestTaskPlanCriteriaPersistAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	if _, err := mgr.Start("test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AddPlanItem("build memory manager"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.AddCriteria("memory layers are separate files"); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewManager(dir)
+	state, err := restarted.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Plan) != 1 || state.Plan[0] != "build memory manager" || len(state.AcceptanceCriteria) != 1 || state.AcceptanceCriteria[0] != "memory layers are separate files" {
+		t.Fatalf("plan/criteria not restored: %+v", state)
 	}
 }
 
@@ -99,5 +123,47 @@ func TestDoneStageUsesExpectedNoneNoStatusDone(t *testing.T) {
 	}
 	if state.Stage != app.StageDone || state.Status != app.TaskStatusActive {
 		t.Fatalf("done pause reopened task: %+v", state)
+	}
+}
+
+func TestTaskLostUpdateGuard(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	state, err := mgr.Start("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := mgr.currentSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := mgr.SetStep("newer step"); err != nil {
+		t.Fatal(err)
+	}
+	state.CurrentStep = "stale step"
+	err = mgr.saveBothIfUnchanged(state, &snapshot)
+	if err == nil || !strings.Contains(err.Error(), "task_lost_update") {
+		t.Fatalf("want task_lost_update, got %v", err)
+	}
+	current, err := mgr.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.CurrentStep != "newer step" {
+		t.Fatalf("lost update guard failed: %+v", current)
+	}
+}
+
+func TestTaskRejectsSecretContent(t *testing.T) {
+	mgr := NewManager(t.TempDir())
+	if _, err := mgr.Start("OPENROUTER_API_KEY=sk-secret123456789"); err == nil || !strings.Contains(err.Error(), "secret_blocked") {
+		t.Fatalf("want secret blocked on start, got %v", err)
+	}
+	if _, err := mgr.Start("safe task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.SetStep("Bearer abcdefghijklmnop"); err == nil || !strings.Contains(err.Error(), "secret_blocked") {
+		t.Fatalf("want secret blocked on step, got %v", err)
 	}
 }

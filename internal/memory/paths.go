@@ -14,7 +14,11 @@ func sessionDir(root, sessionID string) (string, error) {
 	if err := storage.ValidateID(sessionID); err != nil {
 		return "", app.NewError(app.CategoryValidation, "unsafe_session_id", "unsafe session id", err)
 	}
-	return filepath.Join(root, "sessions", sessionID), nil
+	path, err := storage.SafeJoin(root, "sessions", sessionID)
+	if err != nil {
+		return "", app.NewError(app.CategoryValidation, "unsafe_session_path", "unsafe session path", err)
+	}
+	return path, nil
 }
 
 func shortPath(root, sessionID string) (string, error) {
@@ -37,25 +41,36 @@ func workPath(root, taskID string) (string, error) {
 	if err := storage.ValidateID(taskID); err != nil {
 		return "", app.NewError(app.CategoryValidation, "unsafe_task_id", "unsafe task id", err)
 	}
-	return filepath.Join(root, "tasks", taskID, "work_memory.jsonl"), nil
+	path, err := storage.SafeJoin(root, "tasks", taskID, "work_memory.jsonl")
+	if err != nil {
+		return "", app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe task path", err)
+	}
+	return path, nil
 }
 
 func longPath(root, kind string) string {
+	file := "knowledge.jsonl"
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	switch kind {
 	case "preference", "preferences":
-		return filepath.Join(root, "long_term", "preferences.jsonl")
+		file = "preferences.jsonl"
 	case "decision", "decisions":
-		return filepath.Join(root, "long_term", "decisions.jsonl")
+		file = "decisions.jsonl"
 	case "constraint", "constraints":
-		return filepath.Join(root, "long_term", "constraints.jsonl")
-	default:
-		return filepath.Join(root, "long_term", "knowledge.jsonl")
+		file = "constraints.jsonl"
 	}
+	path, err := storage.SafeJoin(root, "long_term", file)
+	if err != nil {
+		return filepath.Join(root, "long_term", file)
+	}
+	return path
 }
 
 func LatestSessionID(root string) (string, error) {
-	dir := filepath.Join(root, "sessions")
+	dir, safeErr := storage.SafeJoin(root, "sessions")
+	if safeErr != nil {
+		return "", app.NewError(app.CategoryValidation, "unsafe_session_path", "unsafe session path", safeErr)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

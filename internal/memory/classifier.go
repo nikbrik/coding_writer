@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"strings"
 	"time"
 
@@ -16,17 +17,19 @@ type Classifier struct {
 }
 
 type ClassificationInput struct {
-	SessionID         string
-	UserMessageID     string
+	SessionID          string
+	UserMessageID      string
 	AssistantMessageID string
-	UserMessage       string
-	AssistantMessage  string
-	Profile           app.UserProfile
-	Task              *app.TaskState
-	Model             string
+	UserMessage        string
+	AssistantMessage   string
+	Profile            app.UserProfile
+	Task               *app.TaskState
+	Model              string
 }
 
-func NewClassifier(provider providers.LLMProvider) *Classifier { return &Classifier{Provider: provider} }
+func NewClassifier(provider providers.LLMProvider) *Classifier {
+	return &Classifier{Provider: provider}
+}
 
 func (c *Classifier) Propose(ctx context.Context, input ClassificationInput) (app.MemoryProposal, error) {
 	if c.Provider == nil {
@@ -43,22 +46,35 @@ func (c *Classifier) Propose(ctx context.Context, input ClassificationInput) (ap
 		Content:   classifierInputText(input),
 		CreatedAt: time.Now().UTC(),
 	}}
-	res, err := c.Provider.Complete(ctx, providers.CompletionRequest{Purpose: providers.PurposeClassifier, Model: input.Model, Messages: messages, JSONMode: true})
-	if err != nil {
-		return app.MemoryProposal{}, err
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{Purpose: providers.PurposeClassifier, Model: input.Model, Messages: messages, JSONMode: true})
+		if err != nil {
+			return app.MemoryProposal{}, err
+		}
+		proposal, err := parseProposal(res.Message.Content)
+		if err != nil {
+			lastErr = err
+			appErr := app.AsError(err)
+			if appErr.Category != app.CategoryClassifier || appErr.Code != "invalid_json" {
+				return proposal, err
+			}
+			messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: "Previous classifier output was invalid JSON. Return strict JSON only, with no markdown and no trailing data.", CreatedAt: time.Now().UTC()})
+			continue
+		}
+		proposal.ID = app.NewID("proposal")
+		proposal.SessionID = input.SessionID
+		proposal.SourceMessageIDs = []string{input.UserMessageID, input.AssistantMessageID}
+		proposal.Provider = res.ProviderID
+		proposal.Model = res.Model
+		proposal.TemplateHash = "p0-memory-classifier-v1"
+		proposal.CreatedAt = time.Now().UTC()
+		return proposal, nil
 	}
-	proposal, err := parseProposal(res.Message.Content)
-	if err != nil {
-		return proposal, err
+	if lastErr != nil {
+		return app.MemoryProposal{}, lastErr
 	}
-	proposal.ID = app.NewID("proposal")
-	proposal.SessionID = input.SessionID
-	proposal.SourceMessageIDs = []string{input.UserMessageID, input.AssistantMessageID}
-	proposal.Provider = res.ProviderID
-	proposal.Model = res.Model
-	proposal.TemplateHash = "p0-memory-classifier-v1"
-	proposal.CreatedAt = time.Now().UTC()
-	return proposal, nil
+	return app.MemoryProposal{}, app.NewError(app.CategoryClassifier, "invalid_json", "classifier returned invalid JSON", nil)
 }
 
 type classifierJSON struct {
@@ -77,6 +93,9 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&parsed); err != nil {
 		return app.MemoryProposal{}, app.NewError(app.CategoryClassifier, "invalid_json", "classifier returned invalid JSON", err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return app.MemoryProposal{}, app.NewError(app.CategoryClassifier, "invalid_json", "classifier returned trailing JSON data", err)
 	}
 	proposal := app.MemoryProposal{Records: make([]app.ProposedMemoryRecord, 0, len(parsed.Records))}
 	for _, item := range parsed.Records {
@@ -126,8 +145,11 @@ func classifierInputText(input ClassificationInput) string {
 	task := "none"
 	if input.Task != nil {
 		data, _ := json.Marshal(input.Task)
-		task = string(data)
+		task = validation.EscapeUntrusted(string(data))
 	}
 	profile, _ := json.Marshal(input.Profile)
-	return "Active profile: " + string(profile) + "\nTask state: " + task + "\nLatest user message: " + input.UserMessage + "\nLatest assistant response: " + input.AssistantMessage
+	return `<context_block id="classifier.profile" type="profile" source="storage" trust="untrusted">` + "\n" + validation.EscapeUntrusted(string(profile)) + "\n</context_block>\n" +
+		`<context_block id="classifier.task" type="task_state" source="storage" trust="untrusted">` + "\n" + task + "\n</context_block>\n" +
+		`<context_block id="classifier.user" type="classifier_input" source="latest_exchange" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.UserMessage) + "\n</context_block>\n" +
+		`<context_block id="classifier.assistant" type="classifier_input" source="latest_exchange" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.AssistantMessage) + "\n</context_block>"
 }

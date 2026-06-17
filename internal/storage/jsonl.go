@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 )
 
 var fileLocks sync.Map
@@ -18,43 +19,72 @@ func lockFor(path string) *sync.Mutex {
 }
 
 func AppendJSONL(path string, value any) error {
-	lock := lockFor(path)
-	lock.Lock()
-	defer lock.Unlock()
-	if err := EnsureNoSymlinkParents(path); err != nil {
-		return errStorage("unsafe_path", path, err)
-	}
-	if err := RejectSymlinkTarget(path); err != nil {
-		return errStorage("unsafe_path", path, err)
-	}
-	if err := EnsureDir(filepath.Dir(path)); err != nil {
+	if err := withJSONLLock(path, true, func() error {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
+		if err != nil {
+			return errStorage("append", path, err)
+		}
+		defer f.Close()
+		enc := json.NewEncoder(f)
+		if err := enc.Encode(value); err != nil {
+			return errStorage("encode", path, err)
+		}
+		if err := f.Chmod(FileMode); err != nil {
+			return errStorage("chmod", path, err)
+		}
+		if err := f.Sync(); err != nil {
+			return errStorage("sync", path, err)
+		}
+		return nil
+	}); err != nil {
 		return err
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
-	if err != nil {
-		return errStorage("append", path, err)
-	}
-	defer f.Close()
-	enc := json.NewEncoder(f)
-	if err := enc.Encode(value); err != nil {
-		return errStorage("encode", path, err)
-	}
-	if err := f.Chmod(FileMode); err != nil {
-		return errStorage("chmod", path, err)
-	}
-	if err := f.Sync(); err != nil {
-		return errStorage("sync", path, err)
 	}
 	return nil
 }
 
-func ReadJSONL[T any](path string) ([]T, error) {
+func UpdateJSONL[T any](path string, update func([]T) ([]T, error)) error {
+	return withJSONLLock(path, true, func() error {
+		values, err := readJSONLUnlocked[T](path)
+		if err != nil {
+			return err
+		}
+		updated, err := update(values)
+		if err != nil {
+			return err
+		}
+		return rewriteJSONLUnlocked(path, updated)
+	})
+}
+
+func withJSONLLock(path string, createDir bool, fn func() error) error {
 	if err := EnsureNoSymlinkParents(path); err != nil {
-		return nil, errStorage("unsafe_path", path, err)
+		return errStorage("unsafe_path", path, err)
 	}
 	if err := RejectSymlinkTarget(path); err != nil {
-		return nil, errStorage("unsafe_path", path, err)
+		return errStorage("unsafe_path", path, err)
 	}
+	if createDir {
+		if err := EnsureDir(filepath.Dir(path)); err != nil {
+			return err
+		}
+	} else if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		if os.IsNotExist(err) {
+			return fn()
+		}
+		return errStorage("stat_dir", filepath.Dir(path), err)
+	}
+	lock := lockFor(path)
+	lock.Lock()
+	defer lock.Unlock()
+	unlock, err := acquireFileLock(path)
+	if err != nil {
+		return errStorage("lock", path, err)
+	}
+	defer unlock()
+	return fn()
+}
+
+func readJSONLUnlocked[T any](path string) ([]T, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -82,19 +112,23 @@ func ReadJSONL[T any](path string) ([]T, error) {
 	return out, nil
 }
 
-func RewriteJSONL[T any](path string, values []T) error {
-	lock := lockFor(path)
-	lock.Lock()
-	defer lock.Unlock()
-	if err := EnsureNoSymlinkParents(path); err != nil {
-		return errStorage("unsafe_path", path, err)
-	}
-	if err := RejectSymlinkTarget(path); err != nil {
-		return errStorage("unsafe_path", path, err)
-	}
-	if err := EnsureDir(filepath.Dir(path)); err != nil {
+func ReadJSONL[T any](path string) ([]T, error) {
+	var out []T
+	err := withJSONLLock(path, false, func() error {
+		values, err := readJSONLUnlocked[T](path)
+		out = values
 		return err
-	}
+	})
+	return out, err
+}
+
+func RewriteJSONL[T any](path string, values []T) error {
+	return withJSONLLock(path, true, func() error {
+		return rewriteJSONLUnlocked(path, values)
+	})
+}
+
+func rewriteJSONLUnlocked[T any](path string, values []T) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*.jsonl")
 	if err != nil {
 		return errStorage("temp", path, err)
@@ -122,13 +156,13 @@ func RewriteJSONL[T any](path string, values []T) error {
 	if err := os.Rename(tmpName, path); err != nil {
 		return errStorage("rename", path, err)
 	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return errStorage("sync_dir", filepath.Dir(path), err)
+	}
 	return os.Chmod(path, FileMode)
 }
 
 func TruncateJSONL(path string) error {
-	lock := lockFor(path)
-	lock.Lock()
-	defer lock.Unlock()
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
@@ -138,6 +172,14 @@ func TruncateJSONL(path string) error {
 	if err := EnsureDir(filepath.Dir(path)); err != nil {
 		return err
 	}
+	lock := lockFor(path)
+	lock.Lock()
+	defer lock.Unlock()
+	unlock, err := acquireFileLock(path)
+	if err != nil {
+		return errStorage("lock", path, err)
+	}
+	defer unlock()
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, FileMode)
 	if err != nil {
 		return errStorage("truncate", path, err)
@@ -150,4 +192,27 @@ func TruncateJSONL(path string) error {
 		return errStorage("sync", path, err)
 	}
 	return nil
+}
+
+func acquireFileLock(path string) (func(), error) {
+	lockPath := path + ".lock"
+	if err := RejectSymlinkTarget(lockPath); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, FileMode)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(FileMode); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		_ = f.Close()
+	}, nil
 }

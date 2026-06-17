@@ -18,8 +18,14 @@ func EnsureDir(path string) error {
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
+	if err := RejectSymlinkTarget(path); err != nil {
+		return errStorage("unsafe_path", path, err)
+	}
 	if err := os.MkdirAll(path, DirMode); err != nil {
 		return errStorage("mkdir", path, err)
+	}
+	if err := RejectSymlinkTarget(path); err != nil {
+		return errStorage("unsafe_path", path, err)
 	}
 	return os.Chmod(path, DirMode)
 }

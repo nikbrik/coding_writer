@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -44,11 +45,21 @@ func NewConfigManager(storageDir string) *ConfigManager {
 	return &ConfigManager{StorageDir: storageDir}
 }
 
-func (m *ConfigManager) ConfigPath() string { return filepath.Join(m.StorageDir, "config.json") }
+func (m *ConfigManager) ConfigPath() string {
+	path, err := storage.SafeJoin(m.StorageDir, "config.json")
+	if err != nil {
+		return filepath.Join(m.StorageDir, "config.json")
+	}
+	return path
+}
 
 func (m *ConfigManager) EnsureStorageTree() error {
 	for _, dir := range []string{"profiles", "sessions", "tasks", "long_term", "logs"} {
-		if err := storage.EnsureDir(filepath.Join(m.StorageDir, dir)); err != nil {
+		path, err := storage.SafeJoin(m.StorageDir, dir)
+		if err != nil {
+			return NewError(CategoryValidation, "unsafe_storage_path", "unsafe storage path", err)
+		}
+		if err := storage.EnsureDir(path); err != nil {
 			return NewError(CategoryStorage, "mkdir", err.Error(), err)
 		}
 	}
@@ -112,6 +123,9 @@ func (m *ConfigManager) LoadEffective(opts ConfigOptions) (AppConfig, error) {
 	if cfg.OpenRouterBaseURL == "" {
 		cfg.OpenRouterBaseURL = DefaultOpenRouterBaseURL
 	}
+	if err := validateBaseURL(cfg.OpenRouterBaseURL); err != nil {
+		return cfg, err
+	}
 	if cfg.MemoryModel == "" {
 		cfg.MemoryModel = cfg.ActiveModel
 	}
@@ -128,8 +142,22 @@ func (m *ConfigManager) Save(cfg AppConfig) error {
 	if cfg.OpenRouterBaseURL == "" {
 		cfg.OpenRouterBaseURL = DefaultOpenRouterBaseURL
 	}
+	if err := validateBaseURL(cfg.OpenRouterBaseURL); err != nil {
+		return err
+	}
 	if err := storage.AtomicWriteJSON(m.ConfigPath(), cfg); err != nil {
 		return NewError(CategoryStorage, "config_write", err.Error(), err)
+	}
+	return nil
+}
+
+func validateBaseURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return NewError(CategoryValidation, "invalid_base_url", "OpenRouter base URL must be a valid HTTPS URL", err)
+	}
+	if parsed.Scheme != "https" {
+		return NewError(CategoryValidation, "invalid_base_url", "OpenRouter base URL must use HTTPS", nil)
 	}
 	return nil
 }

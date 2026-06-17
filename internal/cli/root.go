@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/nikbrik/coding_writer/internal/prompting"
 	"github.com/nikbrik/coding_writer/internal/providers"
 	"github.com/nikbrik/coding_writer/internal/tasks"
+	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
 type globalOptions struct {
@@ -30,16 +33,17 @@ type globalOptions struct {
 }
 
 type runtime struct {
-	StorageDir string
-	Config     app.AppConfig
-	ConfigMgr  *app.ConfigManager
-	Profiles   *profiles.Manager
-	Tasks      *tasks.Manager
-	Memory     *memory.Manager
-	Proposals  *memory.ProposalStore
-	Provider   providers.LLMProvider
-	Builder    *prompting.Builder
-	Classifier *memory.Classifier
+	StorageDir      string
+	Config          app.AppConfig
+	ConfigMgr       *app.ConfigManager
+	Profiles        *profiles.Manager
+	Tasks           *tasks.Manager
+	Memory          *memory.Manager
+	Proposals       *memory.ProposalStore
+	Provider        providers.LLMProvider
+	Builder         *prompting.Builder
+	Classifier      *memory.Classifier
+	DisclosureShown bool
 }
 
 func Execute() error {
@@ -106,11 +110,16 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 	if cfg.MemoryModel == "" {
 		cfg.MemoryModel = cfg.ActiveModel
 	}
+	provider := chooseProvider(cfg)
+	if opts.Model != "" {
+		if err := validateModelID(ctx, provider, opts.Model); err != nil {
+			return nil, err
+		}
+	}
 	if err := cfgMgr.Save(cfg); err != nil {
 		return nil, err
 	}
 	memMgr := memory.NewManager(storageDir)
-	provider := chooseProvider(cfg)
 	return &runtime{
 		StorageDir: storageDir,
 		Config:     cfg,
@@ -171,13 +180,16 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 				if strings.TrimSpace(chatOpts.Input) == "" {
 					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
 				}
+				if !chatOpts.RenderPrompt {
+					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
+				}
 				result, err := runChatExchange(cmd.Context(), rt, app.NewID("session"), chatOpts.Input, chatOpts.RenderPrompt)
 				if err != nil {
 					return err
 				}
 				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
 			}
-			return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), rt)
+			return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
 		},
 	}
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
@@ -198,14 +210,25 @@ type chatResult struct {
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool) (chatResult, error) {
+	if validation.HasSecret(input) {
+		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
+	}
 	profile, err := rt.Profiles.Active()
 	if err != nil {
 		return chatResult{}, err
 	}
-	taskState, _ := rt.Tasks.Current()
+	taskState, taskErr := rt.Tasks.Current()
 	var taskPtr *app.TaskState
-	if taskState.ID != "" {
+	if taskErr != nil {
+		appErr := app.AsError(taskErr)
+		if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
+			return chatResult{}, taskErr
+		}
+	} else if taskState.ID != "" {
 		taskPtr = &taskState
+	}
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && !renderOnly {
+		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, app.NewError(app.CategoryValidation, "task_paused", "task is paused; run /task resume before continuing execution", nil)
 	}
 	bundle, err := rt.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr))
 	if err != nil {
@@ -239,7 +262,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	}
 	proposal, err := rt.Classifier.Propose(ctx, memory.ClassificationInput{
 		SessionID:          sessionID,
-		UserMessageID:     userRecord.ID,
+		UserMessageID:      userRecord.ID,
 		AssistantMessageID: assistantRecord.ID,
 		UserMessage:        input,
 		AssistantMessage:   res.Message.Content,
@@ -257,7 +280,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	return result, nil
 }
 
-func runREPL(ctx context.Context, in io.Reader, out io.Writer, rt *runtime) error {
+func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, rt *runtime) error {
 	sessionID := app.NewID("session")
 	scanner := bufio.NewScanner(in)
 	for scanner.Scan() {
@@ -275,14 +298,15 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, rt *runtime) erro
 			}
 			continue
 		}
+		ensureProviderDisclosure(diag, rt)
 		result, err := runChatExchange(ctx, rt, sessionID, line, false)
 		if err != nil {
 			_, _ = fmt.Fprintln(out, err.Error())
 			continue
 		}
-		_, _ = fmt.Fprintln(out, result.Answer)
+		_, _ = fmt.Fprintln(out, safeTerminalText(result.Answer))
 		if result.Proposal != nil {
-			_, _ = fmt.Fprintf(out, "Memory proposal: %s (%d records)\n", result.Proposal.ID, len(result.Proposal.Records))
+			_, _ = fmt.Fprint(out, proposalText(*result.Proposal))
 		}
 	}
 	return scanner.Err()
@@ -363,6 +387,7 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			if taskState.ID != "" {
 				taskPtr = &taskState
 			}
+			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 			proposal, err := rt.Classifier.Propose(cmd.Context(), memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel})
 			if err != nil {
 				return err
@@ -391,9 +416,14 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 				proposalID = "latest"
 			}
 			taskState, _ := rt.Tasks.Current()
-			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptAll: accept == "all", RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskState.ID}
+			if taskState.Status == app.TaskStatusPaused {
+				return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
+			}
+			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptAll: accept == "all", RejectAll: reject == "all", RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskState.ID}
 			if reject != "" {
-				optsApply.RejectIDs[reject] = true
+				if reject != "all" {
+					optsApply.RejectIDs[reject] = true
+				}
 			}
 			if edit != "" {
 				id, parsed, err := parseEdit(edit)
@@ -419,6 +449,22 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 func taskCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Task state commands"}
 	cmd.AddCommand(&cobra.Command{
+		Use:   "start <title>",
+		Short: "Start current task",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.Start(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
 		Short: "Show current task",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -433,11 +479,123 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
 		},
 	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "move <stage>",
+		Short: "Move current task stage",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.Move(app.TaskStage(args[0]))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "step <text>",
+		Short: "Set current task step",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.SetStep(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "expect <action>",
+		Short: "Set current task expected action",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.SetExpectedAction(app.ExpectedAction(args[0]))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "plan <text>",
+		Short: "Append current task plan item",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.AddPlanItem(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "criteria <text>",
+		Short: "Append current task acceptance criteria",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.AddCriteria(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "pause",
+		Short: "Pause current task",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.Pause()
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "resume",
+		Short: "Resume current task",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.Resume()
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
 	return cmd
 }
 
 func privacyCommand(opts *globalOptions) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "privacy",
 		Short: "Show privacy summary",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -449,6 +607,67 @@ func privacyCommand(opts *globalOptions) *cobra.Command {
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, summary, "OPENROUTER_API_KEY env-only; prompts sent to provider; memory/profile/task stored local.\n")
 		},
 	}
+	cmd.AddCommand(privacyPurgeCommand(opts))
+	return cmd
+}
+
+func privacyPurgeCommand(opts *globalOptions) *cobra.Command {
+	var purgeAudit, purgeTranscripts, yes bool
+	cmd := &cobra.Command{
+		Use:   "purge",
+		Short: "Purge local audit/transcript data",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !yes {
+				return app.NewError(app.CategoryCLI, "confirmation_required", "privacy purge requires --yes", nil)
+			}
+			storageDir, err := app.ResolveStorageDir(opts.StorageDir)
+			if err != nil {
+				return err
+			}
+			removed, err := purgePrivacyData(storageDir, purgeAudit, purgeTranscripts)
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "removed": removed}, fmt.Sprintf("removed %d files\n", removed))
+		},
+	}
+	cmd.Flags().BoolVar(&purgeAudit, "audit", false, "purge memory proposal audit files")
+	cmd.Flags().BoolVar(&purgeTranscripts, "transcripts", false, "purge transcript files")
+	cmd.Flags().BoolVar(&yes, "yes", false, "confirm purge")
+	return cmd
+}
+
+func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int, error) {
+	if !purgeAudit && !purgeTranscripts {
+		return 0, app.NewError(app.CategoryCLI, "missing_purge_target", "choose --audit and/or --transcripts", nil)
+	}
+	sessionsDir := filepath.Join(storageDir, "sessions")
+	removed := 0
+	err := filepath.WalkDir(sessionsDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		name := entry.Name()
+		shouldRemove := purgeAudit && name == "memory_proposals.jsonl" || purgeTranscripts && name == "transcript.md"
+		if !shouldRemove {
+			return nil
+		}
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		removed++
+		return nil
+	})
+	if err != nil {
+		if os.IsNotExist(err) {
+			return removed, nil
+		}
+		return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	return removed, nil
 }
 
 func handleSlash(ctx context.Context, out io.Writer, rt *runtime, sessionID, line string) (bool, error) {
@@ -496,6 +715,9 @@ func handleSlash(ctx context.Context, out io.Writer, rt *runtime, sessionID, lin
 			return false, nil
 		}
 		model := parts[1]
+		if err := validateModelID(ctx, rt.Provider, model); err != nil {
+			return false, err
+		}
 		_, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error { cfg.ActiveModel = model; cfg.MemoryModel = model; return nil })
 		if err != nil {
 			return false, err
@@ -512,6 +734,9 @@ func handleSlash(ctx context.Context, out io.Writer, rt *runtime, sessionID, lin
 		layer := app.MemoryLayer(parts[1])
 		text := strings.TrimSpace(strings.TrimPrefix(line, "/save "+parts[1]))
 		taskState, _ := rt.Tasks.Current()
+		if layer == app.LayerWork && taskState.Status == app.TaskStatusPaused {
+			return false, app.NewError(app.CategoryValidation, "task_paused", "resume task before mutating working memory", nil)
+		}
 		record, err := rt.Memory.Save(ctx, memory.SaveInput{Layer: layer, Kind: "manual", Content: text, Source: "manual", SessionID: sessionID, TaskID: taskState.ID})
 		if err != nil {
 			return false, err
@@ -553,7 +778,7 @@ func handleTaskSlash(out io.Writer, rt *runtime, parts []string, rest string) er
 		if err != nil {
 			return err
 		}
-		_, _ = fmt.Fprintf(out, "current_step: %s\n", state.CurrentStep)
+		_, _ = fmt.Fprintf(out, "current_step: %s\n", safeTerminalText(state.CurrentStep))
 	case "expect":
 		if len(parts) < 3 {
 			return app.NewError(app.CategoryCLI, "missing_expected_action", "expected action required", nil)
@@ -563,6 +788,18 @@ func handleTaskSlash(out io.Writer, rt *runtime, parts []string, rest string) er
 			return err
 		}
 		_, _ = fmt.Fprintf(out, "expected_action: %s\n", state.ExpectedAction)
+	case "plan":
+		state, err := rt.Tasks.AddPlanItem(strings.TrimSpace(strings.TrimPrefix(strings.Join(parts, " "), "/task plan")))
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "plan_items: %d\n", len(state.Plan))
+	case "criteria":
+		state, err := rt.Tasks.AddCriteria(strings.TrimSpace(strings.TrimPrefix(strings.Join(parts, " "), "/task criteria")))
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintf(out, "acceptance_criteria: %d\n", len(state.AcceptanceCriteria))
 	case "move":
 		if len(parts) < 3 {
 			return app.NewError(app.CategoryCLI, "missing_stage", "stage required", nil)
@@ -617,6 +854,7 @@ func handleMemorySlash(ctx context.Context, out io.Writer, rt *runtime, sessionI
 		if taskState.ID != "" {
 			taskPtr = &taskState
 		}
+		ensureProviderDisclosure(out, rt)
 		proposal, err := rt.Classifier.Propose(ctx, memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel})
 		if err != nil {
 			return err
@@ -627,6 +865,9 @@ func handleMemorySlash(ctx context.Context, out io.Writer, rt *runtime, sessionI
 		_, _ = fmt.Fprint(out, proposalText(proposal))
 	case "apply":
 		taskState, _ := rt.Tasks.Current()
+		if taskState.Status == app.TaskStatusPaused {
+			return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
+		}
 		result, err := rt.Proposals.Apply(ctx, memory.ApplyOptions{ProposalID: "latest", AcceptAll: true, SessionID: sessionID, TaskID: taskState.ID})
 		if err != nil {
 			return err
@@ -643,6 +884,47 @@ func taskID(task *app.TaskState) string {
 		return ""
 	}
 	return task.ID
+}
+
+func ensureProviderDisclosure(w io.Writer, rt *runtime) {
+	if rt == nil || rt.DisclosureShown {
+		return
+	}
+	if _, ok := rt.Provider.(*providers.OpenRouterProvider); !ok {
+		return
+	}
+	rt.DisclosureShown = true
+	_, _ = io.WriteString(w, providerDisclosureText())
+}
+
+func providerDisclosureText() string {
+	return "Provider disclosure: rendered prompt, active profile, task state, selected memory, latest exchange, and classifier payload may be sent to OpenRouter. OPENROUTER_API_KEY is read from env and never persisted.\n"
+}
+
+func validateModelID(ctx context.Context, provider providers.LLMProvider, model string) error {
+	if strings.TrimSpace(model) == "" || strings.ContainsAny(model, " \t\n\r") || len(model) > 200 || !strings.Contains(model, "/") {
+		return app.NewError(app.CategoryValidation, "invalid_model", "invalid model id", nil)
+	}
+	if _, ok := provider.(*providers.OpenRouterProvider); ok {
+		return nil
+	}
+	models, err := provider.ListModels(ctx)
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Category == app.CategoryProvider && appErr.Code == "missing_api_key" {
+			return nil
+		}
+		return err
+	}
+	if len(models) == 0 {
+		return nil
+	}
+	for _, candidate := range models {
+		if candidate == model {
+			return nil
+		}
+	}
+	return app.NewError(app.CategoryValidation, "invalid_model", "model id not found", nil)
 }
 
 func parseEdit(raw string) (string, memory.ProposalEdit, error) {
@@ -690,9 +972,13 @@ func printError(w io.Writer, err error, asJSON bool) {
 
 func textChatResult(result chatResult) string {
 	if result.Answer == "" {
-		return result.RenderedPrompt
+		return safeTerminalText(result.RenderedPrompt)
 	}
-	return result.Answer + "\n"
+	text := safeTerminalText(result.Answer) + "\n"
+	if result.Proposal != nil {
+		text += proposalText(*result.Proposal)
+	}
+	return text
 }
 
 func profileListText(items []app.UserProfile, active string) string {
@@ -717,7 +1003,7 @@ func memoryText(records []app.MemoryRecord) string {
 		b.WriteString("] ")
 		b.WriteString(record.Kind)
 		b.WriteString(": ")
-		b.WriteString(record.Content)
+		b.WriteString(safeTerminalText(record.Content))
 		b.WriteByte('\n')
 	}
 	return b.String()
@@ -734,14 +1020,26 @@ func proposalText(proposal app.MemoryProposal) string {
 		b.WriteString("] ")
 		b.WriteString(record.Kind)
 		b.WriteString(": ")
-		b.WriteString(record.Content)
+		b.WriteString(safeTerminalText(record.Content))
 		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
+func safeTerminalText(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteString(strconv.QuoteRuneToASCII(r)[1 : len(strconv.QuoteRuneToASCII(r))-1])
+	}
+	return b.String()
+}
+
 func taskText(state app.TaskState) string {
-	return fmt.Sprintf("task=%s title=%s stage=%s current_step=%s expected_action=%s status=%s allowed=%v\n", state.ID, state.Title, state.Stage, state.CurrentStep, state.ExpectedAction, state.Status, tasks.AllowedNext(state.Stage))
+	return fmt.Sprintf("task=%s title=%s stage=%s current_step=%s expected_action=%s status=%s allowed=%v\n", state.ID, safeTerminalText(state.Title), state.Stage, safeTerminalText(state.CurrentStep), state.ExpectedAction, state.Status, tasks.AllowedNext(state.Stage))
 }
 
 func min(a, b int) int {

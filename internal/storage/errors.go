@@ -12,10 +12,14 @@ func (e *Error) Error() string {
 	if e == nil {
 		return ""
 	}
-	if e.Path != "" {
-		return fmt.Sprintf("storage %s: %s", e.Code, e.Path)
+	detail := ""
+	if e.Err != nil {
+		detail = ": " + e.Err.Error()
 	}
-	return fmt.Sprintf("storage %s", e.Code)
+	if e.Path != "" {
+		return fmt.Sprintf("storage %s: %s%s", e.Code, e.Path, detail)
+	}
+	return fmt.Sprintf("storage %s%s", e.Code, detail)
 }
 
 func (e *Error) Unwrap() error { return e.Err }

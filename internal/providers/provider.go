@@ -37,8 +37,8 @@ type LLMProvider interface {
 
 func newAssistantMessage(content, model, providerID string) CompletionResponse {
 	return CompletionResponse{
-		Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: content, CreatedAt: time.Now().UTC()},
-		Model:   model,
+		Message:    app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: content, CreatedAt: time.Now().UTC()},
+		Model:      model,
 		ProviderID: providerID,
 	}
 }

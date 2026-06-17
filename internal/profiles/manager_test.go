@@ -61,3 +61,11 @@ func TestProfileRenderDeterministicAndTagged(t *testing.T) {
 		t.Fatalf("missing canonical tags: %s", one)
 	}
 }
+
+func TestProfileRejectsSecrets(t *testing.T) {
+	profile := DefaultProfiles(time.Now().UTC())[0]
+	profile.Constraints = append(profile.Constraints, "OPENROUTER_API_KEY=sk-secret123456789")
+	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "secret_blocked") {
+		t.Fatalf("want secret blocked, got %v", err)
+	}
+}

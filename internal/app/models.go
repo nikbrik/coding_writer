@@ -26,16 +26,17 @@ const (
 )
 
 type MemoryRecord struct {
-	ID         string      `json:"id"`
-	Layer      MemoryLayer `json:"layer"`
-	Kind       string      `json:"kind"`
-	Content    string      `json:"content"`
-	Source     string      `json:"source"`
-	Tags       []string    `json:"tags,omitempty"`
-	TaskID     string      `json:"task_id,omitempty"`
-	SessionID  string      `json:"session_id,omitempty"`
-	ProposalID string      `json:"proposal_id,omitempty"`
-	CreatedAt  time.Time   `json:"created_at"`
+	ID               string      `json:"id"`
+	Layer            MemoryLayer `json:"layer"`
+	Kind             string      `json:"kind"`
+	Content          string      `json:"content"`
+	Source           string      `json:"source"`
+	Tags             []string    `json:"tags,omitempty"`
+	TaskID           string      `json:"task_id,omitempty"`
+	SessionID        string      `json:"session_id,omitempty"`
+	ProposalID       string      `json:"proposal_id,omitempty"`
+	ProposalRecordID string      `json:"proposal_record_id,omitempty"`
+	CreatedAt        time.Time   `json:"created_at"`
 }
 
 type ProposedMemoryLayer string
@@ -69,14 +70,18 @@ type MemoryProposal struct {
 }
 
 type ProposedMemoryRecord struct {
-	ID          string               `json:"id"`
-	Layer       ProposedMemoryLayer  `json:"layer"`
-	Kind        string               `json:"kind"`
-	Content     string               `json:"content"`
-	Reason      string               `json:"reason"`
-	Confidence  float64              `json:"confidence"`
-	Status      ProposalRecordStatus `json:"status"`
-	BlockReason string               `json:"block_reason,omitempty"`
+	ID             string               `json:"id"`
+	Layer          ProposedMemoryLayer  `json:"layer"`
+	Kind           string               `json:"kind"`
+	Content        string               `json:"content"`
+	Reason         string               `json:"reason"`
+	Confidence     float64              `json:"confidence"`
+	Status         ProposalRecordStatus `json:"status"`
+	BlockReason    string               `json:"block_reason,omitempty"`
+	AppliedLayer   ProposedMemoryLayer  `json:"applied_layer,omitempty"`
+	AppliedContent string               `json:"applied_content,omitempty"`
+	SavedRecordID  string               `json:"saved_record_id,omitempty"`
+	AppliedAt      *time.Time           `json:"applied_at,omitempty"`
 }
 
 type UserProfile struct {

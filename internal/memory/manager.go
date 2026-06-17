@@ -15,14 +15,15 @@ type Manager struct {
 }
 
 type SaveInput struct {
-	Layer      app.MemoryLayer
-	Kind       string
-	Content    string
-	Source     string
-	SessionID  string
-	TaskID     string
-	ProposalID string
-	Tags       []string
+	Layer            app.MemoryLayer
+	Kind             string
+	Content          string
+	Source           string
+	SessionID        string
+	TaskID           string
+	ProposalID       string
+	ProposalRecordID string
+	Tags             []string
 }
 
 func NewManager(storageDir string) *Manager { return &Manager{StorageDir: storageDir} }
@@ -44,16 +45,17 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 		input.Source = "user"
 	}
 	record := app.MemoryRecord{
-		ID:         app.NewID("mem"),
-		Layer:      input.Layer,
-		Kind:       input.Kind,
-		Content:    strings.TrimSpace(input.Content),
-		Source:     input.Source,
-		Tags:       input.Tags,
-		TaskID:     input.TaskID,
-		SessionID:  input.SessionID,
-		ProposalID: input.ProposalID,
-		CreatedAt:  time.Now().UTC(),
+		ID:               app.NewID("mem"),
+		Layer:            input.Layer,
+		Kind:             input.Kind,
+		Content:          strings.TrimSpace(input.Content),
+		Source:           input.Source,
+		Tags:             input.Tags,
+		TaskID:           input.TaskID,
+		SessionID:        input.SessionID,
+		ProposalID:       input.ProposalID,
+		ProposalRecordID: input.ProposalRecordID,
+		CreatedAt:        time.Now().UTC(),
 	}
 	var path string
 	var err error
@@ -141,20 +143,23 @@ func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID string)
 	var bundle app.MemoryBundle
 	if sessionID != "" {
 		short, err := m.List(ctx, app.LayerShort, sessionID, "")
-		if err == nil {
-			bundle.Short = latest(short, 12)
+		if err != nil {
+			return bundle, err
 		}
+		bundle.Short = latest(short, 12)
 	}
 	if taskID != "" {
 		work, err := m.List(ctx, app.LayerWork, "", taskID)
-		if err == nil {
-			bundle.Work = latest(work, 20)
+		if err != nil {
+			return bundle, err
 		}
+		bundle.Work = latest(work, 20)
 	}
 	long, err := m.List(ctx, app.LayerLong, "", "")
-	if err == nil {
-		bundle.Long = latest(long, 20)
+	if err != nil {
+		return bundle, err
 	}
+	bundle.Long = latest(long, 20)
 	return bundle, nil
 }
 
@@ -185,4 +190,38 @@ func (m *Manager) LatestExchange(ctx context.Context, sessionID string) (app.Mem
 		return user, assistant, app.NewError(app.CategoryValidation, "missing_latest_exchange", "latest user/assistant exchange not found", nil)
 	}
 	return user, assistant, nil
+}
+
+func (m *Manager) FindByProposalRecord(ctx context.Context, proposalID, proposalRecordID, sessionID, taskID string) (app.MemoryRecord, bool, error) {
+	if proposalID == "" || proposalRecordID == "" {
+		return app.MemoryRecord{}, false, nil
+	}
+	candidates := [][]app.MemoryRecord{}
+	if sessionID != "" {
+		if records, err := m.List(ctx, app.LayerShort, sessionID, ""); err == nil {
+			candidates = append(candidates, records)
+		} else {
+			return app.MemoryRecord{}, false, err
+		}
+	}
+	if taskID != "" {
+		if records, err := m.List(ctx, app.LayerWork, "", taskID); err == nil {
+			candidates = append(candidates, records)
+		} else {
+			return app.MemoryRecord{}, false, err
+		}
+	}
+	if records, err := m.List(ctx, app.LayerLong, "", ""); err == nil {
+		candidates = append(candidates, records)
+	} else {
+		return app.MemoryRecord{}, false, err
+	}
+	for _, records := range candidates {
+		for _, record := range records {
+			if record.ProposalID == proposalID && record.ProposalRecordID == proposalRecordID {
+				return record, true, nil
+			}
+		}
+	}
+	return app.MemoryRecord{}, false, nil
 }
