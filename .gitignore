@@ -1,0 +1,30 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
+
+# Local caches / build output
+.cache/
+.idea/
+.vscode/
+tmp/
+temp/
+build/
+dist/
+coverage/
+
+# Consensus review outputs
+artifacts/
+Artifacts/
+artifacts/consensus/
+Artifacts/consensus/
+
+# Logs
+*.log

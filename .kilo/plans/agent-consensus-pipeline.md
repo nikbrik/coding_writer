@@ -9,7 +9,7 @@
 - Kilo agents: `.kilo/agent/*.md`.
 - SkillOrchestrator: `.kilo/skill/consensus-orchestrator/SKILL.md`.
 - Удобная slash-команда: `.kilo/command/consensus.md`.
-- Артефакты запусков: `Artifacts/consensus/<run-id>/`.
+- Артефакты запусков: `artifacts/consensus/<run-id>/`.
 - Skill name: `consensus-orchestrator`, описание включает триггеры `consensus`, `консенсус`, `multi-agent review`, `проверить всеми агентами`, `review plan/docs/code`.
 
 ## Новые агенты
@@ -28,7 +28,7 @@
 - `mode: subagent`.
 - `steps`: 12-20 по роли; judge 25.
 - `permission.read/glob/grep`: allow.
-- `permission.edit`: allow только `Artifacts/consensus/**`, остальное ask/deny.
+- `permission.edit`: allow только `artifacts/consensus/**`, остальное ask/deny.
 - `permission.bash`: ask или deny, чтобы ревьюеры не запускали рискованные команды без явного смысла.
 
 Общий контракт ревьюеров:
@@ -104,7 +104,7 @@ approve | approve_with_required_changes | reject
 `consensus-orchestrator` должен описывать workflow:
 
 1. Intake: определить target, тип (`plan`, `docs`, `code`, `architecture`, `review`, `other`), критерии успеха, ограничения. Если target не указан — задать один короткий вопрос.
-2. Run dir: создать `Artifacts/consensus/<YYYYMMDD-HHMMSS>-<slug>/`.
+2. Run dir: создать `artifacts/consensus/<YYYYMMDD-HHMMSS>-<slug>/`.
 3. Brief: собрать normalized brief: user request, target files/paths, relevant constraints, artifact paths, expected output.
 4. Round 1: параллельно вызвать 5 expert agents и передать им brief + путь для файла:
    - `01-security.md`
@@ -161,7 +161,7 @@ Judge проверяет:
 
 ## Git/Ignore Policy
 
-По умолчанию не добавлять `Artifacts/` в `.gitignore` в первой реализации: пользователь может захотеть коммитить важные consensus reports. Если после первого запуска артефакты окажутся шумом, отдельной правкой добавить `Artifacts/consensus/` в root `.gitignore` или локальный exclude.
+По умолчанию не добавлять `artifacts/` в `.gitignore` в первой реализации: пользователь может захотеть коммитить важные consensus reports. Если после первого запуска артефакты окажутся шумом, отдельной правкой добавить `artifacts/consensus/` в root `.gitignore` или локальный exclude.
 
 ## Проверка после реализации
 
@@ -169,7 +169,7 @@ Judge проверяет:
 - Проверить, что `.kilo/skill/consensus-orchestrator/SKILL.md` имеет только `name` и `description` во frontmatter.
 - Запустить validator skill folder, если совместим: `.agents/skills/skill-creator/scripts/quick_validate.py .kilo/skill/consensus-orchestrator`.
 - Прочитать созданные файлы и проверить, что пути artifacts совпадают между command, skill, agents.
-- Smoke prompt без правки исходников: `/consensus .kilo/plans/agent-consensus-pipeline.md` после выхода из Plan Mode; ожидание — появляется `Artifacts/consensus/.../12-final-verdict.md`.
+- Smoke prompt без правки исходников: `/consensus .kilo/plans/agent-consensus-pipeline.md` после выхода из Plan Mode; ожидание — появляется `artifacts/consensus/.../12-final-verdict.md`.
 
 ## Риски
 

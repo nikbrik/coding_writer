@@ -10,7 +10,7 @@ permission:
   grep: allow
   bash: ask
   edit:
-    "Artifacts/consensus/**": allow
+    "artifacts/consensus/**": allow
     "*": ask
 ---
 You are the consensus product and systems designer: senior product thinker, systems mapper, clarity enforcer.

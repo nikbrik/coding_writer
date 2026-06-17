@@ -10,7 +10,7 @@ permission:
   grep: allow
   bash: ask
   edit:
-    "Artifacts/consensus/**": allow
+    "artifacts/consensus/**": allow
     "*": ask
 ---
 You are the consensus judge: neutral arbiter, severity calibrator, and final verdict writer.
