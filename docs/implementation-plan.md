@@ -19,6 +19,7 @@
 - имеет user profile со стилем, форматом и ограничениями;
 - автоматически подключает active profile к каждому prompt;
 - ведёт текущую задачу как конечный автомат с `stage`, `current_step`, `expected_action`, `status`;
+- сообщает LLM текущий stage, роль этапа, allowed actions and forbidden actions перед task-scoped provider call;
 - поддерживает pause/resume задачи на любом рабочем этапе без повторного объяснения контекста;
 - имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13.
 
@@ -128,13 +129,15 @@ ignore: proposal/audit only, never physical memory layer
 
 1. Base system rules.
 2. Security and memory policy.
-3. Active profile.
-4. Invariants.
-5. Task state: `stage`, `current_step`, `expected_action`, `status`, allowed transitions.
-6. Working memory.
-7. Selected long-term memory.
-8. Short-term history.
-9. Current user query.
+3. Trusted process-control policy: app owns state, transitions, memory writes and validation.
+4. Trusted stage-specific policy: role, allowed actions, forbidden actions and output schema.
+5. Active profile.
+6. Invariants.
+7. Task state: `stage`, `current_step`, `expected_action`, `status`, allowed transitions.
+8. Working memory.
+9. Selected long-term memory.
+10. Short-term history.
+11. Current user query.
 
 Правила:
 
@@ -142,6 +145,9 @@ ignore: proposal/audit only, never physical memory layer
 - они должны рендериться как quoted/tagged data, а не как инструкции;
 - canonical prompt block содержит `id`, `type`, `source`, `trust`, escaped content и стабильный ordering;
 - system/application/security policy всегда выше сохранённого контекста;
+- stage policy выше profile/memory/task/transcript data, но не удаляет profile block;
+- LLM должна знать текущий этап: planner в `planning`, implementer в `execution`, reviewer/QA в `validation`, terminal summarizer в `done`;
+- LLM может предложить process signal, но task transition применяет только приложение;
 - PromptBuilder не пишет файлы и не вызывает provider.
 
 ## 4. Текущая стартовая точка репозитория
@@ -833,11 +839,16 @@ Done criteria:
 Действия:
 
 - реализовать `PromptBuilder.Build(input) []ChatMessage`;
-- вход: base rules, active profile, task state, memory bundle, short-term messages, current query;
+- вход: base rules, trusted process policy, trusted stage policy, active profile, task state, memory bundle, short-term messages, current query;
 - рендерить каждый untrusted block в canonical tagged format: `id`, `type`, `source`, `trust`, escaped content;
+- рендерить stage-specific role до untrusted context blocks;
 - включать profile block всегда;
 - включать task state всегда, если current task exists;
 - при `status=paused` добавлять warning: task paused, do not continue execution until `/task resume`;
+- для `planning` добавлять planner role and no-implementation rule;
+- для `execution` добавлять implementer role and approved-plan-only rule;
+- для `validation` добавлять strict reviewer/QA role and no-fixes/no-new-features rule;
+- для `done` добавлять terminal summarizer role and no-mutation rule;
 - working memory ставить раньше long/short;
 - short-term history ограничивать окном;
 - long-term memory выбирать по простой MVP-логике: latest N per kind/tags, не весь архив;
@@ -851,6 +862,10 @@ Tests:
 - `TestWorkingMemoryBeforeShortTermHistory`;
 - `TestShortTermHistoryIsWindowed`;
 - `TestPausedTaskWarningInPrompt`;
+- `TestPlanningPromptHasPlannerRole`;
+- `TestExecutionPromptHasImplementerRole`;
+- `TestValidationPromptHasReviewerRole`;
+- `TestDonePromptHasTerminalRole`;
 - `TestPromptBuilderMarksUntrustedBlocks`;
 - `TestPromptBuilderGoldenInjectionFixtures`;
 - `TestSameQueryDifferentProfilesChangePrompt`;
@@ -860,7 +875,8 @@ Done criteria:
 
 - rendered prompt можно inspect в tests;
 - active profile есть в каждом prompt;
-- task state и memory влияют через prompt, а не скрытую global state.
+- task state и memory влияют через prompt, а не скрытую global state;
+- LLM получает stage awareness and role before user query.
 
 ### Фаза 7. Basic chat loop
 
@@ -869,8 +885,10 @@ Done criteria:
 Действия:
 
 - реализовать `assistant chat` REPL;
-- обычный текст отправлять в PromptBuilder -> provider;
+- обычный текст отправлять через ProcessController gate -> PromptBuilder -> provider;
 - перед provider call запускать pre-provider scanner/redaction;
+- до provider call блокировать paused/done/forbidden stage actions;
+- после provider response валидировать candidate output before accepted short-memory persistence;
 - slash commands направлять в command router;
 - `/exit` завершает loop;
 - после provider response печатать assistant answer;
@@ -886,7 +904,9 @@ Tests:
 - `TestSlashCommandNotSentToProvider`;
 - `TestChatAppendsUserAssistantToShortTermHistory`;
 - `TestChatUsesActiveProfileAndModel`;
-- `TestPausedTaskDoesNotContinueExecutionByDefault`.
+- `TestPausedTaskDoesNotContinueExecutionByDefault`;
+- `TestPausedTaskDoesNotCallProviderForTaskContinuation`;
+- `TestWrongStageOutputNotSavedAsAcceptedShortMemory`.
 
 Done criteria:
 
@@ -1310,6 +1330,24 @@ Expected:
 - custom base URL not default;
 - provider timeout does not crash CLI.
 
+### 13.5. Deterministic process-control tests
+
+- stage-specific golden prompts for `planning`, `execution`, `validation`, `done`;
+- validation stage prompt contains strict reviewer/QA role;
+- `ProcessController` blocks normal task continuation while paused before provider call;
+- `ProcessController` rejects `ActionKind` not allowed by current `StagePolicy`;
+- wrong-stage LLM output is rejected before accepted short-memory persistence;
+- validation-stage output that implements fixes is rejected or routes back to `execution`;
+- LLM transition signal does not mutate task state without `TransitionGate`;
+- memory classifier runs only after accepted assistant output, preserving Day 11 flow.
+
+### 13.6. Day 11/12/13 non-regression checks
+
+- ProcessController must not replace `MemoryClassifier -> proposal -> user confirmation -> apply`.
+- Stage-specific prompts must not remove active profile from any prompt.
+- Stage policy must not add `status=done`; completion remains `stage=done` and `expected_action=none`.
+- Validation/review role must not block Day 13 pause/resume and restored context behavior.
+
 ## 14. Implementation sequence with checkpoints
 
 1. Bootstrap Go module and CLI help.
@@ -1319,8 +1357,8 @@ Expected:
 5. Implement profile manager and commands.
 6. Implement task state manager and P0 commands.
 7. Implement memory manager, `WorkMemoryStore`, and layer inspection.
-8. Implement prompt builder, canonical block schema, and rendered prompt tests.
-9. Implement basic chat loop with short-term history after profile/task/memory/prompt gates.
+8. Implement prompt builder, canonical block schema, stage-specific role prompts, and rendered prompt tests.
+9. Implement basic chat loop with ProcessController hard gates and short-term history after profile/task/memory/prompt gates.
 10. Implement memory classifier prompt and strict JSON parser through provider interface.
 11. Implement proposal audit store with minimized/redacted default retention.
 12. Implement proposal apply with accept/edit/reject/blocked statuses and idempotency.
@@ -1329,10 +1367,11 @@ Expected:
 15. Add Day 11 acceptance test.
 16. Add Day 12 acceptance test.
 17. Add Day 13 acceptance test.
-18. Add error handling polish.
-19. Run `go test ./...`.
-20. Run fake-provider CLI smoke.
-21. Run optional live OpenRouter smoke if `OPENROUTER_API_KEY` exists.
+18. Add ProcessController, StagePolicyRegistry, ResponseValidator, TransitionGate and deterministic process-control tests.
+19. Add error handling polish.
+20. Run `go test ./...`.
+21. Run fake-provider CLI smoke.
+22. Run optional live OpenRouter smoke if `OPENROUTER_API_KEY` exists.
 
 ## 15. Non-goals for MVP
 

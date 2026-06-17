@@ -33,6 +33,8 @@
 
 Результат LLM может оставаться probabilistic по формулировкам, но процесс должен быть deterministic: нельзя перейти в запрещённый stage, нельзя принять output, нарушающий текущий stage contract, нельзя продолжить paused task, нельзя сохранить invalid assistant response как нормальный успешный шаг.
 
+Для code assistant это не optional polish. Модель должна знать, где она находится в рабочем процессе, какую роль исполняет, какие действия разрешены и какие forbidden. Без этого task state существует только как storage metadata, а не как управляемый coding workflow.
+
 ## Non-Goals
 
 - Не гарантировать байт-в-байт одинаковый natural language output от разных моделей.
@@ -40,6 +42,33 @@
 - Не отдавать LLM право менять `TaskState` напрямую.
 - Не заменять deterministic validators вторым LLM-judge без code gate.
 - Не смешивать trusted system policy и untrusted task/memory/profile data.
+- Не ослаблять Day 11, Day 12 or Day 13 acceptance ради process controller.
+
+## Compatibility With Day 11, Day 12, Day 13
+
+This epic strengthens the assistant pipeline without changing the mandatory course acceptance contract.
+
+Day 11 non-regression:
+
+- Memory layers stay physically separate: `short`, `work`, `long`.
+- LLM memory classification remains a separate provider call.
+- Memory proposal must still be shown to the user before apply.
+- `ProcessController` must not silently save memory or bypass proposal confirmation.
+- Rejected/wrong-stage assistant output must not trigger normal memory classifier flow.
+
+Day 12 non-regression:
+
+- Active profile remains present in every prompt.
+- Stage policy does not replace profile; it outranks profile only on process/safety conflicts.
+- Same query under different profiles must still produce different rendered prompt behavior.
+
+Day 13 non-regression:
+
+- Canonical stages remain `planning`, `execution`, `validation`, `done`.
+- `paused` remains `TaskStatus`, not a stage.
+- Completion remains `stage=done` and `expected_action=none`; do not add `status=done`.
+- `TaskManager` and `TransitionGate` own transitions; LLM text never mutates state directly.
+- Pause/resume and context restoration remain mandatory.
 
 ## Determinism Owner
 
@@ -400,6 +429,37 @@ Proposed P1 values:
 
 The model may propose `next_signal`, but only `TransitionGate` may apply transitions.
 
+## Tool and Side-Effect Permissions
+
+Permissions are part of deterministic process control. The prompt must tell the LLM what it may do, but code must enforce the permission boundary.
+
+P0 permission model:
+
+- No file-editing tools.
+- No shell/tool execution by LLM.
+- No commits or git automation.
+- No `tool_result` in task state.
+- LLM may only answer, plan, classify memory, propose findings or propose transition signals.
+
+P1 permission model:
+
+- `read_file` can be allowed in planning, execution and validation.
+- `write_file` can be allowed only in execution and only after explicit approval/policy gate.
+- `run_tests` can be allowed in validation and execution verification, with captured tool evidence.
+- `git_status` can be allowed as read-only context.
+- `commit` stays explicit user command, not autonomous LLM action.
+
+Stage permission examples:
+
+| Stage | Allowed in P1 | Forbidden |
+|---|---|---|
+| `planning` | read context, ask questions, propose plan | write files, claim tests passed, mark done |
+| `execution` | edit approved files, report implementation blockers | rewrite criteria silently, mark done |
+| `validation` | run tests, review diff, produce findings | implement fixes, add features |
+| `done` | summarize, suggest new task | mutate current task |
+
+Tool results must be trusted application data. LLM may not invent them. If a test command was not run by the application, validation output must say evidence is missing.
+
 ## Transition Gate
 
 `TransitionGate` is the only component allowed to move stages as part of normal chat flow.
@@ -692,8 +752,12 @@ Acceptance criteria:
 - Stage-specific trusted system prompt is included for every task exchange.
 - Validation stage prompt gives LLM strict reviewer role.
 - Allowed actions are enforced before provider call.
+- P0 side-effect permissions forbid LLM-owned tools/file edits/commits.
 - Structured output is parsed and validated after provider call.
 - Invalid output is retried or rejected before memory persistence.
+- Day 11 classifier/proposal/user-confirmation flow still works after accepted output.
+- Day 12 active profile block still appears in every prompt.
+- Day 13 pause/resume and allowed transitions still pass unchanged.
 - Task transitions are applied only by `TransitionGate`.
 - Audit log records accepted, rejected, retried and transitioned steps.
 - Tests prove no provider call on hard gate failure.

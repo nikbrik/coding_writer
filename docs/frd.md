@@ -25,6 +25,7 @@ MVP должен реализовать:
 - memory proposal с подтверждением пользователя;
 - физически раздельное хранение слоёв памяти;
 - task state machine с `stage`, `current_step`, `expected_action`;
+- stage-aware prompt contract: LLM получает текущий этап, роль этапа, allowed actions и forbidden actions;
 - pause/resume задачи без повторного объяснения контекста.
 
 MVP не должен реализовывать:
@@ -59,6 +60,16 @@ MVP не должен реализовывать:
 
 `Invariant` — ограничение, которое нельзя нарушать между запросами.
 
+`ProcessController` — application-level controller, который до provider call выбирает current stage, разрешённое действие, stage policy, prompt contract и после provider call принимает или отклоняет output.
+
+`StagePolicy` — trusted policy для конкретного `stage`: роль LLM, allowed actions, forbidden actions, output schema, validation rules.
+
+`ActionKind` — выбранное приложением действие для текущего exchange, например `plan_task`, `execute_plan_step`, `review_output`, `summarize_done`.
+
+`StagePromptFactory` — компонент, который добавляет trusted stage-specific system prompt перед untrusted profile/task/memory blocks.
+
+`TransitionGate` — единственный компонент, который применяет stage transition после deterministic validation; LLM может только предложить signal.
+
 ## 4. Пользовательские роли
 
 `User` — человек, который запускает CLI, выбирает профиль и модель, задаёт вопросы, подтверждает memory proposal и управляет задачами.
@@ -92,6 +103,14 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - physical storage layers: `short`, `work`, `long`;
 - `ignore` exists only in memory proposal and audit trail;
 - all examples and tests must use the same layer names.
+
+#### Process-control contract
+
+- LLM must know the current `stage`, `current_step`, `expected_action`, task `status`, selected `ActionKind`, allowed actions and forbidden actions for task-scoped prompts.
+- Stage-specific trusted prompt is required for process-controlled task work: planner in `planning`, implementer in `execution`, strict reviewer/QA in `validation`, terminal summarizer in `done`.
+- LLM does not update `TaskState`, write memory, run tools, persist output or apply transitions directly.
+- `ProcessController` and `TransitionGate` own hard gates, output acceptance and state transitions.
+- This contract extends Day 13 behavior but must not bypass Day 11 classifier/proposal/user-confirmation flow or Day 12 profile-in-every-prompt flow.
 
 ### FR-001. Первый запуск
 
@@ -571,13 +590,15 @@ Acceptance criteria:
 
 1. Base system rules.
 2. Security and memory policy.
-3. Active profile.
-4. Invariants.
-5. Task state: stage, current_step, expected_action, status, allowed transitions.
-6. Working memory.
-7. Selected long-term memory.
-8. Short-term history.
-9. Current user query.
+3. Trusted process-control policy.
+4. Trusted stage-specific policy: role, allowed actions, forbidden actions, output schema.
+5. Active profile.
+6. Invariants.
+7. Task state: stage, current_step, expected_action, status, allowed transitions.
+8. Working memory.
+9. Selected long-term memory.
+10. Short-term history.
+11. Current user query.
 
 Acceptance criteria:
 
@@ -585,6 +606,9 @@ Acceptance criteria:
 - profile block присутствует в каждом prompt;
 - short-term history ограничивается размером окна;
 - untrusted blocks use canonical tagged schema with block id, type, source, trust label, and escaping;
+- task-scoped prompt includes a stage role before untrusted context;
+- validation stage prompt gives the LLM strict reviewer/QA role and forbids implementation fixes in that exchange;
+- stage policy does not replace active profile; profile block remains present in every prompt;
 - PromptBuilder не пишет файлы и не вызывает OpenRouter.
 
 Canonical untrusted block schema:
@@ -606,6 +630,29 @@ Required block types:
 - `classifier_output`.
 
 Golden prompt fixtures must include prompt-injection strings inside each untrusted block.
+
+### FR-023A. Stage-specific process control
+
+Требование: task-scoped chat должен проходить через deterministic process policy, чтобы code assistant знал текущий этап и не действовал как generic model.
+
+Поведение:
+
+- приложение загружает current `TaskState` до provider call;
+- приложение выбирает `ActionKind` и проверяет его против `StagePolicy`;
+- приложение добавляет trusted stage-specific system prompt;
+- LLM получает роль этапа: planner, implementer, reviewer/QA или terminal summarizer;
+- LLM возвращает answer или structured candidate output в рамках выбранного stage;
+- приложение валидирует output до accepted persistence and memory classifier;
+- application `TransitionGate` применяет stage transition только после успешной проверки.
+
+Acceptance criteria:
+
+- `planning` prompt forbids implementation;
+- `execution` prompt forbids acceptance criteria rewrite unless routed back to planning;
+- `validation` prompt uses strict reviewer/QA role and forbids fixes/new features;
+- `done` prompt forbids mutation;
+- wrong-stage output is rejected before normal short-memory persistence;
+- LLM transition proposal does not change task state without `TransitionGate`.
 
 ### FR-024. Chat behavior with paused task
 
@@ -790,6 +837,7 @@ Traceability rule:
 - task state хранит `current_step`;
 - task state хранит `expected_action`;
 - state machine валидирует transitions;
+- task-scoped prompt exposes current stage, role and expected action to the LLM;
 - `/task pause` работает на любом этапе;
 - `/task resume` восстанавливает контекст;
 - пользователь продолжает задачу без повторного объяснения.
@@ -1031,6 +1079,16 @@ VR-009: PromptBuilder не должен включать все long-term record
 
 VR-010: API key не должен попадать в storage.
 
+VR-011: task-scoped provider call without current stage policy must fail closed.
+
+VR-012: LLM output with a different `stage` than current `TaskState.stage` must be rejected before accepted persistence.
+
+VR-013: validation-stage output that implements fixes or adds new features must be rejected or routed back to execution.
+
+VR-014: LLM transition proposal must not mutate task state without `TransitionGate`.
+
+VR-015: rejected wrong-stage output must not trigger normal memory classification or accepted short-memory append.
+
 ## 10. Acceptance checklist
 
 - `assistant init` создаёт storage и профиль.
@@ -1051,6 +1109,10 @@ VR-010: API key не должен попадать в storage.
 - `/task move` валидирует transitions.
 - `/task pause` сохраняет paused state.
 - `/task resume` восстанавливает контекст.
+- Task-scoped prompt includes trusted stage role and allowed actions.
+- Validation stage prompt gives reviewer/QA role.
+- Wrong-stage LLM output is rejected before accepted persistence.
+- Stage transitions are applied only by application gate, not by LLM text.
 - Restart CLI не теряет profile, memory и task state.
 - Secrets не сохраняются.
 - Day 11, Day 12 и Day 13 criteria закрыты.

@@ -4,7 +4,7 @@
 
 Ассистент строится как маленький stateful CLI-agent.
 
-Ключевой принцип: LLM не должна сама решать, что помнить и какие правила важны. Приложение хранит состояние явно, разделяет memory layers, собирает prompt через prompt builder и постепенно добавляет deterministic checks.
+Ключевой принцип: LLM не должна сама решать, что помнить, какие правила важны, какой сейчас этап процесса и можно ли переходить дальше. Приложение хранит состояние явно, разделяет memory layers, собирает stage-aware prompt через prompt builder и постепенно добавляет deterministic checks.
 
 ## 1.1. Canonical contract
 
@@ -29,6 +29,14 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, a
 - only physical storage layers: `short`, `work`, `long`;
 - `ignore` exists only in proposal/audit trail.
 
+### Process control
+
+- LLM must receive current `stage`, `current_step`, `expected_action`, task `status`, selected action and allowed actions before every task-scoped provider call.
+- Base system prompt is stable; trusted stage-specific system prompt changes by `stage`.
+- `planning` uses planner role, `execution` uses implementer role, `validation` uses strict reviewer/QA role, `done` uses terminal summarizer role.
+- LLM may propose signals, findings or transition readiness, but application code owns state mutation.
+- Deterministic process control must not bypass Day 11 memory proposal confirmation or Day 12 profile attachment.
+
 Главные блоки:
 
 - CLI interface;
@@ -37,7 +45,11 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, a
 - memory classifier;
 - profile manager;
 - task state manager;
+- process controller;
+- stage policy registry;
 - prompt builder;
+- response validator;
+- transition gate;
 - response loop;
 - invariant checker.
 
@@ -111,6 +123,13 @@ internal/profiles/
 internal/tasks/
   manager.go
   state_machine.go
+
+internal/process/
+  controller.go
+  action_router.go
+  stage_policy.go
+  transition_gate.go
+  response_validator.go
 
 internal/prompting/
   builder.go
@@ -541,13 +560,39 @@ Resume(ctx context.Context) (TaskState, error)
 Current(ctx context.Context) (TaskState, error)
 ```
 
-### 6.8. PromptBuilder
+### 6.8. ProcessController and StagePolicyRegistry
+
+`ProcessController` отвечает за deterministic process loop вокруг LLM.
+
+Responsibilities:
+
+- загрузить active profile, current task, memory bundle and user input;
+- определить `ActionKind` до provider call;
+- проверить `ActionKind` против current `StagePolicy`;
+- заблокировать task continuation при `status=paused` до `/task resume`;
+- передать `StagePromptFactory` trusted stage-specific policy;
+- вызвать provider только после hard gates;
+- перед accepted persistence запустить parser and response validators;
+- передать transition proposal в `TransitionGate`, а не применять его из LLM text.
+
+`StagePolicyRegistry` хранит trusted policies:
+
+| Stage | LLM role | Allowed work | Forbidden work |
+|---|---|---|---|
+| `planning` | planner / requirements analyst | clarify, plan, propose criteria | implementation, fake validation |
+| `execution` | implementer | execute approved plan | rewrite criteria without planning route |
+| `validation` | strict reviewer / QA validator | review, find issues, verify evidence | fixes, new features, silent approval |
+| `done` | terminal summarizer | summarize accepted result | mutate task, reopen work |
+
+### 6.9. PromptBuilder
 
 Отвечает за сборку prompt.
 
 Вход:
 
 - base system prompt;
+- trusted process-control policy;
+- trusted stage-specific policy;
 - active profile;
 - task state;
 - memory bundle;
@@ -560,6 +605,8 @@ Current(ctx context.Context) (TaskState, error)
 
 PromptBuilder должен быть чистым компонентом: без HTTP, без записи файлов, без побочных эффектов.
 
+PromptBuilder не решает, какой stage активен. Он получает stage policy от `ProcessController` and renders it before untrusted blocks.
+
 Canonical untrusted block schema:
 
 ```text
@@ -570,7 +617,7 @@ escaped structured data
 
 Required block types: `profile`, `task_state`, `working_memory`, `long_memory`, `short_history`, `classifier_input`, `classifier_output`. Golden prompt tests must include injection strings inside every block type.
 
-### 6.9. InvariantChecker
+### 6.10. ResponseValidator, TransitionGate and InvariantChecker
 
 Отвечает за:
 
@@ -578,7 +625,11 @@ Required block types: `profile`, `task_state`, `working_memory`, `long_memory`, 
 - проверку LLM memory proposal перед сохранением;
 - проверку конфликтов профиля и user request;
 - предупреждения о нарушении stage;
-- будущую validation loop после ответа LLM.
+- validation loop после ответа LLM.
+
+`ResponseValidator` blocks candidate outputs that violate current stage policy: wrong stage, wrong schema, forbidden action, fake tool/test claims or validation-stage implementation.
+
+`TransitionGate` is the only component that applies stage changes after validator success. LLM can only emit a signal such as `ready_for_validation` or `ready_for_done`.
 
 MVP-инварианты:
 
@@ -662,25 +713,27 @@ MVP-инварианты:
 3. App загружает runtime context
 4. ProfileManager читает active profile
 5. TaskStateManager читает current task, если она есть
-6. MemoryManager выбирает нужные memory records
-7. TaskStateManager проверяет status: active или paused
-8. InvariantChecker проверяет контекст до prompt
-9. PromptBuilder собирает []ChatMessage со stage/current_step/expected_action
-10. PreProviderScanner блокирует или редактирует secret-like данные
-11. OpenRouterProvider отправляет request
-12. Response возвращается в CLI
-13. CLI печатает ответ
-14. MemoryManager дописывает user/assistant сообщения в short-term history
-15. MemoryClassifier получает user message + assistant response
-16. PreProviderScanner проверяет classifier payload
-17. MemoryClassifier вызывает OpenRouter и возвращает MemoryProposal
-18. InvariantChecker проверяет proposal на секреты и layer rules
-19. CLI показывает proposal пользователю
-20. Пользователь подтверждает, редактирует или отклоняет
-21. MemoryManager сохраняет accepted records в отдельные хранилища
+6. ProcessController выбирает ActionKind and StagePolicy
+7. ProcessController проверяет hard gates: paused, done, forbidden action
+8. MemoryManager выбирает нужные memory records
+9. InvariantChecker проверяет контекст до prompt
+10. PromptBuilder собирает []ChatMessage со stage/current_step/expected_action and stage-specific role
+11. PreProviderScanner блокирует или редактирует secret-like данные
+12. OpenRouterProvider отправляет request
+13. Response возвращается в ProcessController
+14. ResponseValidator принимает или отклоняет candidate output
+15. CLI печатает только accepted answer or deterministic validation error
+16. MemoryManager дописывает accepted user/assistant сообщения в short-term history
+17. MemoryClassifier получает accepted user message + assistant response
+18. PreProviderScanner проверяет classifier payload
+19. MemoryClassifier вызывает OpenRouter и возвращает MemoryProposal
+20. InvariantChecker проверяет proposal на секреты и layer rules
+21. CLI показывает proposal пользователю
+22. Пользователь подтверждает, редактирует или отклоняет
+23. MemoryManager сохраняет accepted records в отдельные хранилища
 ```
 
-Ключевое ограничение: LLM не пишет память напрямую. Она явно выбирает слой памяти через MemoryClassifier, но запись делает только приложение после показа proposal и подтверждения пользователя.
+Ключевое ограничение: LLM не пишет память напрямую и не меняет stage напрямую. Она явно выбирает слой памяти через MemoryClassifier or proposes process signals, but запись и transitions делает только приложение после deterministic gates.
 
 ### 7.3. Slash-command lifecycle
 
@@ -967,6 +1020,8 @@ User request
 ```
 
 Главное отличие от MVP: LLM будет не просто отвечать, а работать внутри контролируемой стадии. Например, в `planning` она не должна менять файлы, а в `validation` не должна добавлять новые features.
+
+Для code assistant это обязательная эволюция: модель должна знать, где она находится в процессе, какую роль исполняет и какие действия ей запрещены. Иначе task FSM остаётся только stored metadata, а не управляемым рабочим процессом.
 
 ### 7.10. Future memory evolution
 
@@ -1325,9 +1380,24 @@ Current step: {current_step}
 Expected action: {expected_action}
 Task status: {status}
 Allowed next stages: {allowed_next_stages}
+Selected action: {action_kind}
 Do work appropriate for this stage and expected action only.
 If task status is paused, do not continue execution until /task resume.
+Do not change stage yourself; only propose a signal for the application gate.
 ```
+
+Stage-specific trusted prompts:
+
+| Stage | Trusted role prompt |
+|---|---|
+| `planning` | `Role: planner and requirements analyst. Clarify objective, constraints, acceptance criteria and plan. Do not implement.` |
+| `execution` | `Role: implementer. Execute the approved plan only. Do not rewrite acceptance criteria unless returning planning_required.` |
+| `validation` | `Role: strict reviewer and QA validator. Findings first. Verify criteria and evidence. Do not implement fixes or add features.` |
+| `done` | `Role: terminal summarizer. Summarize accepted result. Do not mutate the task.` |
+
+Validation stage is intentionally reviewer-shaped. In review/validation, the LLM must receive a reviewer role and should not behave like the execution implementer. If fixes are needed, the output is a finding and `TransitionGate` routes back to `execution`.
+
+Trusted prompt policy must be rendered before untrusted profile/task/memory blocks. Profile still appears in every prompt for Day 12, but profile cannot override stage policy.
 
 ## 12. Storage format
 
@@ -1474,11 +1544,18 @@ Day 13 tests:
 Additional P0 tests:
 
 - `TestPromptBuilderMarksUntrustedBlocks`;
+- `TestPromptBuilderAddsPlanningRole`;
+- `TestPromptBuilderAddsExecutionRole`;
+- `TestPromptBuilderAddsValidationReviewerRole`;
+- `TestPromptBuilderAddsDoneTerminalRole`;
 - `TestStorageRejectsUnsafePaths`;
 - `TestAtomicWriteAndRecovery`;
 - `TestProviderTimeoutAndTypedErrors`;
 - `TestDuplicateProposalApplyIsIdempotent`;
 - `TestGatekeeperBlocksPausedTask`;
+- `TestProcessControllerRejectsWrongStageOutput`;
+- `TestValidationStageCannotImplementFixes`;
+- `TestTransitionGateOwnsStageMutation`;
 - `TestPromptInjectionRedaction`.
 
 Day 11/12/13 are mandatory acceptance criteria and may not be bypassed.
@@ -1518,6 +1595,7 @@ Security tests:
 15. Model selection UI and `/model` command.
 16. Non-interactive/JSON smoke commands and exit-code contract.
 17. Tests for Day 11, Day 12, Day 13 acceptance criteria.
+18. Deterministic process-control loop: ProcessController, StagePolicyRegistry, stage-specific prompts, ResponseValidator, TransitionGate and audit events.
 
 ## 17. Future extensions
 
@@ -1528,6 +1606,7 @@ Security tests:
 - automatic memory suggestion with user confirmation;
 - vector search over long-term memory;
 - deterministic invariant checker for project constraints;
+- deterministic process controller with stage-specific code-assistant roles;
 - summarization of long sessions;
 - replayable task history;
 - multi-provider support;
