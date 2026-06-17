@@ -12,11 +12,19 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		return ActionAnswerQuestion
 	}
 	normalized := strings.ToLower(strings.TrimSpace(input))
+	if expectedAction == app.ExpectedUserConfirmation && containsAny(normalized, []string{"yes", "да", "approve", "confirm", "подтверждаю"}) {
+		if stage == app.StagePlanning || stage == app.StageExecution || stage == app.StageValidation {
+			return ActionProposeTransition
+		}
+	}
 
 	switch stage {
 	case app.StagePlanning:
 		if isPlanningIntent(normalized) {
 			return ActionPlanTask
+		}
+		if looksLikeClarification(normalized) {
+			return ActionAnswerQuestion
 		}
 		if containsAny(normalized, []string{"готов", "ready", "execute", "реализуй", "implement", "proceed"}) {
 			return ActionProposeTransition
@@ -45,7 +53,13 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if containsAny(normalized, []string{"summary", "summarize", "итог", "резюме", "final summary", "what was done"}) {
 			return ActionSummarizeDone
 		}
-		return ActionAnswerQuestion
+		if containsAny(normalized, []string{"реализуй", "implement", "execute", "edit", "change", "fix", "доделай", "add", "update", "write", "create", "delete", "remove", "make", "build", "создай", "добавь", "измени", "обнови", "удали", "исправь"}) {
+			return ActionExecutePlanStep
+		}
+		if looksLikeClarification(normalized) {
+			return ActionAnswerQuestion
+		}
+		return ActionExecutePlanStep
 	default:
 		return ActionAnswerQuestion
 	}

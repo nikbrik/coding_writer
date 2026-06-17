@@ -37,14 +37,14 @@ func (p *FakeProvider) ListModels(ctx context.Context) ([]string, error) {
 }
 
 func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
-	if p.Err != nil {
-		return CompletionResponse{}, p.Err
-	}
 	sanitized := req
 	sanitized.Messages = sanitizeMessages(req.Messages)
 	p.mu.Lock()
 	p.Calls = append(p.Calls, sanitized)
 	p.mu.Unlock()
+	if p.Err != nil {
+		return CompletionResponse{}, p.Err
+	}
 	if req.Purpose == PurposeClassifier {
 		var content string
 		if len(p.ClassifierResponses) > 0 {

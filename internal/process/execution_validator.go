@@ -13,7 +13,12 @@ func validateExecution(out *ExecutionOutput) []string {
 	}
 	for _, v := range out.Verification {
 		lower := strings.ToLower(v)
-		if (strings.Contains(lower, "test") || strings.Contains(lower, "passed")) && !strings.Contains(lower, "not run") && !strings.Contains(lower, "tool evidence") {
+		claimsRun := strings.Contains(lower, "test") || strings.Contains(lower, "passed")
+		if claimsRun && isExplicitNotRun(v) && (strings.Contains(lower, "passed") || strings.Contains(lower, "pass")) {
+			errs = append(errs, "verification must not mix passed and not-run claims")
+			continue
+		}
+		if claimsRun && !isExplicitNotRun(v) && !hasTrustedToolEvidenceText(v) {
 			errs = append(errs, "verification claim requires tool evidence")
 		}
 	}
@@ -24,8 +29,11 @@ func validateExecution(out *ExecutionOutput) []string {
 		errs = append(errs, "unknown execution next_signal")
 	}
 	if out.NextSignal == "ready_for_validation" {
-		if len(out.Blockers) > 0 {
+		if hasNonEmpty(out.Blockers) {
 			errs = append(errs, "ready_for_validation is blocked by active blockers")
+		}
+		if !hasNonEmpty(out.ChangedArtifacts) || !hasNonEmpty(out.Verification) {
+			errs = append(errs, "ready_for_validation requires changed artifacts and verification evidence")
 		}
 	}
 	return errs

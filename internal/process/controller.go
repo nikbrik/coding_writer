@@ -44,7 +44,12 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if c == nil {
 		return nil, app.NewError(app.CategoryInternal, "missing_process_controller", "process controller is required", nil)
 	}
+	sessionID := input.SessionID
+	if sessionID == "" {
+		sessionID = app.NewID("session")
+	}
 	if validation.HasSecret(input.Input) {
+		_ = c.saveAudit(sessionID, nil, "", ActionAnswerQuestion, "rejected", []string{"secret-like input blocked"}, "", "", c.Model)
 		return nil, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
 	}
 	if c.Tasks == nil {
@@ -59,6 +64,8 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 
 	preflight, err := c.resolveProcessState(input)
 	if err != nil {
+		task, stage, action := c.bestEffortState(input)
+		_ = c.saveAudit(sessionID, task, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model)
 		return nil, err
 	}
 	taskPtr := preflight.Task
@@ -83,11 +90,9 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		if c.Proposals == nil {
 			return nil, app.NewError(app.CategoryInternal, "missing_proposal_store", "memory proposal store is required", nil)
 		}
-	}
-
-	sessionID := input.SessionID
-	if sessionID == "" {
-		sessionID = app.NewID("session")
+		if taskPtr != nil && action != ActionAnswerQuestion && c.TransitionGate == nil {
+			return nil, app.NewError(app.CategoryInternal, "missing_transition_gate", "transition gate is required", nil)
+		}
 	}
 
 	bundle, err := c.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
@@ -131,10 +136,14 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	var lastRaw string
 	var parsed ParsedResponse
 	var parseErr error
+	var validatorErrors []string
 	attempt := 0
 	maxRetries := c.RetryController.MaxRetries
 
 	for {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "provider_call", nil, "", "", c.Model, auditRetry(attempt)); auditErr != nil {
+			return result, auditErr
+		}
 		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:  providers.PurposeChat,
 			Model:    c.Model,
@@ -142,7 +151,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			JSONMode: RequiresSchema(action),
 		})
 		if err != nil {
-			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model); auditErr != nil {
+			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", nil, "", "", c.Model, auditError(err)); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 			}
 			return result, err
@@ -152,12 +161,24 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 
 		parsed, parseErr = Parse(stage, action, lastRaw)
 		if parseErr == nil {
-			break
+			validatorErrors = RunValidators(parsed)
+			if len(validatorErrors) == 0 || !shouldRetryValidatorErrors(validatorErrors) || attempt >= maxRetries {
+				break
+			}
+			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "retried", validatorErrors, "", "", result.Model, auditRetry(attempt+1)); auditErr != nil {
+				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+			}
+			attempt++
+			messages = append(messages,
+				app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: rejectedOutputPrompt(lastRaw), CreatedAt: time.Now().UTC()},
+				app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt(validatorErrors), CreatedAt: time.Now().UTC()},
+			)
+			continue
 		}
 		if !c.RetryController.ShouldRetry(parseErr) || attempt >= maxRetries {
 			break
 		}
-		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "retried", []string{app.AsError(parseErr).Message}, "", "", result.Model); auditErr != nil {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "retried", []string{app.AsError(parseErr).Message}, "", "", result.Model, auditRetry(attempt+1)); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 		}
 		attempt++
@@ -168,13 +189,14 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	}
 
 	if parseErr != nil {
+		result.Messages = messages
+		result.RenderedPrompt = renderMessages(messages)
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(parseErr).Message}, "", "", result.Model); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 		}
 		return result, app.ErrorWithHint(app.CategoryValidation, app.AsError(parseErr).Code, app.AsError(parseErr).Message, "output rejected after validation", parseErr)
 	}
 
-	validatorErrors := RunValidators(parsed)
 	if len(validatorErrors) > 0 {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", validatorErrors, "", "", result.Model); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -192,34 +214,53 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	result.Messages = messages
 	result.RenderedPrompt = renderMessages(messages)
 
+	var transitionCandidate *TransitionResult
 	if c.TransitionGate != nil && taskPtr != nil && action != ActionAnswerQuestion {
-		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
+		transition, err := c.TransitionGate.Check(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
 		if err != nil {
 			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", result.Model); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 			}
 			return result, err
 		}
-		if transition.Moved {
-			result.Transition = &transition
-			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transitioned", nil, transition.From, transition.To, result.Model); auditErr != nil {
-				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
-			}
-			taskPtr = &transition.State
+		if transition.To != transition.From {
+			transitionCandidate = &transition
 		}
 	}
 
-	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, input.Input, lastRaw)
+	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, taskID(taskPtr), input.Input, lastRaw)
 	if err != nil {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", result.Model, auditError(err)); auditErr != nil {
+			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
 		return result, err
 	}
 	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
 		result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 	}
 
+	if transitionCandidate != nil {
+		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
+		if err != nil {
+			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transition_failed", nil, transitionCandidate.From, transitionCandidate.To, result.Model, auditError(err), auditTransitionReason(transitionCandidate.Reason)); auditErr != nil {
+				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+			}
+			return result, err
+		} else if transition.Moved {
+			result.Transition = &transition
+			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transitioned", nil, transition.From, transition.To, result.Model, auditTransitionReason(transition.Reason)); auditErr != nil {
+				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+			}
+			taskPtr = &transition.State
+		}
+	}
+
 	memoryModel := c.MemoryModel
 	if memoryModel == "" {
 		memoryModel = c.Model
+	}
+	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "provider_call", nil, "", "", memoryModel); auditErr != nil {
+		return result, auditErr
 	}
 	proposal, err := c.Classifier.Propose(ctx, memory.ClassificationInput{
 		SessionID:          sessionID,
@@ -252,10 +293,23 @@ func (c *ProcessController) Preflight(input ExchangeInput) error {
 	if c == nil {
 		return app.NewError(app.CategoryInternal, "missing_process_controller", "process controller is required", nil)
 	}
+	sessionID := input.SessionID
+	if sessionID == "" {
+		sessionID = app.NewID("session")
+	}
 	if c.Tasks == nil {
 		return app.NewError(app.CategoryInternal, "missing_task_manager", "task manager is required", nil)
 	}
+	if validation.HasSecret(input.Input) {
+		err := app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
+		_ = c.saveAudit(sessionID, nil, "", ActionAnswerQuestion, "rejected", []string{err.Message}, "", "", c.Model)
+		return err
+	}
 	_, err := c.resolveProcessState(input)
+	if err != nil {
+		task, stage, action := c.bestEffortState(input)
+		_ = c.saveAudit(sessionID, task, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model)
+	}
 	return err
 }
 
@@ -323,30 +377,111 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 	return resolvedProcessState{Task: taskPtr, Stage: stage, Action: action}, nil
 }
 
-func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, decision string, validatorErrors []string, from, to app.TaskStage, model string) error {
+type auditMeta struct {
+	Err              error
+	Reason           string
+	RetryCount       int
+	TransitionReason string
+}
+
+func auditError(err error) auditMeta { return auditMeta{Err: err} }
+func auditRetry(count int) auditMeta { return auditMeta{RetryCount: count} }
+func auditTransitionReason(reason string) auditMeta {
+	return auditMeta{TransitionReason: reason}
+}
+
+func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, decision string, validatorErrors []string, from, to app.TaskStage, model string, metas ...auditMeta) error {
 	if c == nil || c.AuditStore == nil {
-		return nil
+		return app.NewError(app.CategoryInternal, "missing_audit_store", "process audit store is required", nil)
 	}
 	taskID := ""
 	if task != nil {
 		taskID = task.ID
 	}
+	var meta auditMeta
+	for _, item := range metas {
+		if item.Err != nil {
+			meta.Err = item.Err
+		}
+		if item.Reason != "" {
+			meta.Reason = item.Reason
+		}
+		if item.RetryCount != 0 {
+			meta.RetryCount = item.RetryCount
+		}
+		if item.TransitionReason != "" {
+			meta.TransitionReason = item.TransitionReason
+		}
+	}
+	if meta.Err != nil {
+		appErr := app.AsError(meta.Err)
+		meta.Reason = appErr.Message
+	}
 	return c.AuditStore.Save(ProcessAuditEvent{
-		TaskID:          taskID,
-		SessionID:       sessionID,
-		Stage:           stage,
-		ActionKind:      action,
-		Decision:        decision,
-		ValidatorErrors: validatorErrors,
-		TransitionFrom:  string(from),
-		TransitionTo:    string(to),
-		Model:           model,
-		CreatedAt:       time.Now().UTC(),
+		TaskID:           taskID,
+		SessionID:        sessionID,
+		Stage:            stage,
+		ActionKind:       action,
+		Decision:         decision,
+		ValidatorErrors:  validatorErrors,
+		ErrorCategory:    errorCategory(meta.Err),
+		ErrorCode:        errorCode(meta.Err),
+		Reason:           meta.Reason,
+		RetryCount:       meta.RetryCount,
+		PromptPolicyID:   "p0-process-controller-v1",
+		TransitionFrom:   string(from),
+		TransitionTo:     string(to),
+		TransitionReason: meta.TransitionReason,
+		Model:            model,
+		CreatedAt:        time.Now().UTC(),
 	})
+}
+
+func errorCategory(err error) string {
+	if err == nil {
+		return ""
+	}
+	return string(app.AsError(err).Category)
+}
+
+func errorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	return app.AsError(err).Code
 }
 
 func rejectedOutputPrompt(raw string) string {
 	return `<rejected_model_output trust="untrusted">` + "\n" + validation.EscapeUntrusted(raw) + "\n</rejected_model_output>"
+}
+
+func shouldRetryValidatorErrors(errs []string) bool {
+	for _, err := range errs {
+		lower := strings.ToLower(err)
+		if strings.Contains(lower, "missing required") || strings.Contains(lower, "unknown") || strings.Contains(lower, "schema") {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *ProcessController) bestEffortState(input ExchangeInput) (*app.TaskState, app.TaskStage, ActionKind) {
+	if c == nil || c.Tasks == nil {
+		return nil, "", ActionAnswerQuestion
+	}
+	state, err := c.Tasks.Current()
+	if err != nil || state.ID == "" {
+		action := input.ActionKind
+		if action == "" || !action.Valid() {
+			action = ActionAnswerQuestion
+		}
+		return nil, "", action
+	}
+	action := input.ActionKind
+	if action == "" || !action.Valid() {
+		action = ResolveActionKind(input.Input, state.Stage, state.ExpectedAction)
+	}
+	return &state, state.Stage, action
 }
 
 func taskID(task *app.TaskState) string {

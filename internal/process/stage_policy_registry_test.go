@@ -37,6 +37,14 @@ func TestStagePolicyRegistryUnknownStageFailsClosed(t *testing.T) {
 	}
 }
 
+func TestStagePolicyRegistryNilFailsClosed(t *testing.T) {
+	var registry *StagePolicyRegistry
+	_, err := registry.PolicyFor(app.StagePlanning)
+	if err == nil || app.AsError(err).Code != "missing_policy_registry" {
+		t.Fatalf("want missing_policy_registry, got %v", err)
+	}
+}
+
 func TestStagePolicyAllowsAndForbids(t *testing.T) {
 	registry := NewStagePolicyRegistry()
 	policy, _ := registry.PolicyFor(app.StagePlanning)

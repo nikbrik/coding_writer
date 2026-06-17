@@ -95,9 +95,34 @@ func TestProcessControllerAuditsProviderError(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range events {
-		if e.SessionID == "provider_error" && e.Decision == "rejected" && strings.Contains(strings.Join(e.ValidatorErrors, ";"), "network down") {
+		if e.SessionID == "provider_error" && e.Decision == "rejected" && e.ErrorCode == "network" && e.Reason == "network down" {
 			return
 		}
 	}
 	t.Fatalf("missing provider error audit: %+v", events)
+}
+
+func TestProcessControllerAuditsHardGateError(t *testing.T) {
+	ctx := context.Background()
+	ctrl, _, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "paused_audit", Input: "hello"})
+	if err == nil || app.AsError(err).Code != "task_paused" {
+		t.Fatalf("want task_paused, got %v", err)
+	}
+	events, err := ctrl.AuditStore.Latest(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.SessionID == "paused_audit" && e.Decision == "rejected" && strings.Contains(strings.Join(e.ValidatorErrors, ";"), "paused") {
+			return
+		}
+	}
+	t.Fatalf("missing hard gate audit: %+v", events)
 }

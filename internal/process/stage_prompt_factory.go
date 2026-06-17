@@ -47,7 +47,16 @@ func (f *StagePromptFactory) StagePrompt(stage app.TaskStage, action ActionKind)
 	var b strings.Builder
 	fmt.Fprintf(&b, "Current stage: %s.\n", stage)
 	if action == ActionAnswerQuestion {
-		b.WriteString("Selected action is answer_question. Use stage state only as context. Return concise informational text, not the stage JSON schema.\n")
+		fmt.Fprintf(&b, "Role context: %s.\n", policy.Role)
+		b.WriteString(stageRoleBody(stage))
+		b.WriteString("\nForbidden actions remain forbidden: ")
+		for i, a := range policy.ForbiddenActions {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(string(a))
+		}
+		b.WriteString(".\nSelected action is answer_question. Use stage state only as context. Return concise informational text, not the stage JSON schema.\n")
 		return b.String(), nil
 	}
 	fmt.Fprintf(&b, "Role: %s.\n", policy.Role)

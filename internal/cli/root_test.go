@@ -191,6 +191,19 @@ func TestPausedTaskHardGateBeforeProviderDisclosure(t *testing.T) {
 	}
 }
 
+func TestSecretInputHardGateBeforeProviderValidation(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "missing/model", "chat", "--once", "--input", "OPENROUTER_API_KEY=sk-secret123456789"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
+		t.Fatalf("want secret_blocked before invalid_model, got %v", err)
+	}
+}
+
 func TestTopLevelTaskPlanCriteriaCommands(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()

@@ -57,6 +57,42 @@ func TestTransitionGateValidPlanningMoveUsesTaskManager(t *testing.T) {
 	if current.Stage != app.StageExecution || current.ExpectedAction != app.ExpectedLLMResponse {
 		t.Fatalf("manager did not persist transition: %+v", current)
 	}
+	if len(current.Plan) != 1 || current.Plan[0] != "p" || len(current.AcceptanceCriteria) != 1 || current.AcceptanceCriteria[0] != "c" {
+		t.Fatalf("planning output not persisted: %+v", current)
+	}
+}
+
+func TestTransitionGateRejectsStageMismatch(t *testing.T) {
+	dir := t.TempDir()
+	mgr := tasks.NewManager(dir)
+	state, err := mgr.Start("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := &TransitionGate{Tasks: mgr}
+	parsed := ParsedResponse{Stage: app.StageExecution, Planning: &PlanningOutput{AcceptanceCriteria: []string{"c"}, Plan: []string{"p"}, Readiness: "ready_for_execution_proposal"}}
+	_, err = gate.Apply(state, parsed, TransitionOptions{AutoApprovePlanning: true})
+	if err == nil || app.AsError(err).Code != "stage_mismatch" {
+		t.Fatalf("want stage_mismatch, got %v", err)
+	}
+}
+
+func TestTransitionGateRejectsStaleTaskStateBeforeApply(t *testing.T) {
+	dir := t.TempDir()
+	mgr := tasks.NewManager(dir)
+	stale, err := mgr.Start("task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	gate := &TransitionGate{Tasks: mgr}
+	parsed := ParsedResponse{Stage: app.StagePlanning, Planning: &PlanningOutput{Summary: "s", AcceptanceCriteria: []string{"c"}, Plan: []string{"p"}, Readiness: "ready_for_execution_proposal"}}
+	_, err = gate.Apply(stale, parsed, TransitionOptions{AutoApprovePlanning: true})
+	if err == nil || app.AsError(err).Code != "task_changed_before_transition" {
+		t.Fatalf("want task_changed_before_transition, got %v", err)
+	}
 }
 
 func TestTransitionGateForbiddenProposalPreservesState(t *testing.T) {
@@ -84,7 +120,7 @@ func TestTransitionGateExecutionToValidation(t *testing.T) {
 	state, _ := mgr.Start("task")
 	state, _ = mgr.Move(app.StageExecution)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageExecution, Execution: &ExecutionOutput{NextSignal: "ready_for_validation"}}
+	parsed := ParsedResponse{Stage: app.StageExecution, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"not run"}, NextSignal: "ready_for_validation"}}
 	res, err := gate.Apply(state, parsed, TransitionOptions{})
 	if err != nil {
 		t.Fatal(err)

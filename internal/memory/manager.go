@@ -103,7 +103,7 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 	return record, nil
 }
 
-func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, userContent, assistantContent string) (app.MemoryRecord, app.MemoryRecord, error) {
+func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, profileID, taskID, userContent, assistantContent string) (app.MemoryRecord, app.MemoryRecord, error) {
 	if sessionID == "" {
 		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryValidation, "missing_session", "short memory requires session id", nil)
 	}
@@ -127,6 +127,8 @@ func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, userContent,
 		Kind:      "message_user",
 		Content:   strings.TrimSpace(userContent),
 		Source:    "chat",
+		ProfileID: profileID,
+		TaskID:    taskID,
 		SessionID: sessionID,
 		CreatedAt: now,
 	}
@@ -136,6 +138,8 @@ func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, userContent,
 		Kind:      "message_assistant",
 		Content:   strings.TrimSpace(assistantContent),
 		Source:    "chat",
+		ProfileID: profileID,
+		TaskID:    taskID,
 		SessionID: sessionID,
 		CreatedAt: now,
 	}

@@ -74,3 +74,17 @@ func TestParseNoStageField(t *testing.T) {
 		t.Fatalf("unexpected code: %v", err)
 	}
 }
+
+func TestParseRejectsUnknownFields(t *testing.T) {
+	_, err := Parse(app.StagePlanning, ActionPlanTask, `{"stage":"planning","summary":"s","assumptions":[],"acceptance_criteria":["c"],"plan":["p"],"open_questions":[],"readiness":"needs_user_input","set_stage":"execution"}`)
+	if err == nil || app.AsError(err).Code != "invalid_json" {
+		t.Fatalf("want invalid_json, got %v", err)
+	}
+}
+
+func TestParseRejectsTrailingJSON(t *testing.T) {
+	_, err := Parse(app.StagePlanning, ActionPlanTask, `{"stage":"planning","summary":"s","assumptions":[],"acceptance_criteria":["c"],"plan":["p"],"open_questions":[],"readiness":"needs_user_input"} {"stage":"done"}`)
+	if err == nil || app.AsError(err).Code != "invalid_json" {
+		t.Fatalf("want invalid_json, got %v", err)
+	}
+}

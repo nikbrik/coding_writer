@@ -184,6 +184,39 @@ func (m *Manager) AddCriteria(criteria string) (app.TaskState, error) {
 	})
 }
 
+func (m *Manager) SetPlanningOutput(summary string, criteria, plan, openQuestions []string) (app.TaskState, error) {
+	if validation.HasSecret(summary) || hasSecretIn(criteria) || hasSecretIn(plan) || hasSecretIn(openQuestions) {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	return m.mutateActive(func(state *app.TaskState) error {
+		state.Objective = strings.TrimSpace(summary)
+		state.AcceptanceCriteria = trimNonEmpty(criteria)
+		state.Plan = trimNonEmpty(plan)
+		state.OpenQuestions = trimNonEmpty(openQuestions)
+		return nil
+	})
+}
+
+func hasSecretIn(items []string) bool {
+	for _, item := range items {
+		if validation.HasSecret(item) {
+			return true
+		}
+	}
+	return false
+}
+
+func trimNonEmpty(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 func (m *Manager) SetExpectedAction(action app.ExpectedAction) (app.TaskState, error) {
 	if !ValidExpectedAction(action) {
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "invalid_expected_action", "invalid expected action", nil)

@@ -59,6 +59,13 @@ func TestExecutionRejectsWeakToolSubstring(t *testing.T) {
 	}
 }
 
+func TestExecutionRejectsPassedAndNotRunMix(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", Verification: []string{"tests passed; not run"}, NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected contradictory verification rejection")
+	}
+}
+
 func TestExecutionRejectsUnknownNextSignal(t *testing.T) {
 	errs := validateExecution(&ExecutionOutput{Summary: "s", NextSignal: "done"})
 	if len(errs) == 0 {
@@ -114,6 +121,13 @@ func TestValidationRejectsUnknownSeverityAndIncompleteFinding(t *testing.T) {
 	}
 }
 
+func TestValidationNeedsExecutionFixesRequiresActionableFinding(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{PassedChecks: []string{"checked"}, Verdict: "needs_execution_fixes"})
+	if len(errs) == 0 {
+		t.Fatal("expected actionable finding requirement")
+	}
+}
+
 func TestValidationReadyForDoneBlockedByHighFinding(t *testing.T) {
 	errs := validateValidation(&ValidationOutput{
 		Findings: []ValidationFinding{{Severity: "high", Problem: "bug"}},
@@ -142,6 +156,13 @@ func TestValidationReadyForDoneBlockedByMissingEvidence(t *testing.T) {
 	})
 	if len(errs) == 0 {
 		t.Fatal("expected missing evidence rejection")
+	}
+}
+
+func TestValidationReadyForDoneRequiresPassedChecks(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{Findings: []ValidationFinding{}, Verdict: "ready_for_done"})
+	if len(errs) == 0 {
+		t.Fatal("expected evidence requirement")
 	}
 }
 

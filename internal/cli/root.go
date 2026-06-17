@@ -252,22 +252,23 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 				if strings.TrimSpace(chatOpts.Input) == "" {
 					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
 				}
+				sessionID := app.NewID("session")
 				if !chatOpts.RenderPrompt {
-					if err := rt.preflightProcess(process.ExchangeInput{SessionID: "", Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
+					if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
 						return err
 					}
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, app.NewID("session"), chatOpts.Input, chatOpts.RenderPrompt)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt)
 				if err != nil {
 					return err
 				}
-				for _, warning := range result.Warnings {
-					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
-				}
 				if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.Messages, result.RenderedPrompt); err != nil {
 					result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
+				}
+				for _, warning := range result.Warnings {
+					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
 				}
 				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
 			}
@@ -281,14 +282,15 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 }
 
 type chatResult struct {
-	OK             bool                `json:"ok"`
-	SessionID      string              `json:"session_id"`
-	Answer         string              `json:"answer,omitempty"`
-	Model          string              `json:"model,omitempty"`
-	RenderedPrompt string              `json:"rendered_prompt"`
-	Messages       []app.ChatMessage   `json:"messages,omitempty"`
-	Proposal       *app.MemoryProposal `json:"proposal,omitempty"`
-	Warnings       []string            `json:"warnings,omitempty"`
+	OK             bool                      `json:"ok"`
+	SessionID      string                    `json:"session_id"`
+	Answer         string                    `json:"answer,omitempty"`
+	Model          string                    `json:"model,omitempty"`
+	RenderedPrompt string                    `json:"rendered_prompt"`
+	Messages       []app.ChatMessage         `json:"messages,omitempty"`
+	Proposal       *app.MemoryProposal       `json:"proposal,omitempty"`
+	Transition     *process.TransitionResult `json:"transition,omitempty"`
+	Warnings       []string                  `json:"warnings,omitempty"`
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool) (chatResult, error) {
@@ -318,6 +320,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		result.RenderedPrompt = procResult.RenderedPrompt
 		result.Messages = procResult.Messages
 		result.Proposal = procResult.Proposal
+		result.Transition = procResult.Transition
 		result.Warnings = procResult.Warnings
 	}
 	if err != nil {
@@ -367,6 +370,9 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		_, _ = fmt.Fprintln(out, safeTerminalText(result.Answer))
 		if result.Proposal != nil {
 			_, _ = fmt.Fprint(out, proposalText(*result.Proposal))
+		}
+		if result.Transition != nil {
+			_, _ = fmt.Fprintf(out, "transition: %s -> %s\n", result.Transition.From, result.Transition.To)
 		}
 		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.Messages, result.RenderedPrompt); err != nil {
 			_, _ = fmt.Fprintln(diag, "prompt audit skipped: "+app.AsError(err).Code)
@@ -607,11 +613,22 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			taskState, _ := rt.Tasks.Current()
 			var taskPtr *app.TaskState
 			if taskState.ID != "" {
+				if taskState.Status == app.TaskStatusPaused {
+					return app.NewError(app.CategoryValidation, "task_paused", "task is paused; resume before continuing", nil)
+				}
 				taskPtr = &taskState
 			}
 			rt.ensureProvider()
+			if rt.Config.MemoryModel != "" {
+				if err := validateModelID(cmd.Context(), rt.ensureProvider(), rt.Config.MemoryModel); err != nil {
+					return err
+				}
+			}
 			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 			bundle, _ := rt.Memory.SelectForPrompt(cmd.Context(), sessionID, taskID(taskPtr), profile.ID)
+			if err := process.NewAuditStore(rt.StorageDir).Save(process.ProcessAuditEvent{SessionID: sessionID, TaskID: taskID(taskPtr), Stage: stageOf(taskPtr), Decision: "memory_proposal_provider_call", Reason: "memory_classifier", Model: rt.Config.MemoryModel, CreatedAt: time.Now().UTC()}); err != nil {
+				return err
+			}
 			proposal, err := rt.ensureClassifier().Propose(cmd.Context(), memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel, ExistingShort: bundle.Short, ExistingWork: bundle.Work, ExistingLong: bundle.Long})
 			if err != nil {
 				return err
@@ -1204,11 +1221,22 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		taskState, _ := rt.Tasks.Current()
 		var taskPtr *app.TaskState
 		if taskState.ID != "" {
+			if taskState.Status == app.TaskStatusPaused {
+				return app.NewError(app.CategoryValidation, "task_paused", "task is paused; resume before continuing", nil)
+			}
 			taskPtr = &taskState
 		}
 		rt.ensureProvider()
+		if rt.Config.MemoryModel != "" {
+			if err := validateModelID(ctx, rt.ensureProvider(), rt.Config.MemoryModel); err != nil {
+				return err
+			}
+		}
 		ensureProviderDisclosure(diag, rt)
 		bundle, _ := rt.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
+		if err := process.NewAuditStore(rt.StorageDir).Save(process.ProcessAuditEvent{SessionID: sessionID, TaskID: taskID(taskPtr), Stage: stageOf(taskPtr), Decision: "memory_proposal_provider_call", Reason: "memory_classifier", Model: rt.Config.MemoryModel, CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
 		proposal, err := rt.ensureClassifier().Propose(ctx, memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel, ExistingShort: bundle.Short, ExistingWork: bundle.Work, ExistingLong: bundle.Long})
 		if err != nil {
 			return err
@@ -1387,6 +1415,13 @@ func taskID(task *app.TaskState) string {
 	return task.ID
 }
 
+func stageOf(task *app.TaskState) app.TaskStage {
+	if task == nil {
+		return ""
+	}
+	return task.Stage
+}
+
 func recordRenderedPrompt(storageDir, sessionID string, messages []app.ChatMessage, rendered string) error {
 	if sessionID == "" {
 		return nil
@@ -1528,6 +1563,9 @@ func textChatResult(result chatResult) string {
 	text := safeTerminalText(result.Answer) + "\n"
 	if result.Proposal != nil {
 		text += proposalText(*result.Proposal)
+	}
+	if result.Transition != nil {
+		text += fmt.Sprintf("transition: %s -> %s\n", result.Transition.From, result.Transition.To)
 	}
 	return text
 }

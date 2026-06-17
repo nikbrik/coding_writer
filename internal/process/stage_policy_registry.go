@@ -12,6 +12,9 @@ func NewStagePolicyRegistry() *StagePolicyRegistry {
 }
 
 func (r *StagePolicyRegistry) PolicyFor(stage app.TaskStage) (StagePolicy, error) {
+	if r == nil || r.policies == nil {
+		return StagePolicy{}, app.NewError(app.CategoryValidation, "missing_policy_registry", "stage policy registry is required", nil)
+	}
 	policy, ok := r.policies[stage]
 	if !ok {
 		return StagePolicy{}, app.NewError(app.CategoryValidation, "unknown_stage", "no process policy for stage", nil)

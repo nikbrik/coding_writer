@@ -18,8 +18,11 @@ func NewAuditStore(storageDir string) *AuditStore {
 
 // Save persists an event to <storage_root>/process_audit.jsonl.
 func (s *AuditStore) Save(event ProcessAuditEvent) error {
-	if s == nil || s.StorageDir == "" {
-		return nil
+	if s == nil {
+		return app.NewError(app.CategoryInternal, "missing_audit_store", "process audit store is required", nil)
+	}
+	if s.StorageDir == "" {
+		return app.NewError(app.CategoryInternal, "missing_audit_storage", "process audit storage dir is required", nil)
 	}
 	if event.ID == "" {
 		event.ID = app.NewID("audit")
@@ -36,8 +39,11 @@ func (s *AuditStore) Save(event ProcessAuditEvent) error {
 
 // Latest returns the most recent events, newest last.
 func (s *AuditStore) Latest(limit int) ([]ProcessAuditEvent, error) {
-	if s == nil || s.StorageDir == "" {
-		return nil, nil
+	if s == nil {
+		return nil, app.NewError(app.CategoryInternal, "missing_audit_store", "process audit store is required", nil)
+	}
+	if s.StorageDir == "" {
+		return nil, app.NewError(app.CategoryInternal, "missing_audit_storage", "process audit storage dir is required", nil)
 	}
 	path, err := storage.SafeJoin(s.StorageDir, "process_audit.jsonl")
 	if err != nil {

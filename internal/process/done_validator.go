@@ -12,7 +12,7 @@ func validateDone(out *DoneOutput, raw string) []string {
 		errs = append(errs, "done output missing required summary")
 	}
 	lower := strings.ToLower(raw)
-	if strings.Contains(lower, "```") || strings.Contains(lower, "implement") || strings.Contains(lower, "edit file") {
+	if strings.Contains(lower, "```") || containsMutationCommand(raw) {
 		errs = append(errs, "done output must not contain mutation commands or implementation instructions")
 	}
 	return errs

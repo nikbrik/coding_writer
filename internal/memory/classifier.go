@@ -92,14 +92,14 @@ type classifierJSON struct {
 }
 
 var allowedClassifierKinds = map[string]bool{
-	"preference": true,
+	"preference":  true,
 	"requirement": true,
-	"decision": true,
-	"constraint": true,
-	"context": true,
-	"smalltalk": true,
-	"other": true,
-	"ignore": true,
+	"decision":    true,
+	"constraint":  true,
+	"context":     true,
+	"smalltalk":   true,
+	"other":       true,
+	"ignore":      true,
 }
 
 func parseProposal(content string) (app.MemoryProposal, error) {
@@ -143,8 +143,9 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 			Confidence: confidence,
 			Status:     app.ProposalPending,
 		}
-		if findings := validation.DetectSecrets(record.Content); len(findings) > 0 {
+		if findings := validation.DetectSecrets(record.Content + "\n" + record.Reason); len(findings) > 0 {
 			record.Content = "[REDACTED_SECRET]"
+			record.Reason = "[REDACTED_SECRET]"
 			record.Status = app.ProposalBlocked
 			record.BlockReason = "secret detected: " + validation.FindingTypes(findings)
 		}

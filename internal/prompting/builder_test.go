@@ -52,3 +52,15 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 		t.Fatalf("missing answer_question stage guidance:\n%s", rendered)
 	}
 }
+
+func TestPromptBuilderNilFactoryUsesDefault(t *testing.T) {
+	profile := profiles.DefaultProfiles(time.Now().UTC())[0]
+	b := &Builder{}
+	messages, err := b.Build(BuildInput{Profile: profile, Query: "query"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) == 0 || !strings.Contains(RenderMessages(messages), "minimal CLI code assistant") {
+		t.Fatalf("missing default base prompt")
+	}
+}

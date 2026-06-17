@@ -134,6 +134,30 @@ func TestProcessControllerDoneTaskBlocksMutation(t *testing.T) {
 	}
 }
 
+func TestProcessControllerDoneTaskBlocksImplicitMutationQuestion(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("done task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "can you implement X?"})
+	if err == nil || app.AsError(err).Code != "task_done" {
+		t.Fatalf("want task_done, got %v", err)
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatal("provider should not be called for implicit done mutation")
+	}
+}
+
 func TestProcessControllerForbiddenActionBlocked(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

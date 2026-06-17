@@ -288,8 +288,9 @@ func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
 
 func sanitizeProposal(proposal app.MemoryProposal) app.MemoryProposal {
 	for i := range proposal.Records {
-		if findings := validation.DetectSecrets(proposal.Records[i].Content); len(findings) > 0 {
+		if findings := validation.DetectSecrets(proposal.Records[i].Content + "\n" + proposal.Records[i].Reason); len(findings) > 0 {
 			proposal.Records[i].Content = "[REDACTED_SECRET]"
+			proposal.Records[i].Reason = "[REDACTED_SECRET]"
 			proposal.Records[i].Status = app.ProposalBlocked
 			proposal.Records[i].BlockReason = "secret detected: " + validation.FindingTypes(findings)
 		}

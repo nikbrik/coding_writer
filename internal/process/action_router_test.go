@@ -68,3 +68,12 @@ func TestResolveActionKindDoneSummaryIntent(t *testing.T) {
 		t.Fatalf("want summarize_done, got %s", got)
 	}
 }
+
+func TestResolveActionKindDoneMutationIntentIsForbiddenAction(t *testing.T) {
+	for _, input := range []string{"реализуй ещё", "add another file", "update docs", "создай новый модуль", "refactor module", "rename file", "modify config", "continue work", "can you implement X?"} {
+		got := ResolveActionKind(input, app.StageDone, app.ExpectedNone)
+		if got != ActionExecutePlanStep {
+			t.Fatalf("%q: want execute_plan_step for done mutation gate, got %s", input, got)
+		}
+	}
+}
