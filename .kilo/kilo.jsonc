@@ -1,0 +1,15 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "mcp": {
+    "ast-index": {
+      "type": "local",
+      "command": ["/opt/homebrew/bin/ast-index-mcp"],
+      "environment": {
+        "AST_INDEX_ROOT": "/Users/nikita/code/coding_writer",
+        "AST_INDEX_BIN": "/opt/homebrew/bin/ast-index"
+      },
+      "enabled": true,
+      "timeout": 30000
+    }
+  }
+}
