@@ -15,14 +15,14 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 
 	switch stage {
 	case app.StagePlanning:
-		if looksLikeClarification(normalized) {
-			return ActionAskClarification
-		}
-		if containsAny(normalized, []string{"спланируй", "plan", "спланировать", "planning", "plan the"}) {
+		if isPlanningIntent(normalized) {
 			return ActionPlanTask
 		}
 		if containsAny(normalized, []string{"готов", "ready", "execute", "реализуй", "implement", "proceed"}) {
 			return ActionProposeTransition
+		}
+		if containsAny(normalized, []string{"уточни", "clarify", "ask clarification", "open question"}) {
+			return ActionAskClarification
 		}
 		return ActionAnswerQuestion
 	case app.StageExecution:
@@ -37,12 +37,25 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if containsAny(normalized, []string{"verify", "criteria", "проверь критерии"}) {
 			return ActionVerifyCriteria
 		}
+		if looksLikeClarification(normalized) {
+			return ActionAnswerQuestion
+		}
 		return ActionReviewOutput
 	case app.StageDone:
+		if containsAny(normalized, []string{"summary", "summarize", "итог", "резюме", "final summary", "what was done"}) {
+			return ActionSummarizeDone
+		}
 		return ActionAnswerQuestion
 	default:
 		return ActionAnswerQuestion
 	}
+}
+
+func isPlanningIntent(normalized string) bool {
+	if containsAny(normalized, []string{"спланируй", "спланировать", "plan the", "please plan"}) {
+		return true
+	}
+	return strings.HasPrefix(normalized, "plan ") || normalized == "plan"
 }
 
 func looksLikeClarification(normalized string) bool {

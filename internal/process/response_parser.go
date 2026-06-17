@@ -77,16 +77,11 @@ func Parse(stage app.TaskStage, action ActionKind, raw string) (ParsedResponse, 
 
 func stripMarkdownFences(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "```json") {
-		s = strings.TrimPrefix(s, "```json")
-		s = strings.TrimSpace(s)
-		if strings.HasSuffix(s, "```") {
-			s = strings.TrimSuffix(s, "```")
-		}
-		return strings.TrimSpace(s)
-	}
 	if strings.HasPrefix(s, "```") {
 		s = strings.TrimPrefix(s, "```")
+		if firstLine, rest, ok := strings.Cut(s, "\n"); ok && !looksLikeJSON(strings.TrimSpace(firstLine)) {
+			s = rest
+		}
 		s = strings.TrimSpace(s)
 		if strings.HasSuffix(s, "```") {
 			s = strings.TrimSuffix(s, "```")

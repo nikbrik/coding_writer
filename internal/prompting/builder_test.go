@@ -42,8 +42,8 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	if !strings.Contains(rendered, `trust="untrusted"`) || !strings.Contains(rendered, "task paused") {
 		t.Fatalf("missing untrusted tags or paused warning:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "Role: implementer") {
-		t.Fatalf("missing execution stage role:\n%s", rendered)
+	if strings.Contains(rendered, "Role: implementer") {
+		t.Fatalf("answer_question prompt should not include execution role body:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "Return output using the execution schema") {
 		t.Fatalf("answer_question prompt must not request execution schema:\n%s", rendered)

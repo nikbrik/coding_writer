@@ -162,6 +162,35 @@ func TestPausedTaskHardGateBeforeModelValidation(t *testing.T) {
 	}
 }
 
+func TestPausedTaskHardGateBeforeProviderDisclosure(t *testing.T) {
+	storageDir := t.TempDir()
+	args := [][]string{
+		{"--storage-dir", storageDir, "--json", "task", "start", "CLI assistant MVP"},
+		{"--storage-dir", storageDir, "--json", "task", "pause"},
+	}
+	for _, arg := range args {
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs(arg)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v", arg, err)
+		}
+	}
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "openai/gpt-4.1-mini", "chat", "--once", "--input", "hello"})
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "task_paused") {
+		t.Fatalf("want task_paused, got %v output=%s", err, out.String())
+	}
+	if strings.Contains(stderr.String(), "Provider disclosure") {
+		t.Fatalf("provider disclosure happened before hard gate: %s", stderr.String())
+	}
+}
+
 func TestTopLevelTaskPlanCriteriaCommands(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()

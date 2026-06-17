@@ -206,6 +206,70 @@ func TestProcessControllerUsesMemoryModelForClassifier(t *testing.T) {
 	t.Fatalf("classifier did not use memory model: %+v", fake.SnapshotCalls())
 }
 
+func TestProcessControllerRejectsEmptyAssistantOutputBeforeMemory(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = "   "
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "empty", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err == nil || app.AsError(err).Code != "empty_output" {
+		t.Fatalf("want empty_output, got %v", err)
+	}
+	records, _ := ctrl.Memory.List(ctx, app.LayerShort, "empty", "")
+	if len(records) != 0 {
+		t.Fatalf("empty output should not save partial exchange: %+v", records)
+	}
+}
+
+func TestProcessControllerRequiresClassifierAndProposalStore(t *testing.T) {
+	ctx := context.Background()
+	ctrl, _, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.Classifier = nil
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err == nil || app.AsError(err).Code != "missing_classifier" {
+		t.Fatalf("want missing_classifier, got %v", err)
+	}
+	ctrl, _, _ = newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.Proposals = nil
+	_, err = ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s2", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err == nil || app.AsError(err).Code != "missing_proposal_store" {
+		t.Fatalf("want missing_proposal_store, got %v", err)
+	}
+}
+
+func TestProcessControllerMissingCoreDependenciesReturnErrors(t *testing.T) {
+	ctx := context.Background()
+	_, err := (*ProcessController)(nil).RunExchange(ctx, ExchangeInput{Input: "hello"})
+	if err == nil || app.AsError(err).Code != "missing_process_controller" {
+		t.Fatalf("want missing_process_controller, got %v", err)
+	}
+	ctrl := &ProcessController{}
+	_, err = ctrl.RunExchange(ctx, ExchangeInput{Input: "hello"})
+	if err == nil || app.AsError(err).Code != "missing_task_manager" {
+		t.Fatalf("want missing_task_manager, got %v", err)
+	}
+	ctrl, _, _ = newTestController(t)
+	ctrl.Profiles = nil
+	_, err = ctrl.RunExchange(ctx, ExchangeInput{Input: "hello"})
+	if err == nil || app.AsError(err).Code != "missing_profile_manager" {
+		t.Fatalf("want missing_profile_manager, got %v", err)
+	}
+	ctrl, _, _ = newTestController(t)
+	ctrl.Builder = nil
+	_, err = ctrl.RunExchange(ctx, ExchangeInput{Input: "hello"})
+	if err == nil || app.AsError(err).Code != "missing_prompt_builder" {
+		t.Fatalf("want missing_prompt_builder, got %v", err)
+	}
+}
+
 func TestProcessControllerRenderOnlyDoesNotCallProvider(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

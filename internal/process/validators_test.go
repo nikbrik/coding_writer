@@ -23,6 +23,13 @@ func TestPlanningReadinessRequiresPlanAndCriteria(t *testing.T) {
 	}
 }
 
+func TestPlanningRejectsUnknownReadiness(t *testing.T) {
+	errs := validatePlanning(&PlanningOutput{Summary: "s", Readiness: "done_enough"}, "")
+	if len(errs) == 0 {
+		t.Fatal("expected unknown readiness rejection")
+	}
+}
+
 func TestPlanningOpenQuestionsBlockReadiness(t *testing.T) {
 	errs := validatePlanning(&PlanningOutput{
 		AcceptanceCriteria: []string{"c"},
@@ -45,6 +52,20 @@ func TestExecutionRejectsFakeTestResult(t *testing.T) {
 	}
 }
 
+func TestExecutionRejectsWeakToolSubstring(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", Verification: []string{"no tool output but tests passed"}, NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected weak tool substring rejection")
+	}
+}
+
+func TestExecutionRejectsUnknownNextSignal(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", NextSignal: "done"})
+	if len(errs) == 0 {
+		t.Fatal("expected unknown next_signal rejection")
+	}
+}
+
 func TestExecutionRejectsReadyWithBlockers(t *testing.T) {
 	errs := validateExecution(&ExecutionOutput{
 		Blockers:   []string{"blocked"},
@@ -57,18 +78,39 @@ func TestExecutionRejectsReadyWithBlockers(t *testing.T) {
 
 func TestValidationRejectsFeatureImplementation(t *testing.T) {
 	errs := validateValidation(&ValidationOutput{
-		Findings: []ValidationFinding{{Severity: "low", Problem: "style"}},
+		Findings: []ValidationFinding{{Severity: "low", Location: "file", Problem: "style", Fix: "fix style"}},
 		Verdict:  "needs_execution_fixes",
 	})
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}
 	errs = validateValidation(&ValidationOutput{
-		Findings: []ValidationFinding{{Severity: "low", Problem: "style", Fix: "I will add a new feature"}},
+		Findings: []ValidationFinding{{Severity: "low", Location: "file", Problem: "style", Fix: "I will add a new feature"}},
 		Verdict:  "needs_execution_fixes",
 	})
 	if len(errs) == 0 {
 		t.Fatal("expected feature rejection")
+	}
+}
+
+func TestValidationRejectsImplementationInPassedChecks(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{PassedChecks: []string{"implemented fix while reviewing"}, Verdict: "blocked_missing_evidence"})
+	if len(errs) == 0 {
+		t.Fatal("expected implementation claim rejection")
+	}
+}
+
+func TestValidationRejectsUnknownVerdict(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{PassedChecks: []string{"checked"}, Verdict: "ship_it"})
+	if len(errs) == 0 {
+		t.Fatal("expected unknown verdict rejection")
+	}
+}
+
+func TestValidationRejectsUnknownSeverityAndIncompleteFinding(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{Findings: []ValidationFinding{{Severity: "critical", Problem: "bug"}}, Verdict: "needs_execution_fixes"})
+	if len(errs) == 0 {
+		t.Fatal("expected finding validation errors")
 	}
 }
 
@@ -79,6 +121,16 @@ func TestValidationReadyForDoneBlockedByHighFinding(t *testing.T) {
 	})
 	if len(errs) == 0 {
 		t.Fatal("expected high finding rejection")
+	}
+}
+
+func TestValidationReadyForDoneBlockedByMixedCaseHighFinding(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{
+		Findings: []ValidationFinding{{Severity: " High ", Problem: "bug"}},
+		Verdict:  "ready_for_done",
+	})
+	if len(errs) == 0 {
+		t.Fatal("expected mixed-case high finding rejection")
 	}
 }
 

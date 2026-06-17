@@ -100,3 +100,19 @@ The recent commit only updated documentation; no process-control code exists yet
 - Moved `accepted` audit after transition gate; transition precondition errors now audit as `rejected` and do not write accepted events.
 - Added regression tests for all three findings.
 - Verified: `go test ./internal/process/...` OK, `go test ./internal/prompting/...` OK, `go test ./internal/cli/...` OK, `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.
+
+### Iteration 4 — Goal-X self-review fixes
+- Fixed planning/validation routing edge cases: ordinary planning questions route to `answer_question`, explicit plan requests still route to `plan_task`, explicit validation criteria checks still route to `verify_criteria` even with `?`.
+- Added normalized severity handling shared by validation validator and transition gate, blocking mixed-case `High`/`Blocker` findings.
+- Added audit event for provider `Complete` errors as rejected provider-call outcomes.
+- Moved chat/REPL provider setup and disclosure after local process preflight.
+- Added regression tests for routing, severity normalization, provider-error audit and disclosure-before-gate.
+- Verified: `go test ./internal/process/...` OK, `go test ./internal/cli/...` OK, `go test ./internal/prompting/...` OK, `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.
+- Latest self-review result: no findings.
+
+### Iteration 5 — Full-feature review fixes
+- Fixed all findings from the broad feature review: accepted audit ordering, atomic short exchange save, nil dependency guards, audit error surfacing, fenced JSON parsing, policy slice copying, enum/required-field validation, validation mutation scanning, done summary routing, planning intent matching, stricter execution verification evidence, explicit schemas and shorter `answer_question` stage prompt.
+- Added `Memory.SaveShortExchange` to persist user+assistant short-memory records in one locked JSONL update.
+- Added regression tests for parser fences, policy immutability, routing, enum validation, missing fields, weak tool evidence, nil dependencies, empty outputs and rejected-output audit semantics.
+- Verified: `go test ./internal/process/...` OK, `go test ./internal/memory/...` OK, `go test ./internal/prompting/...` OK, `go build ./...` OK, `go test ./...` OK, `go test ./tests/...` OK.
+- Latest self-review result: no findings.

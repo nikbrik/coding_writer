@@ -51,6 +51,22 @@ func TestStagePolicyAllowsAndForbids(t *testing.T) {
 	}
 }
 
+func TestStagePolicyRegistryPolicyForReturnsCopy(t *testing.T) {
+	registry := NewStagePolicyRegistry()
+	policy, err := registry.PolicyFor(app.StagePlanning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.AllowedActions[0] = ActionExecutePlanStep
+	fresh, err := registry.PolicyFor(app.StagePlanning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.AllowedActions[0] == ActionExecutePlanStep {
+		t.Fatal("policy slices should not be externally mutable")
+	}
+}
+
 func TestActionKindAllowedStages(t *testing.T) {
 	if !ActionPlanTask.IsAllowedIn(app.StagePlanning) {
 		t.Fatal("plan_task must be allowed in planning")

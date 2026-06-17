@@ -38,7 +38,7 @@ func TestProcessControllerAuditsAcceptedAndRejected(t *testing.T) {
 	}
 }
 
-func TestProcessControllerTransitionErrorDoesNotAuditAccepted(t *testing.T) {
+func TestProcessControllerRejectedOutputDoesNotAuditAccepted(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
 	state, err := ctrl.Tasks.Start("task")
@@ -55,8 +55,8 @@ func TestProcessControllerTransitionErrorDoesNotAuditAccepted(t *testing.T) {
 	_ = state
 	fake.ChatResponse = `{"stage":"validation","findings":[{"severity":"low","location":"file","problem":"bug","fix":""}],"passed_checks":[],"missing_evidence":[],"residual_risks":[],"verdict":"needs_execution_fixes"}`
 	_, err = ctrl.RunExchange(ctx, ExchangeInput{SessionID: "transition_error", Input: "review", ActionKind: ActionReviewOutput})
-	if err == nil || app.AsError(err).Code != "transition_precondition_failed" {
-		t.Fatalf("want transition_precondition_failed, got %v", err)
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want validation_failed, got %v", err)
 	}
 	events, err := ctrl.AuditStore.Latest(20)
 	if err != nil {
@@ -70,11 +70,34 @@ func TestProcessControllerTransitionErrorDoesNotAuditAccepted(t *testing.T) {
 		if e.Decision == "accepted" {
 			t.Fatalf("transition error must not audit accepted: %+v", events)
 		}
-		if e.Decision == "rejected" && strings.Contains(strings.Join(e.ValidatorErrors, ";"), "actionable findings") {
+		if e.Decision == "rejected" && strings.Contains(strings.Join(e.ValidatorErrors, ";"), "finding missing required") {
 			rejected = true
 		}
 	}
 	if !rejected {
 		t.Fatalf("missing rejected transition audit: %+v", events)
 	}
+}
+
+func TestProcessControllerAuditsProviderError(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.Err = app.NewError(app.CategoryProvider, "network", "network down", nil)
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "provider_error", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err == nil || app.AsError(err).Code != "network" {
+		t.Fatalf("want provider network error, got %v", err)
+	}
+	events, err := ctrl.AuditStore.Latest(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.SessionID == "provider_error" && e.Decision == "rejected" && strings.Contains(strings.Join(e.ValidatorErrors, ";"), "network down") {
+			return
+		}
+	}
+	t.Fatalf("missing provider error audit: %+v", events)
 }

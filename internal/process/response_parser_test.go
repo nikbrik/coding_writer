@@ -57,6 +57,14 @@ func TestParseStripsMarkdownFence(t *testing.T) {
 	}
 }
 
+func TestParseStripsUppercaseMarkdownFence(t *testing.T) {
+	raw := "```JSON\n{\"stage\":\"planning\",\"summary\":\"s\",\"assumptions\":[],\"acceptance_criteria\":[\"c\"],\"plan\":[\"p\"],\"open_questions\":[],\"readiness\":\"needs_user_input\"}\n```"
+	_, err := Parse(app.StagePlanning, ActionPlanTask, raw)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParseNoStageField(t *testing.T) {
 	_, err := Parse(app.StageExecution, ActionExecutePlanStep, `{"summary":"x"}`)
 	if err == nil {

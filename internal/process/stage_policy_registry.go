@@ -1,10 +1,6 @@
 package process
 
-import (
-	"encoding/json"
-
-	"github.com/nikbrik/coding_writer/internal/app"
-)
+import "github.com/nikbrik/coding_writer/internal/app"
 
 // StagePolicyRegistry holds the canonical trusted policies for each stage.
 type StagePolicyRegistry struct {
@@ -20,15 +16,12 @@ func (r *StagePolicyRegistry) PolicyFor(stage app.TaskStage) (StagePolicy, error
 	if !ok {
 		return StagePolicy{}, app.NewError(app.CategoryValidation, "unknown_stage", "no process policy for stage", nil)
 	}
+	policy.AllowedActions = append([]ActionKind(nil), policy.AllowedActions...)
+	policy.ForbiddenActions = append([]ActionKind(nil), policy.ForbiddenActions...)
 	return policy, nil
 }
 
 func buildPolicies() map[app.TaskStage]StagePolicy {
-	planningSchema, _ := json.MarshalIndent(&PlanningOutput{}, "", "  ")
-	executionSchema, _ := json.MarshalIndent(&ExecutionOutput{}, "", "  ")
-	validationSchema, _ := json.MarshalIndent(&ValidationOutput{}, "", "  ")
-	doneSchema, _ := json.MarshalIndent(&DoneOutput{}, "", "  ")
-
 	return map[app.TaskStage]StagePolicy{
 		app.StagePlanning: {
 			Stage:          app.StagePlanning,
@@ -41,7 +34,7 @@ func buildPolicies() map[app.TaskStage]StagePolicy {
 				ActionVerifyCriteria,
 				ActionSummarizeDone,
 			},
-			OutputSchema: string(planningSchema),
+			OutputSchema: planningSchemaText(),
 			Permissions:  P0Permissions(),
 		},
 		app.StageExecution: {
@@ -55,7 +48,7 @@ func buildPolicies() map[app.TaskStage]StagePolicy {
 				ActionVerifyCriteria,
 				ActionSummarizeDone,
 			},
-			OutputSchema: string(executionSchema),
+			OutputSchema: executionSchemaText(),
 			Permissions:  P0Permissions(),
 		},
 		app.StageValidation: {
@@ -69,7 +62,7 @@ func buildPolicies() map[app.TaskStage]StagePolicy {
 				ActionSummarizeExecution,
 				ActionSummarizeDone,
 			},
-			OutputSchema: string(validationSchema),
+			OutputSchema: validationSchemaText(),
 			Permissions:  P0Permissions(),
 		},
 		app.StageDone: {
@@ -85,8 +78,52 @@ func buildPolicies() map[app.TaskStage]StagePolicy {
 				ActionVerifyCriteria,
 				ActionProposeTransition,
 			},
-			OutputSchema: string(doneSchema),
+			OutputSchema: doneSchemaText(),
 			Permissions:  P0Permissions(),
 		},
 	}
+}
+
+func planningSchemaText() string {
+	return `{
+  "stage": "planning",
+  "summary": "string, required",
+  "assumptions": ["string"],
+  "acceptance_criteria": ["string"],
+  "plan": ["string"],
+  "open_questions": ["string"],
+  "readiness": "needs_user_input | ready_for_execution_proposal"
+}`
+}
+
+func executionSchemaText() string {
+	return `{
+  "stage": "execution",
+  "summary": "string, required",
+  "changed_artifacts": ["string"],
+  "verification": ["string; use 'not run' unless trusted tool evidence exists"],
+  "blockers": ["string"],
+  "next_signal": "continue_execution | planning_required | ready_for_validation"
+}`
+}
+
+func validationSchemaText() string {
+	return `{
+  "stage": "validation",
+  "findings": [{"severity":"blocker | high | medium | low","location":"string","problem":"string","fix":"string"}],
+  "passed_checks": ["string"],
+  "missing_evidence": ["string"],
+  "residual_risks": ["string"],
+  "verdict": "needs_execution_fixes | blocked_missing_evidence | ready_for_done"
+}`
+}
+
+func doneSchemaText() string {
+	return `{
+  "stage": "done",
+  "summary": "string, required",
+  "acceptance_status": ["string"],
+  "validation_evidence": ["string"],
+  "follow_up_task_proposals": ["string"]
+}`
 }

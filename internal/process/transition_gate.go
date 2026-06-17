@@ -116,7 +116,7 @@ func hasActionableFinding(findings []ValidationFinding) bool {
 
 func hasBlockerOrHigh(findings []ValidationFinding) bool {
 	for _, f := range findings {
-		if f.Severity == "blocker" || f.Severity == "high" {
+		if isBlockerOrHighSeverity(f.Severity) {
 			return true
 		}
 	}

@@ -182,8 +182,6 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	rt.Process.Profiles = rt.Profiles
 	rt.Process.Memory = rt.Memory
 	rt.Process.Proposals = rt.Proposals
-	rt.Process.Classifier = rt.ensureClassifier()
-	rt.Process.Provider = rt.ensureProvider()
 	rt.Process.Model = rt.Config.ActiveModel
 	rt.Process.MemoryModel = rt.Config.MemoryModel
 	rt.Process.Builder = rt.ensureBuilder()
@@ -192,6 +190,17 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	rt.Process.RetryController = rt.RetryController
 	rt.Process.AuditStore = rt.AuditStore
 	return rt.Process
+}
+
+func (rt *runtime) preflightProcess(input process.ExchangeInput) error {
+	return rt.ensureProcessController().Preflight(input)
+}
+
+func (rt *runtime) attachProviderToProcess() *process.ProcessController {
+	pc := rt.ensureProcessController()
+	pc.Provider = rt.ensureProvider()
+	pc.Classifier = rt.ensureClassifier()
+	return pc
 }
 
 func chooseProvider(cfg app.AppConfig) providers.LLMProvider {
@@ -244,6 +253,9 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
 				}
 				if !chatOpts.RenderPrompt {
+					if err := rt.preflightProcess(process.ExchangeInput{SessionID: "", Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
+						return err
+					}
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
@@ -280,8 +292,7 @@ type chatResult struct {
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool) (chatResult, error) {
-	pc := rt.ensureProcessController()
-	if err := pc.Preflight(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
+	if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
 	if !renderOnly {
@@ -291,6 +302,10 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		if err := validateModelID(ctx, rt.ensureProvider(), rt.Config.ActiveModel); err != nil {
 			return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 		}
+	}
+	pc := rt.ensureProcessController()
+	if !renderOnly {
+		pc = rt.attachProviderToProcess()
 	}
 	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel}
@@ -331,6 +346,11 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 			if done {
 				return nil
 			}
+			continue
+		}
+		if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: line}); err != nil {
+			failed = true
+			_, _ = fmt.Fprintln(diag, err.Error())
 			continue
 		}
 		rt.ensureProvider()

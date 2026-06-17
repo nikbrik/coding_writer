@@ -103,6 +103,50 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 	return record, nil
 }
 
+func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, userContent, assistantContent string) (app.MemoryRecord, app.MemoryRecord, error) {
+	if sessionID == "" {
+		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryValidation, "missing_session", "short memory requires session id", nil)
+	}
+	if validation.HasSecret(userContent) || validation.HasSecret(assistantContent) {
+		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like content cannot be saved", nil)
+	}
+	if strings.TrimSpace(userContent) == "" || strings.TrimSpace(assistantContent) == "" {
+		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryValidation, "empty_memory", "memory content is empty", nil)
+	}
+	path, err := shortPath(m.StorageDir, sessionID)
+	if err != nil {
+		return app.MemoryRecord{}, app.MemoryRecord{}, err
+	}
+	if dir, err := sessionDir(m.StorageDir, sessionID); err == nil {
+		_ = os.WriteFile(filepath.Join(dir, ".last_activity"), []byte{}, 0o600)
+	}
+	now := time.Now().UTC()
+	userRecord := app.MemoryRecord{
+		ID:        app.NewID("mem"),
+		Layer:     app.LayerShort,
+		Kind:      "message_user",
+		Content:   strings.TrimSpace(userContent),
+		Source:    "chat",
+		SessionID: sessionID,
+		CreatedAt: now,
+	}
+	assistantRecord := app.MemoryRecord{
+		ID:        app.NewID("mem"),
+		Layer:     app.LayerShort,
+		Kind:      "message_assistant",
+		Content:   strings.TrimSpace(assistantContent),
+		Source:    "chat",
+		SessionID: sessionID,
+		CreatedAt: now,
+	}
+	if err := storage.UpdateJSONL[app.MemoryRecord](path, func(records []app.MemoryRecord) ([]app.MemoryRecord, error) {
+		return append(records, userRecord, assistantRecord), nil
+	}); err != nil {
+		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryStorage, "memory_write", err.Error(), err)
+	}
+	return userRecord, assistantRecord, nil
+}
+
 func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, taskID string) ([]app.MemoryRecord, error) {
 	switch layer {
 	case app.LayerShort:
@@ -165,12 +209,12 @@ func (m *Manager) ClearShort(ctx context.Context, sessionID string) error {
 }
 
 const (
-	shortMemoryMaxRecords  = 12
-	shortMemoryMaxBytes    = 6000
-	workMemoryMaxRecords   = 20
-	workMemoryMaxBytes     = 12000
-	longMemoryMaxRecords   = 20
-	longMemoryMaxBytes     = 12000
+	shortMemoryMaxRecords = 12
+	shortMemoryMaxBytes   = 6000
+	workMemoryMaxRecords  = 20
+	workMemoryMaxBytes    = 12000
+	longMemoryMaxRecords  = 20
+	longMemoryMaxBytes    = 12000
 )
 
 func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID, profileID string) (app.MemoryBundle, error) {
