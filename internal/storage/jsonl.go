@@ -2,8 +2,10 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -57,6 +59,10 @@ func UpdateJSONL[T any](path string, update func([]T) ([]T, error)) error {
 }
 
 func withJSONLLock(path string, createDir bool, fn func() error) error {
+	return WithFileLock(path, createDir, fn)
+}
+
+func WithFileLock(path string, createDir bool, fn func() error) error {
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
@@ -93,11 +99,18 @@ func readJSONLUnlocked[T any](path string) ([]T, error) {
 		return nil, errStorage("open", path, err)
 	}
 	defer f.Close()
+	reader := bufio.NewReader(f)
 	var out []T
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, errStorage("read", path, err)
+		}
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 			continue
 		}
 		var item T
@@ -105,9 +118,9 @@ func readJSONLUnlocked[T any](path string) ([]T, error) {
 			return nil, errStorage("broken_json", path, err)
 		}
 		out = append(out, item)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, errStorage("read", path, err)
+		if errors.Is(err, io.EOF) {
+			break
+		}
 	}
 	return out, nil
 }

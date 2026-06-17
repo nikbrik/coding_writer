@@ -26,7 +26,7 @@ func TestDay11EndToEndMemoryProposalApplyInfluence(t *testing.T) {
 	sessionID := "session_day11"
 	query := "Спланируй модуль памяти. Требование: CLI должен поддерживать выбор модели OpenRouter. Я предпочитаю короткие ответы на русском."
 	profile, _ := rt.profiles.Active()
-	bundle, _ := rt.memory.SelectForPrompt(ctx, sessionID, taskState.ID)
+	bundle, _ := rt.memory.SelectForPrompt(ctx, sessionID, taskState.ID, profile.ID)
 	messages, err := rt.builder.Build(prompting.BuildInput{Profile: profile, Task: &taskState, Memory: bundle, Query: query})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestDay11EndToEndMemoryProposalApplyInfluence(t *testing.T) {
 	if err := rt.proposals.Save(ctx, proposal); err != nil {
 		t.Fatal(err)
 	}
-	applyResult, err := rt.proposals.Apply(ctx, memory.ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: sessionID, TaskID: taskState.ID})
+	applyResult, err := rt.proposals.Apply(ctx, memory.ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: sessionID, TaskID: taskState.ID, ProfileID: profile.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestDay11EndToEndMemoryProposalApplyInfluence(t *testing.T) {
 			}
 		}
 	}
-	bundle, _ = rt.memory.SelectForPrompt(ctx, sessionID, taskState.ID)
+	bundle, _ = rt.memory.SelectForPrompt(ctx, sessionID, taskState.ID, profile.ID)
 	nextMessages, err := rt.builder.Build(prompting.BuildInput{Profile: profile, Task: &taskState, Memory: bundle, Query: "Продолжай задачу."})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestDay13PauseResumeAfterRestartUsesWorkingMemory(t *testing.T) {
 		t.Fatalf("resume lost context: %+v", resumed)
 	}
 	profile, _ := rt.profiles.Active()
-	bundle, _ := rt.memory.SelectForPrompt(ctx, "session_day13", resumed.ID)
+	bundle, _ := rt.memory.SelectForPrompt(ctx, "session_day13", resumed.ID, profile.ID)
 	messages, err := rt.builder.Build(prompting.BuildInput{Profile: profile, Task: &resumed, Memory: bundle, Query: "Продолжай задачу."})
 	if err != nil {
 		t.Fatal(err)

@@ -1,7 +1,7 @@
 ---
 description: Product and systems designer reviewer for consensus reviews. Use as a subagent when checking plans, docs, UX, workflows, information architecture, product risk, or system behavior.
 mode: subagent
-steps: 16
+steps: 100
 hidden: false
 color: "#8250DF"
 permission:

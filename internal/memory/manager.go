@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ type SaveInput struct {
 	Kind             string
 	Content          string
 	Source           string
+	Scope            string
+	ProfileID        string
+	UserID           string
 	SessionID        string
 	TaskID           string
 	ProposalID       string
@@ -44,12 +48,22 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 	if input.Source == "" {
 		input.Source = "user"
 	}
+	if input.Layer == app.LayerLong && input.Scope == "" {
+		if input.ProfileID != "" {
+			input.Scope = "profile"
+		} else {
+			input.Scope = "global"
+		}
+	}
 	record := app.MemoryRecord{
 		ID:               app.NewID("mem"),
 		Layer:            input.Layer,
 		Kind:             input.Kind,
 		Content:          strings.TrimSpace(input.Content),
 		Source:           input.Source,
+		Scope:            input.Scope,
+		ProfileID:        input.ProfileID,
+		UserID:           input.UserID,
 		Tags:             input.Tags,
 		TaskID:           input.TaskID,
 		SessionID:        input.SessionID,
@@ -139,7 +153,7 @@ func (m *Manager) ClearShort(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID string) (app.MemoryBundle, error) {
+func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID, profileID string) (app.MemoryBundle, error) {
 	var bundle app.MemoryBundle
 	if sessionID != "" {
 		short, err := m.List(ctx, app.LayerShort, sessionID, "")
@@ -159,15 +173,34 @@ func (m *Manager) SelectForPrompt(ctx context.Context, sessionID, taskID string)
 	if err != nil {
 		return bundle, err
 	}
-	bundle.Long = latest(long, 20)
+	bundle.Long = latest(filterLongForProfile(long, profileID), 20)
 	return bundle, nil
 }
 
 func latest(records []app.MemoryRecord, n int) []app.MemoryRecord {
+	sort.SliceStable(records, func(i, j int) bool { return records[i].CreatedAt.Before(records[j].CreatedAt) })
 	if len(records) <= n {
 		return records
 	}
 	return records[len(records)-n:]
+}
+
+func filterLongForProfile(records []app.MemoryRecord, profileID string) []app.MemoryRecord {
+	out := make([]app.MemoryRecord, 0, len(records))
+	for _, record := range records {
+		if record.Layer != app.LayerLong {
+			out = append(out, record)
+			continue
+		}
+		scope := record.Scope
+		if scope == "" {
+			scope = "global"
+		}
+		if scope == "global" || record.ProfileID == "" && scope != "profile" || record.ProfileID == profileID {
+			out = append(out, record)
+		}
+	}
+	return out
 }
 
 func (m *Manager) LatestExchange(ctx context.Context, sessionID string) (app.MemoryRecord, app.MemoryRecord, error) {

@@ -12,11 +12,12 @@ import (
 const DefaultOpenRouterBaseURL = "https://openrouter.ai/api/v1"
 
 type ConfigOptions struct {
-	StorageDir        string
-	ActiveModel       string
-	MemoryModel       string
-	ActiveProfileID   string
-	OpenRouterBaseURL string
+	StorageDir             string
+	ActiveModel            string
+	MemoryModel            string
+	ActiveProfileID        string
+	OpenRouterBaseURL      string
+	TrustOpenRouterBaseURL bool
 }
 
 type ConfigManager struct {
@@ -126,6 +127,9 @@ func (m *ConfigManager) LoadEffective(opts ConfigOptions) (AppConfig, error) {
 	if err := validateBaseURL(cfg.OpenRouterBaseURL); err != nil {
 		return cfg, err
 	}
+	if err := validateTrustedBaseURL(cfg.OpenRouterBaseURL, cfg.TrustedOpenRouterBaseURLs, opts.TrustOpenRouterBaseURL); err != nil {
+		return cfg, err
+	}
 	if cfg.MemoryModel == "" {
 		cfg.MemoryModel = cfg.ActiveModel
 	}
@@ -160,6 +164,18 @@ func validateBaseURL(raw string) error {
 		return NewError(CategoryValidation, "invalid_base_url", "OpenRouter base URL must use HTTPS", nil)
 	}
 	return nil
+}
+
+func validateTrustedBaseURL(raw string, trusted []string, oneShotTrust bool) error {
+	if raw == "" || raw == DefaultOpenRouterBaseURL || oneShotTrust {
+		return nil
+	}
+	for _, item := range trusted {
+		if item == raw {
+			return nil
+		}
+	}
+	return NewError(CategoryValidation, "untrusted_base_url", "non-default OpenRouter base URL requires explicit trust", nil)
 }
 
 func (m *ConfigManager) Update(fn func(*AppConfig) error) (AppConfig, error) {

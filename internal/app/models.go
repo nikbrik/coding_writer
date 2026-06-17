@@ -31,6 +31,9 @@ type MemoryRecord struct {
 	Kind             string      `json:"kind"`
 	Content          string      `json:"content"`
 	Source           string      `json:"source"`
+	Scope            string      `json:"scope,omitempty"`
+	ProfileID        string      `json:"profile_id,omitempty"`
+	UserID           string      `json:"user_id,omitempty"`
 	Tags             []string    `json:"tags,omitempty"`
 	TaskID           string      `json:"task_id,omitempty"`
 	SessionID        string      `json:"session_id,omitempty"`
@@ -74,6 +77,9 @@ type ProposedMemoryRecord struct {
 	Layer          ProposedMemoryLayer  `json:"layer"`
 	Kind           string               `json:"kind"`
 	Content        string               `json:"content"`
+	Scope          string               `json:"scope,omitempty"`
+	ProfileID      string               `json:"profile_id,omitempty"`
+	UserID         string               `json:"user_id,omitempty"`
 	Reason         string               `json:"reason"`
 	Confidence     float64              `json:"confidence"`
 	Status         ProposalRecordStatus `json:"status"`
@@ -139,11 +145,12 @@ type TaskState struct {
 }
 
 type AppConfig struct {
-	ActiveProfileID   string `json:"active_profile_id,omitempty"`
-	ActiveModel       string `json:"active_model,omitempty"`
-	StorageDir        string `json:"storage_dir"`
-	OpenRouterBaseURL string `json:"openrouter_base_url"`
-	MemoryModel       string `json:"memory_model,omitempty"`
+	ActiveProfileID           string   `json:"active_profile_id,omitempty"`
+	ActiveModel               string   `json:"active_model,omitempty"`
+	StorageDir                string   `json:"storage_dir"`
+	OpenRouterBaseURL         string   `json:"openrouter_base_url"`
+	TrustedOpenRouterBaseURLs []string `json:"trusted_openrouter_base_urls,omitempty"`
+	MemoryModel               string   `json:"memory_model,omitempty"`
 }
 
 type MemoryBundle struct {

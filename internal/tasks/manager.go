@@ -238,29 +238,31 @@ func (m *Manager) saveBoth(state app.TaskState) error {
 }
 
 func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnapshot) error {
-	tasksDir, err := storage.SafeJoin(m.StorageDir, "tasks")
-	if err != nil {
-		return app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe task path", err)
-	}
-	if err := storage.EnsureDir(tasksDir); err != nil {
-		return app.NewError(app.CategoryStorage, "task_dir", err.Error(), err)
-	}
-	if expected != nil {
-		if err := m.ensureCurrentUnchanged(*expected); err != nil {
+	return storage.WithFileLock(m.currentPath(), true, func() error {
+		tasksDir, err := storage.SafeJoin(m.StorageDir, "tasks")
+		if err != nil {
+			return app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe task path", err)
+		}
+		if err := storage.EnsureDir(tasksDir); err != nil {
+			return app.NewError(app.CategoryStorage, "task_dir", err.Error(), err)
+		}
+		if expected != nil {
+			if err := m.ensureCurrentUnchanged(*expected); err != nil {
+				return err
+			}
+		}
+		path, err := m.taskPath(state.ID)
+		if err != nil {
 			return err
 		}
-	}
-	path, err := m.taskPath(state.ID)
-	if err != nil {
-		return err
-	}
-	if err := storage.AtomicWriteJSON(path, state); err != nil {
-		return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
-	}
-	if err := storage.AtomicWriteJSON(m.currentPath(), state); err != nil {
-		return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
-	}
-	return nil
+		if err := storage.AtomicWriteJSON(path, state); err != nil {
+			return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
+		}
+		if err := storage.AtomicWriteJSON(m.currentPath(), state); err != nil {
+			return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
+		}
+		return nil
+	})
 }
 
 func (m *Manager) ensureCurrentUnchanged(expected currentSnapshot) error {

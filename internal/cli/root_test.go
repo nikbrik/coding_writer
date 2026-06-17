@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/providers"
 )
 
 func TestChatOnceRenderPromptJSONUsesFakeProviderAndProfile(t *testing.T) {
@@ -59,15 +60,15 @@ func TestInvalidModelSlashDoesNotMutateConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if _, err := handleSlash(context.Background(), &out, rt, "session_test", "/model missing/model"); err == nil {
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", "/model missing/model"); err == nil {
 		t.Fatal("expected invalid model error")
 	}
 	cfg, err := app.NewConfigManager(storageDir).Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ActiveModel != "fake/model" {
-		t.Fatalf("invalid model mutated config: %+v", cfg)
+	if cfg.ActiveModel != "" {
+		t.Fatalf("flag model persisted into config: %+v", cfg)
 	}
 }
 
@@ -84,8 +85,8 @@ func TestInvalidModelFlagDoesNotMutateConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ActiveModel != "fake/model" {
-		t.Fatalf("invalid model flag mutated config: %+v", cfg)
+	if cfg.ActiveModel != "" {
+		t.Fatalf("model flag persisted into config: %+v", cfg)
 	}
 }
 
@@ -173,8 +174,97 @@ func TestChatTextShowsProposalRecords(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Memory proposal:") || !strings.Contains(out.String(), "[work]") || !strings.Contains(out.String(), "[long]") {
+	if !strings.Contains(out.String(), "Memory proposal:") || !strings.Contains(out.String(), "[work] pending") || !strings.Contains(out.String(), "Next: assistant memory apply") {
 		t.Fatalf("proposal records not visible: %s", out.String())
+	}
+}
+
+func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Answer == "" || len(result.Warnings) == 0 || result.Proposal != nil {
+		t.Fatalf("classifier failure did not return answer with warning: %+v", result)
+	}
+}
+
+func TestCustomOpenRouterBaseURLRequiresTrustAndDoesNotPersist(t *testing.T) {
+	storageDir := t.TempDir()
+	_, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "openai/gpt-4.1-mini", OpenRouterBaseURL: "https://gateway.example/api"})
+	if err == nil || !strings.Contains(err.Error(), "untrusted_base_url") {
+		t.Fatalf("want untrusted_base_url, got %v", err)
+	}
+	if _, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "openai/gpt-4.1-mini", OpenRouterBaseURL: "https://gateway.example/api", TrustOpenRouterBaseURL: true}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := app.NewConfigManager(storageDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.OpenRouterBaseURL != app.DefaultOpenRouterBaseURL {
+		t.Fatalf("trusted one-shot base URL persisted: %+v", cfg)
+	}
+}
+
+func TestProfilesCreateSetShowCommands(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "profiles", "create", "custom", "--display-name", "Custom", "--style", "language=en", "--format", "structure=bullets", "--constraint", "be exact"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cmd = newRootCommand(&globalOptions{})
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "profiles", "set", "custom"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cmd = newRootCommand(&globalOptions{})
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "profiles", "show"})
+	if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), `"id": "custom"`) {
+		t.Fatalf("show active profile failed: err=%v out=%s", err, out.String())
+	}
+}
+
+func TestJSONREPLRejectedAndBatchErrorsUseStderrAndNonZero(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "chat"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "json_repl_unsupported") {
+		t.Fatalf("want json_repl_unsupported, got %v", err)
+	}
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, diag bytes.Buffer
+	err = runREPL(context.Background(), strings.NewReader("/unknown\n"), &out, &diag, rt)
+	if err == nil || !strings.Contains(err.Error(), "batch_failed") || out.Len() != 0 || !strings.Contains(diag.String(), "unknown slash command") {
+		t.Fatalf("bad batch error routing err=%v out=%q diag=%q", err, out.String(), diag.String())
+	}
+}
+
+func TestParseEditPreservesCommaContent(t *testing.T) {
+	id, edit, err := parseEdit("rec1:layer=long,content=foo, bar, baz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "rec1" || edit.Layer != app.ProposedLayerLong || edit.Content != "foo, bar, baz" {
+		t.Fatalf("bad edit parse: id=%s edit=%+v", id, edit)
 	}
 }
 
@@ -230,7 +320,7 @@ func TestPausedTaskBlocksWorkSaveSlash(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if _, err := handleSlash(context.Background(), &out, rt, "session_test", "/save work must not save"); err == nil || !strings.Contains(err.Error(), "task_paused") {
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", "/save work must not save"); err == nil || !strings.Contains(err.Error(), "task_paused") {
 		t.Fatalf("want task_paused, got %v", err)
 	}
 }

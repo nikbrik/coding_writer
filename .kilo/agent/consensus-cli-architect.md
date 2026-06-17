@@ -1,7 +1,7 @@
 ---
 description: CLI utility architect reviewer for consensus reviews. Use as a subagent when checking command-line tools, developer UX, config behavior, scripts, automation plans, or CLI-related docs/code.
 mode: subagent
-steps: 16
+steps: 100
 hidden: false
 color: "#2DA44E"
 permission:

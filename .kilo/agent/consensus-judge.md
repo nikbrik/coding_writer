@@ -1,7 +1,7 @@
 ---
 description: Judge and arbiter for consensus reviews. Use as a subagent to aggregate expert artifacts, deduplicate findings, run consensus synthesis, and produce final verdicts.
 mode: subagent
-steps: 25
+steps: 100
 hidden: false
 color: "#57606A"
 permission:

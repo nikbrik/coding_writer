@@ -93,3 +93,25 @@ func TestOpenRouterRetriesTemporaryHTTP(t *testing.T) {
 		t.Fatalf("bad retry result calls=%d retry=%d res=%+v", calls, res.RetryCount, res)
 	}
 }
+
+func TestOpenRouterRetryBackoffRespectsCancellation(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	provider := NewOpenRouterProvider(server.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	_, err := provider.Complete(ctx, CompletionRequest{Purpose: PurposeChat, Model: "fake/model", Messages: []app.ChatMessage{{Role: app.RoleUser, Content: "hi"}}})
+	if err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("want canceled error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 80*time.Millisecond {
+		t.Fatalf("cancellation waited for full backoff: %s", elapsed)
+	}
+}

@@ -1,7 +1,7 @@
 ---
 description: Senior Go developer reviewer for consensus reviews. Use as a subagent when checking Go code, implementation plans, architecture, tests, maintainability, or backend engineering tradeoffs.
 mode: subagent
-steps: 16
+steps: 100
 hidden: false
 color: "#00ADD8"
 permission:

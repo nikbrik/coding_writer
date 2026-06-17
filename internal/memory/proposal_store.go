@@ -23,6 +23,8 @@ type ApplyOptions struct {
 	Edits      map[string]ProposalEdit
 	SessionID  string
 	TaskID     string
+	ProfileID  string
+	Scope      string
 }
 
 type ProposalEdit struct {
@@ -33,6 +35,17 @@ type ProposalEdit struct {
 type ApplyResult struct {
 	Proposal     app.MemoryProposal `json:"proposal"`
 	SavedRecords []app.MemoryRecord `json:"saved_records"`
+}
+
+type pendingMemorySave struct {
+	ProposalID string
+	RecordID   string
+	Layer      app.MemoryLayer
+	Kind       string
+	Content    string
+	Scope      string
+	ProfileID  string
+	UserID     string
 }
 
 func NewProposalStore(storageDir string, manager *Manager) *ProposalStore {
@@ -89,7 +102,7 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 	if err != nil {
 		return ApplyResult{}, err
 	}
-	var saved []app.MemoryRecord
+	var pending []pendingMemorySave
 	var appliedProposal app.MemoryProposal
 	if err := storage.UpdateJSONL(path, func(proposals []app.MemoryProposal) ([]app.MemoryProposal, error) {
 		idx := -1
@@ -146,18 +159,26 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 			if err != nil {
 				return proposals, err
 			}
-			if existing, ok, err := s.Memory.FindByProposalRecord(ctx, proposal.ID, record.ID, opts.SessionID, opts.TaskID); err != nil {
-				return proposals, err
-			} else if ok {
-				record.SavedRecordID = existing.ID
-				continue
+			scope := record.Scope
+			profileID := record.ProfileID
+			if layer == app.LayerLong {
+				if opts.Scope != "" {
+					scope = opts.Scope
+				}
+				if profileID == "" {
+					profileID = opts.ProfileID
+				}
+				if scope == "" {
+					if profileID != "" {
+						scope = "profile"
+					} else {
+						scope = "global"
+					}
+				}
+				record.Scope = scope
+				record.ProfileID = profileID
 			}
-			savedRecord, err := s.Memory.Save(ctx, SaveInput{Layer: layer, Kind: record.Kind, Content: appliedContent, Source: "proposal", SessionID: opts.SessionID, TaskID: opts.TaskID, ProposalID: proposal.ID, ProposalRecordID: record.ID})
-			if err != nil {
-				return proposals, err
-			}
-			record.SavedRecordID = savedRecord.ID
-			saved = append(saved, savedRecord)
+			pending = append(pending, pendingMemorySave{ProposalID: proposal.ID, RecordID: record.ID, Layer: layer, Kind: record.Kind, Content: appliedContent, Scope: scope, ProfileID: profileID, UserID: record.UserID})
 		}
 		proposals[idx] = proposal
 		appliedProposal = proposal
@@ -168,6 +189,46 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 			return ApplyResult{}, err
 		}
 		return ApplyResult{}, app.NewError(app.CategoryStorage, "proposal_update", err.Error(), err)
+	}
+	saved := make([]app.MemoryRecord, 0, len(pending))
+	savedByRecord := map[string]string{}
+	for _, item := range pending {
+		if existing, ok, err := s.Memory.FindByProposalRecord(ctx, item.ProposalID, item.RecordID, opts.SessionID, opts.TaskID); err != nil {
+			return ApplyResult{}, err
+		} else if ok {
+			savedByRecord[item.RecordID] = existing.ID
+			continue
+		}
+		savedRecord, err := s.Memory.Save(ctx, SaveInput{Layer: item.Layer, Kind: item.Kind, Content: item.Content, Source: "proposal", Scope: item.Scope, ProfileID: item.ProfileID, UserID: item.UserID, SessionID: opts.SessionID, TaskID: opts.TaskID, ProposalID: item.ProposalID, ProposalRecordID: item.RecordID})
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		savedByRecord[item.RecordID] = savedRecord.ID
+		saved = append(saved, savedRecord)
+	}
+	if len(savedByRecord) > 0 {
+		if err := storage.UpdateJSONL(path, func(proposals []app.MemoryProposal) ([]app.MemoryProposal, error) {
+			idx := -1
+			for i := range proposals {
+				if proposals[i].ID == appliedProposal.ID {
+					idx = i
+				}
+			}
+			if idx < 0 {
+				return proposals, app.NewError(app.CategoryValidation, "missing_proposal", "memory proposal not found", nil)
+			}
+			proposal := proposals[idx]
+			for i := range proposal.Records {
+				if id := savedByRecord[proposal.Records[i].ID]; id != "" && proposal.Records[i].SavedRecordID == "" {
+					proposal.Records[i].SavedRecordID = id
+				}
+			}
+			proposals[idx] = proposal
+			appliedProposal = proposal
+			return proposals, nil
+		}); err != nil {
+			return ApplyResult{}, app.NewError(app.CategoryStorage, "proposal_reconcile", err.Error(), err)
+		}
 	}
 	return ApplyResult{Proposal: appliedProposal, SavedRecords: saved}, nil
 }

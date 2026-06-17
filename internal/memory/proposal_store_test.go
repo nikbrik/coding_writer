@@ -29,7 +29,7 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 	if err := store.Save(ctx, proposal); err != nil {
 		t.Fatal(err)
 	}
-	result, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: "session_test", TaskID: taskState.ID, RejectIDs: map[string]bool{"r_reject": true}, Edits: map[string]ProposalEdit{"r_work": {Layer: app.ProposedLayerLong, Content: "edited long"}}})
+	result, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: "session_test", TaskID: taskState.ID, ProfileID: "student", RejectIDs: map[string]bool{"r_reject": true}, Edits: map[string]ProposalEdit{"r_work": {Layer: app.ProposedLayerLong, Content: "edited long"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,6 +55,9 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 	for _, record := range longRecords {
 		if record.ProposalID == proposal.ID && record.ProposalRecordID == "" {
 			t.Fatalf("saved proposal record id missing: %+v", record)
+		}
+		if record.Scope != "profile" || record.ProfileID != "student" {
+			t.Fatalf("long proposal memory missing profile scope: %+v", record)
 		}
 	}
 }

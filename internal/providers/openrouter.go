@@ -97,7 +97,19 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 		if !retry || ctx.Err() != nil {
 			return CompletionResponse{}, err
 		}
-		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+		backoff := time.Duration(attempt+1) * 100 * time.Millisecond
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return CompletionResponse{}, app.NewError(app.CategoryProvider, "canceled", "OpenRouter request canceled", ctx.Err())
+		case <-timer.C:
+		}
 	}
 	if lastErr != nil {
 		return CompletionResponse{}, lastErr

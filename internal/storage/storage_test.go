@@ -85,3 +85,18 @@ func TestConcurrentJSONLAppend(t *testing.T) {
 		t.Fatalf("want %d records, got %d", count, len(records))
 	}
 }
+
+func TestReadJSONLHandlesLargeRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large.jsonl")
+	large := strings.Repeat("x", 128*1024)
+	if err := AppendJSONL(path, map[string]string{"content": large}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := ReadJSONL[map[string]string](path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0]["content"] != large {
+		t.Fatalf("large record did not round-trip: %d", len(records))
+	}
+}
