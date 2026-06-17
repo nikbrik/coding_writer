@@ -1,1 +1,1 @@
-always use ast-index for search files and words first
+always update ast-index before work and then use ast-index for search files and words first

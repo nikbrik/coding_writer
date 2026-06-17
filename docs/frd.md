@@ -77,14 +77,15 @@ FRD is source of truth for the implementation contract together with PRD and arc
 
 - `stage`: `planning`, `execution`, `validation`, `done`.
 - `status`: `active`, `paused`.
-- `expected_action`: `user_input`, `llm_response`, `tool_result`, `user_confirmation`, `none`.
-- `tool_result` remains in MVP only if the Day 13 flow truly needs it; otherwise remove it from all docs.
+- `expected_action`: `user_input`, `llm_response`, `user_confirmation`, `none`.
+- `tool_result` is out of P0 because MVP has no tool execution; it may return in P1 only with an explicit tool-result lifecycle.
 - completion is represented by `stage=done` and `expected_action=none`; `status=done` is not part of MVP.
 
 #### Command contract
 
 - top-level and slash commands must map to one canonical command tree;
 - P0 commands are only the ones required for Day 11/12/13 demo and smoke tests.
+- the command tree must define P0/P1 status, top-level and slash forms, JSON output, exit behavior, and whether a command calls OpenRouter.
 
 #### Memory layers
 
@@ -109,11 +110,12 @@ MVP policy:
 
 - default config/storage root must be documented explicitly;
 - env vars override config;
-- hidden input or local key file is not the default API key flow for MVP.
+- hidden input or local key file is not part of P0 API key flow;
+- first run must show provider data-disclosure before any OpenRouter call.
 
 Acceptance criteria:
 
-- запуск без `.assistant/` не падает;
+- запуск без existing storage root не падает;
 - после `assistant init` появляется `config.json`;
 - после `assistant init` появляется минимум один profile JSON;
 - API key не записывается в `config.json`.
@@ -127,19 +129,22 @@ Acceptance criteria:
 - CLI читает `OPENROUTER_API_KEY` из environment;
 - если ключ отсутствует, CLI сообщает пользователю, что ключ нужен;
 - ключ не должен сохраняться в docs, profiles, memory files, transcripts, audit trail или config;
+- chat и classifier payload проходят локальный pre-provider secret scan до отправки;
 - при 401/403 CLI показывает понятную ошибку.
 
 Privacy requirements:
 
 - classify what categories of data are sent to the provider;
-- allow disabling classifier calls or using a safe fallback path for P0;
+- classifier calls may be disabled only in explicit privacy/debug/offline mode, and that mode is not valid for Day 11 acceptance;
+- deterministic tests may use a fake provider through the same classifier interface, not a bypass;
 - document timeout and retry behavior.
 
 Acceptance criteria:
 
 - при отсутствии ключа запрос к модели не выполняется;
 - при неверном ключе пользователь видит ошибку авторизации;
-- поиск по `.assistant/` не должен находить `OPENROUTER_API_KEY` или bearer token.
+- fake-provider tests prove raw secret-like input never reaches chat/classifier payloads;
+- поиск по storage root не должен находить `OPENROUTER_API_KEY` или bearer token.
 
 ### FR-003. Выбор модели
 
@@ -212,7 +217,7 @@ Profile contract:
 
 Acceptance criteria:
 
-- `/profile create` создаёт файл `.assistant/profiles/<id>.json`;
+- `/profile create` создаёт файл `<storage_root>/profiles/<id>.json`;
 - профиль можно выбрать как active profile;
 - профиль не смешивается с short-term memory.
 
@@ -348,12 +353,19 @@ Acceptance criteria:
 - classifier возвращает strict JSON;
 - JSON содержит records с `layer`, `kind`, `content`, `reason`, `confidence`.
 
+Acceptance boundary:
+
+- Day 11 считается закрытым только если classifier вызван через provider interface и вернул proposal;
+- ручной `/save` и отключённый classifier являются escape hatch/debug режимами, но не Day 11 acceptance;
+- classifier failure не создаёт memory records, кроме redacted failure audit.
+
 Acceptance criteria:
 
 - classifier может вернуть `short`, `work`, `long`, `ignore`;
 - invalid JSON приводит к понятной ошибке или retry;
 - proposal показывается пользователю до сохранения;
 - proposal audit сохраняет, что LLM предложила.
+- fake provider tests проходят тот же classifier/proposal/apply flow без live key.
 
 ### FR-013. Memory proposal review
 
@@ -477,7 +489,7 @@ Acceptance criteria:
 Поведение:
 
 - `/task expect <action>` обновляет `expected_action`;
-- допустимые values: `user_input`, `llm_response`, `tool_result`, `user_confirmation`, `none`;
+- допустимые values: `user_input`, `llm_response`, `user_confirmation`, `none`;
 - invalid action возвращает ошибку;
 - expected_action попадает в PromptBuilder.
 
@@ -505,6 +517,7 @@ Acceptance criteria:
 - pause работает из `planning`;
 - pause работает из `execution`;
 - pause работает из `validation`;
+- pause из `done` является terminal no-op и не открывает задачу заново;
 - после pause `/task status` показывает `paused`;
 - следующий chat prompt содержит warning, что задача paused.
 
@@ -571,7 +584,28 @@ Acceptance criteria:
 - task state идёт раньше working memory;
 - profile block присутствует в каждом prompt;
 - short-term history ограничивается размером окна;
+- untrusted blocks use canonical tagged schema with block id, type, source, trust label, and escaping;
 - PromptBuilder не пишет файлы и не вызывает OpenRouter.
+
+Canonical untrusted block schema:
+
+```text
+<context_block id="profile.active" type="profile" source="storage" trust="untrusted">
+escaped structured data
+</context_block>
+```
+
+Required block types:
+
+- `profile`;
+- `task_state`;
+- `working_memory`;
+- `long_memory`;
+- `short_history`;
+- `classifier_input`;
+- `classifier_output`.
+
+Golden prompt fixtures must include prompt-injection strings inside each untrusted block.
 
 ### FR-024. Chat behavior with paused task
 
@@ -645,7 +679,7 @@ Acceptance criteria:
 
 Redaction rule:
 
-- redact before persistence and before provider calls when feasible;
+- redact or block before persistence and before provider calls;
 - store secret fingerprints or types instead of raw values.
 
 Acceptance criteria:
@@ -660,23 +694,27 @@ Acceptance criteria:
 
 Поведение:
 
-- config хранится в `.assistant/config.json`;
-- profiles хранятся в `.assistant/profiles/*.json`;
-- sessions хранятся в `.assistant/sessions/<session_id>/`;
-- tasks хранятся в `.assistant/tasks/`;
-- long-term memory хранится в `.assistant/long_term/`;
-- logs хранятся в `.assistant/logs/`.
+- normal default storage root is an OS user-data directory with `0700` directories and `0600` sensitive files;
+- repo-local `.assistant/` is explicit demo/test opt-in only, for example `--storage-dir .assistant`;
+- config хранится в `<storage_root>/config.json`;
+- profiles хранятся в `<storage_root>/profiles/*.json`;
+- sessions хранятся в `<storage_root>/sessions/<session_id>/`;
+- tasks хранятся в `<storage_root>/tasks/`;
+- long-term memory хранится в `<storage_root>/long_term/`;
+- logs хранятся в `<storage_root>/logs/`.
 
 Acceptance criteria:
 
 - пользователь может открыть файлы и увидеть memory layers;
 - task state сохраняется между запусками;
-- `.assistant/` должен быть gitignored при реализации.
+- repo-local `.assistant/` должен быть gitignored при demo/test режиме;
+- normal storage root has restrictive permissions.
 
 Storage rule:
 
 - storage writes must be canonical-path safe, atomic, and recoverable;
-- path traversal, unsafe IDs, and symlink writes must be rejected.
+- path traversal, absolute paths, encoded separators, unsafe IDs, symlinked parents, symlinked files, and symlink writes must be rejected;
+- JSON writes use temp file + fsync + rename; JSONL append is locked; proposal apply is idempotent under the same lock.
 
 ### FR-029. Inspection commands
 
@@ -696,7 +734,8 @@ Storage rule:
 P0 scriptability:
 
 - core P0 flows must also be possible via a minimal non-interactive path for smoke tests;
-- stdout is for primary data, stderr for diagnostics.
+- stdout is for primary data, stderr for diagnostics;
+- `--json` is required for smoke-test inspection commands.
 
 Acceptance criteria:
 
@@ -766,9 +805,15 @@ Traceability rule:
 ```text
 assistant init
 assistant chat
+assistant chat --once --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
 assistant profiles
 assistant memory
+assistant memory list <short|work|long> --json
+assistant memory propose --latest --json
+assistant memory apply --proposal <id> --accept all --json
+assistant task status --json
+assistant privacy
 ```
 
 Обязательные команды внутри chat:
@@ -793,8 +838,58 @@ assistant memory
 /memory short
 /memory work
 /memory long
+/privacy
 /clear short
 /exit
+```
+
+Canonical P0 automation matrix:
+
+| Flow | P0 command/protocol | Output | Calls OpenRouter |
+| --- | --- | --- | --- |
+| One-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
+| Render/inspect memory | `assistant memory list <short|work|long> --json` | JSON records | no |
+| Propose memory | `assistant memory propose --latest --json` | JSON proposal with proposal id and record ids | classifier only |
+| Apply memory | `assistant memory apply --proposal <id> --accept all --json` | JSON apply result | no |
+| Reject memory record | `assistant memory apply --proposal <id> --reject <record_id> --json` | JSON apply result | no |
+| Edit memory record | `assistant memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json` | JSON apply result | no |
+| Task status | `assistant task status --json` or `/task status` | JSON/task text | no |
+| Profile switch | `assistant chat --profile <id> ...` or `/profile <id>` | active profile summary | no |
+| Privacy summary | `assistant privacy` or `/privacy` | provider/storage disclosure | no |
+
+P1/debug commands such as `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage`, and top-level `assistant task` subcommands other than `assistant task status --json` are not required for P0 unless all docs and tests explicitly adopt them.
+
+## 6.1. Config, env, flags, and exit codes
+
+Field-level precedence is `CLI flag > env var > config file > default`, except secrets.
+
+| Setting | CLI flag | Env var | Config key | Default | Persisted | P0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| API key | none | `OPENROUTER_API_KEY` | none | none | never | yes |
+| Storage root | `--storage-dir` | `ASSISTANT_STORAGE_DIR` | `storage_dir` | OS user-data dir | yes | yes |
+| Active model | `--model` | `ASSISTANT_MODEL` | `active_model` | none/user selected | yes | yes |
+| Memory model | `--memory-model` | `ASSISTANT_MEMORY_MODEL` | `memory_model` | active model | yes | yes |
+| Active profile | `--profile` | `ASSISTANT_PROFILE` | `active_profile_id` | first profile | yes | yes |
+| OpenRouter base URL | `--openrouter-base-url` | `ASSISTANT_OPENROUTER_BASE_URL` | `openrouter_base_url` | OpenRouter HTTPS endpoint | yes, explicit opt-in | no |
+| JSON output | `--json` | none | none | false | never | yes |
+| Non-interactive mode | `--once` / `--non-interactive` | none | none | false | never | yes |
+
+Exit codes for non-interactive commands:
+
+| Code | Category |
+| --- | --- |
+| `0` | success |
+| `1` | unexpected internal error |
+| `2` | CLI usage, invalid command, missing args |
+| `3` | validation/invariant failure, forbidden transition, secret blocked |
+| `4` | storage, IO, corruption, lock timeout |
+| `5` | provider/auth/model/network/missing API key |
+| `6` | classifier parse/schema/failure |
+
+When `--json` is set, errors use this envelope:
+
+```json
+{"ok":false,"error":{"category":"validation","code":"secret_blocked","message":"...","hint":"..."}}
 ```
 
 ## 7. Data requirements

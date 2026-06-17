@@ -11,7 +11,7 @@
 - работает через терминальный CLI;
 - вызывает OpenRouter для основного ответа;
 - позволяет выбрать модель;
-- хранит runtime state локально в `.assistant/`;
+- хранит runtime state локально в configured storage root: OS user-data directory по умолчанию, repo-local `.assistant/` только как demo/test opt-in;
 - имеет три физически раздельных слоя памяти: `short`, `work`, `long`;
 - после значимого ответа запускает отдельный LLM memory-classification step через OpenRouter;
 - показывает пользователю memory proposal до сохранения;
@@ -72,16 +72,16 @@
 ```text
 stage: planning | execution | validation | done
 status: active | paused
-expected_action: user_input | llm_response | tool_result | user_confirmation | none
+expected_action: user_input | llm_response | user_confirmation | none
 terminal completion: stage=done + expected_action=none
 ```
 
 Правила:
 
-- `status=done` не реализовывать, даже если в отдельных примерах docs встречается `TaskStatusDone`;
+- `status=done` не реализовывать;
 - `done` является terminal stage, а не статусом;
-- `tool_result` оставить как допустимое значение expected action, потому что canonical sections в docs его называют, но не строить вокруг него tool execution в P0;
-- если позже docs решат убрать `tool_result`, это должно быть отдельным contract cleanup, но код P0 не должен зависеть от tools;
+- `tool_result` не входит в P0, потому что tools не входят в MVP;
+- если позже нужен `tool_result`, это P1 вместе с явным lifecycle: кто ставит, кто ждёт, кто снимает;
 - `paused` не является stage, это status поверх текущего stage.
 
 ### 3.2. Allowed transitions
@@ -102,7 +102,8 @@ done -> <none>
 - прямой `planning -> done` запрещён;
 - прямой `done -> execution` запрещён;
 - переходы при `status=paused` запрещены до `/task resume`, кроме локальных inspection commands;
-- `/task done` должен установить `stage=done`, `expected_action=none`, `status=active`.
+- completion происходит через allowed transition `validation -> done` и устанавливает `stage=done`, `expected_action=none`, `status=active`;
+- `/task done` не входит в P0, если canonical command matrix не добавит его во все docs/tests.
 
 ### 3.3. Memory layers
 
@@ -139,6 +140,7 @@ ignore: proposal/audit only, never physical memory layer
 
 - profile/memory/task/transcript/classifier output являются untrusted data;
 - они должны рендериться как quoted/tagged data, а не как инструкции;
+- canonical prompt block содержит `id`, `type`, `source`, `trust`, escaped content и стабильный ordering;
 - system/application/security policy всегда выше сохранённого контекста;
 - PromptBuilder не пишет файлы и не вызывает provider.
 
@@ -149,7 +151,7 @@ ignore: proposal/audit only, never physical memory layer
 - нет `go.mod`;
 - нет `cmd/assistant/main.go`;
 - нет `internal/*` packages;
-- `.gitignore` пока не содержит `.assistant/`;
+- `.gitignore` пока не содержит `.assistant/`, что нужно только для demo/test storage opt-in;
 - есть документация и планы в `docs/*`, `.kilo/plans/*`.
 
 Следовательно, реализация стартует как новый Go CLI проект внутри текущего репозитория.
@@ -267,10 +269,10 @@ tests/
 
 ## 7. Runtime storage layout
 
-Default storage root для demo: repo-local `.assistant/`.
+Default storage root для normal mode: OS user-data directory с `0700` directories и `0600` sensitive files. Repo-local `.assistant/` разрешён только как explicit demo/test opt-in: `--storage-dir .assistant` или `ASSISTANT_STORAGE_DIR=.assistant`.
 
 ```text
-.assistant/
+<storage_root>/
   config.json
   profiles/
     student.json
@@ -296,13 +298,16 @@ Default storage root для demo: repo-local `.assistant/`.
 
 Storage rules:
 
-- добавить `.assistant/` в `.gitignore` в первом implementation PR;
-- все writes через atomic temp file + rename для JSON overwrite;
-- JSONL append сериализовать через lock;
-- path traversal и unsafe IDs отклонять;
-- symlink writes отклонять;
+- добавить `.assistant/` в `.gitignore` в первом implementation PR для demo/test opt-in;
+- все writes через atomic temp file + fsync + rename для JSON overwrite;
+- JSONL append сериализовать через per-file lock;
+- proposal apply делать idempotent под тем же lock;
+- path traversal, absolute paths, encoded separators и unsafe IDs отклонять;
+- symlinked parents, symlinked files и symlink writes отклонять;
+- optimistic version/mtime check защищает `current.json` от lost updates;
 - broken JSON возвращает typed storage error с путём файла;
-- API key не писать ни в один файл.
+- API key не писать ни в один файл;
+- pre-provider scanner блокирует secret-like content до chat/classifier calls.
 
 ## 8. Основные data models
 
@@ -433,7 +438,6 @@ type ExpectedAction string
 const (
     ExpectedUserInput        ExpectedAction = "user_input"
     ExpectedLLMResponse      ExpectedAction = "llm_response"
-    ExpectedToolResult       ExpectedAction = "tool_result"
     ExpectedUserConfirmation ExpectedAction = "user_confirmation"
     ExpectedNone             ExpectedAction = "none"
 )
@@ -480,6 +484,31 @@ API key rule:
 - `OPENROUTER_API_KEY` env-only for MVP;
 - no key in config/profile/memory/transcript/audit/logs.
 
+Field-level config contract:
+
+| Setting | CLI flag | Env var | Config key | Default | Persisted | P0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| API key | none | `OPENROUTER_API_KEY` | none | none | never | yes |
+| Storage root | `--storage-dir` | `ASSISTANT_STORAGE_DIR` | `storage_dir` | OS user-data dir | yes | yes |
+| Active model | `--model` | `ASSISTANT_MODEL` | `active_model` | user selected | yes | yes |
+| Memory model | `--memory-model` | `ASSISTANT_MEMORY_MODEL` | `memory_model` | active model | yes | yes |
+| Active profile | `--profile` | `ASSISTANT_PROFILE` | `active_profile_id` | first profile | yes | yes |
+| OpenRouter base URL | `--openrouter-base-url` | `ASSISTANT_OPENROUTER_BASE_URL` | `openrouter_base_url` | OpenRouter HTTPS endpoint | yes, explicit opt-in | no |
+| JSON output | `--json` | none | none | false | never | yes |
+| Non-interactive | `--once` / `--non-interactive` | none | none | false | never | yes |
+
+Exit codes:
+
+| Code | Category |
+| --- | --- |
+| `0` | success |
+| `1` | unexpected internal error |
+| `2` | CLI usage / missing args |
+| `3` | validation or invariant failure |
+| `4` | storage / IO / corruption / lock timeout |
+| `5` | provider / auth / model / network / missing API key |
+| `6` | classifier parse/schema/failure |
+
 ## 9. CLI command contract
 
 ### 9.1. Top-level commands
@@ -487,10 +516,15 @@ API key rule:
 ```text
 assistant init
 assistant chat
+assistant chat --once --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
 assistant profiles
 assistant memory
-assistant task
+assistant memory list <short|work|long> --json
+assistant memory propose --latest --json
+assistant memory apply --proposal <id> --accept all --json
+assistant task status --json
+assistant privacy
 ```
 
 P0 must be scriptable:
@@ -498,7 +532,8 @@ P0 must be scriptable:
 - commands should support flags for tests where possible;
 - output should be deterministic enough for smoke tests;
 - stdout is primary data;
-- stderr is diagnostics/errors.
+- stderr is diagnostics/errors;
+- `--json` is required for acceptance smoke commands.
 
 ### 9.2. Slash commands in chat
 
@@ -514,10 +549,6 @@ P0 must be scriptable:
 /task move <stage>
 /task pause
 /task resume
-/task plan <item>
-/task criteria <item>
-/task decision <item>
-/task done
 /save short <text>
 /save work <text>
 /save long <text>
@@ -526,8 +557,19 @@ P0 must be scriptable:
 /memory short
 /memory work
 /memory long
+/privacy
 /clear short
 /exit
+```
+
+P1/debug only unless all docs/tests adopt them: `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage`, and broader `assistant task` subcommands other than `assistant task status --json`.
+
+Memory apply scriptable syntax:
+
+```text
+assistant memory apply --proposal <id> --accept all --json
+assistant memory apply --proposal <id> --reject <record_id> --json
+assistant memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json
 ```
 
 Parsing rules:
@@ -548,8 +590,8 @@ Parsing rules:
 - зафиксировать в implementation constants canonical values из раздела 3;
 - не добавлять `status=done`;
 - не добавлять physical `ignore` layer;
-- решить, что `.assistant/` является default runtime storage для demo;
-- добавить `.assistant/` в `.gitignore`;
+- решить, что OS user-data directory является normal default storage;
+- оставить `.assistant/` только как demo/test opt-in и добавить его в `.gitignore`;
 - создать `go.mod` с module name, например `coding-writer-assistant` или согласованным именем repo;
 - добавить `cmd/assistant/main.go`;
 - добавить пустые package directories только когда появляются реальные файлы;
@@ -558,7 +600,7 @@ Parsing rules:
 Done criteria:
 
 - `go test ./...` проходит на пустом skeleton;
-- `.assistant/` игнорируется git;
+- `.assistant/` игнорируется git для demo/test opt-in;
 - `assistant --help` запускается.
 
 ### Фаза 1. AppConfig и safe file storage
@@ -569,14 +611,15 @@ Done criteria:
 
 - реализовать `internal/app/config.go`;
 - реализовать default config values;
-- реализовать config load/save из `.assistant/config.json`;
-- реализовать env override для model/storage/base URL при необходимости;
+- реализовать config load/save из `<storage_root>/config.json`;
+- реализовать field-level flag/env/config/default precedence из раздела 8.6;
 - реализовать `internal/storage/paths.go` для canonical path resolution;
 - реализовать safe ID validation для session/task/profile IDs;
-- реализовать atomic JSON write;
-- реализовать JSONL append;
+- реализовать atomic JSON write через temp file + fsync + rename;
+- реализовать locked JSONL append;
+- реализовать symlink parent/file rejection и permission setup;
 - реализовать broken JSON typed errors;
-- создать `.assistant/` при `assistant init`;
+- создать normal storage root при `assistant init`;
 - создать subdirectories `profiles`, `sessions`, `tasks`, `long_term`, `logs`.
 
 Tests:
@@ -584,7 +627,10 @@ Tests:
 - `TestInitCreatesStorageRoot`;
 - `TestConfigDoesNotStoreAPIKey`;
 - `TestStorageRejectsUnsafePaths`;
+- `TestStorageRejectsSymlinkParentsAndTargets`;
+- `TestStorageUsesRestrictivePermissions`;
 - `TestAtomicWriteAndRecovery`;
+- `TestLockedJSONLAppendAndConcurrentProposalApply`;
 - `TestBrokenJSONReturnsTypedError`.
 
 Done criteria:
@@ -604,22 +650,38 @@ Done criteria:
 ```go
 type LLMProvider interface {
     ListModels(ctx context.Context) ([]string, error)
-    Complete(ctx context.Context, model string, messages []ChatMessage) (ChatMessage, error)
+    Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
+}
+
+type CompletionRequest struct {
+    Purpose  CompletionPurpose
+    Model    string
+    Messages []ChatMessage
+    JSONMode bool
+}
+
+type CompletionResponse struct {
+    Message    ChatMessage
+    ProviderID string
+    Model      string
+    RetryCount int
 }
 ```
 
 - реализовать `OpenRouterProvider` через `net/http`;
 - читать API key только из `OPENROUTER_API_KEY`;
+- встроить pre-provider secret scan/redaction перед HTTP request;
 - добавить request timeout;
 - нормализовать provider errors: missing key, auth, model not found, timeout, malformed response;
 - не логировать raw Authorization header;
-- реализовать `FakeProvider` для tests и smoke fixtures;
+- реализовать `FakeProvider` для tests и smoke fixtures, который записывает calls и purpose `chat|classifier`;
 - сделать model selection ручным через config до полноценного list UI;
 - добавить `/model` local command, который меняет config после validation.
 
 Tests:
 
 - `TestProviderMissingAPIKeyDoesNotCallHTTP`;
+- `TestPreProviderScannerBlocksRawSecretsForChatAndClassifier`;
 - `TestProviderAuthErrorTyped`;
 - `TestProviderTimeoutAndTypedErrors`;
 - `TestModelCommandChangesActiveModel`;
@@ -679,7 +741,7 @@ Tests:
 
 Done criteria:
 
-- `/profile create` создаёт `.assistant/profiles/<id>.json`;
+- `/profile create` создаёт `<storage_root>/profiles/<id>.json`;
 - active profile id сохраняется в config;
 - профиль можно отрендерить для prompt;
 - profile switch не меняет memory records.
@@ -691,17 +753,18 @@ Done criteria:
 Действия:
 
 - реализовать `TaskStateManager.Start(title)`;
-- создать `.assistant/tasks/current.json` и `.assistant/tasks/<task_id>.json`;
+- создать `<storage_root>/tasks/current.json` и `<storage_root>/tasks/<task_id>.json`;
 - initial state: `stage=planning`, `status=active`, `expected_action=user_input`, `current_step=""`;
 - реализовать `Move(nextStage)` с `AllowedTransitions`;
 - реализовать `SetStep(text)`;
 - реализовать `SetExpectedAction(action)`;
-- реализовать `AddPlanItem`, `AddCriteria`, `AddDecision`;
+- `AddPlanItem`, `AddCriteria`, `AddDecision` оставить P1/debug до включения в canonical command matrix;
 - реализовать `Pause()`;
 - реализовать `Resume()`;
 - реализовать `Current()`;
 - реализовать task prompt render block;
-- реализовать `/task start`, `/task status`, `/task move`, `/task step`, `/task expect`, `/task pause`, `/task resume`, `/task plan`, `/task criteria`, `/task decision`, `/task done`;
+- реализовать P0: `/task start`, `/task status`, `/task move`, `/task step`, `/task expect`, `/task pause`, `/task resume`;
+- `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage` не реализовывать в P0 без обновления command matrix;
 - forbid state mutation when current task is paused except `/task resume` and local metadata inspection;
 - preserve state across process restart.
 
@@ -715,6 +778,7 @@ Tests:
 - `TestSetExpectedActionPersistsAfterRestart`;
 - `TestPausePreservesStageStepExpectedAction`;
 - `TestPauseWorksFromPlanningExecutionValidation`;
+- `TestPauseDoneIsTerminalNoOp`;
 - `TestResumeRestoresStageStepExpectedAction`;
 - `TestDoneUsesStageDoneExpectedNoneNoStatusDone`.
 
@@ -735,9 +799,9 @@ Done criteria:
 - реализовать `MemoryManager.List(ctx, layer)`;
 - реализовать `MemoryManager.ClearShort(sessionID)`;
 - реализовать `MemoryManager.SelectForPrompt(profileID, taskID, sessionID)`;
-- short layer писать в `.assistant/sessions/<session_id>/short_term.jsonl`;
-- work layer писать в `.assistant/tasks/<task_id>/work_memory.jsonl`;
-- long layer писать в `.assistant/long_term/<kind>.jsonl` или routing по kind;
+- short layer писать в `<storage_root>/sessions/<session_id>/short_term.jsonl`;
+- work layer писать в `<storage_root>/tasks/<task_id>/work_memory.jsonl` через `WorkMemoryStore`;
+- long layer писать в `<storage_root>/long_term/<kind>.jsonl` или routing по kind;
 - запретить save `ignore` на type level;
 - реализовать `/save short|work|long <text>` как escape hatch;
 - реализовать `/memory short|work|long`;
@@ -770,7 +834,7 @@ Done criteria:
 
 - реализовать `PromptBuilder.Build(input) []ChatMessage`;
 - вход: base rules, active profile, task state, memory bundle, short-term messages, current query;
-- рендерить каждый untrusted block в tagged format;
+- рендерить каждый untrusted block в canonical tagged format: `id`, `type`, `source`, `trust`, escaped content;
 - включать profile block всегда;
 - включать task state всегда, если current task exists;
 - при `status=paused` добавлять warning: task paused, do not continue execution until `/task resume`;
@@ -788,6 +852,7 @@ Tests:
 - `TestShortTermHistoryIsWindowed`;
 - `TestPausedTaskWarningInPrompt`;
 - `TestPromptBuilderMarksUntrustedBlocks`;
+- `TestPromptBuilderGoldenInjectionFixtures`;
 - `TestSameQueryDifferentProfilesChangePrompt`;
 - `TestPromptBuilderDoesNotWriteFilesOrCallProvider`.
 
@@ -799,17 +864,19 @@ Done criteria:
 
 ### Фаза 7. Basic chat loop
 
-Цель: связать CLI, PromptBuilder и provider без memory classifier apply.
+Цель: связать CLI, PromptBuilder и provider без memory classifier apply, но только после profile/task/memory/prompt/privacy gates.
 
 Действия:
 
 - реализовать `assistant chat` REPL;
 - обычный текст отправлять в PromptBuilder -> provider;
+- перед provider call запускать pre-provider scanner/redaction;
 - slash commands направлять в command router;
 - `/exit` завершает loop;
 - после provider response печатать assistant answer;
 - писать user/assistant messages в short-term history текущей session;
 - поддержать `assistant chat --profile <id> --model <id>`;
+- поддержать `assistant chat --once --input <text> --json` для smoke tests;
 - session id создавать при старте chat;
 - transcript optional для P0, но если пишется, должен быть local-only и без secrets.
 
@@ -835,7 +902,8 @@ Done criteria:
 
 - реализовать classifier prompt template из docs;
 - classifier input: latest user message, latest assistant response, active profile, current task state, memory layer rules, existing similar records optional;
-- использовать OpenRouter через тот же provider interface;
+- использовать OpenRouter/fake provider через тот же provider interface с `purpose=classifier` и `JSONMode=true`;
+- перед provider call запускать pre-provider scanner/redaction;
 - model: `config.MemoryModel` если задан, иначе active model;
 - response должен быть strict JSON;
 - parse errors должны давать typed error и bounded retry для invalid JSON;
@@ -845,7 +913,8 @@ Done criteria:
 - add `status=pending` для каждого proposal record;
 - run secret checker до сохранения proposal audit;
 - blocked secrets должны попасть в audit как `blocked` без raw secret;
-- `ignore` records остаются в proposal, не применяются в memory layer.
+- `ignore` records остаются в proposal, не применяются в memory layer;
+- disabled classifier/manual fallback не закрывает Day 11 acceptance и не создаёт memory records.
 
 Tests:
 
@@ -855,6 +924,8 @@ Tests:
 - `TestMemoryProposalSupportsIgnoreLayer`;
 - `TestInvalidClassifierJSONDoesNotCreateRecords`;
 - `TestSecretBlockedInMemoryProposal`;
+- `TestClassifierDisabledModeIsNotDay11Acceptance`;
+- `TestClassifierPayloadPreProviderRedaction`;
 - `TestClassifierUsesProfileAndTaskState`.
 
 Done criteria:
@@ -870,7 +941,7 @@ Done criteria:
 
 Действия:
 
-- реализовать `.assistant/sessions/<session_id>/memory_proposals.jsonl`;
+- реализовать `<storage_root>/sessions/<session_id>/memory_proposals.jsonl`;
 - сохранить каждый proposal до apply;
 - реализовать proposal id и record ids;
 - реализовать `/memory apply`;
@@ -883,7 +954,9 @@ Done criteria:
 - rejected не сохранять;
 - blocked не сохранять;
 - status каждого record обновлять в audit;
-- layer mismatch между proposal и saved record должен быть невозможен без explicit edit status.
+- layer mismatch между proposal и saved record должен быть невозможен без explicit edit status;
+- audit по умолчанию хранит minimized/redacted content; raw proposal/transcript retention только opt-in;
+- добавить purge/retention behavior для audit/transcripts.
 
 Tests:
 
@@ -913,9 +986,12 @@ Done criteria:
 - check manual save;
 - check proposal records;
 - check long-term write;
-- redaction before persistence where feasible;
+- redaction before persistence;
+- pre-provider redaction/blocking before chat/classifier payloads;
 - block raw secret in audit content;
-- add prompt-injection tagging for untrusted blocks;
+- add canonical prompt-injection tagging/escaping for untrusted blocks;
+- add first-run provider disclosure and `assistant privacy` summary;
+- default audit/transcript retention to minimized/redacted data with raw opt-in and purge behavior;
 - detect profile/user conflict minimally;
 - ensure paused task gate before execution-like continuation;
 - ensure no silent long-term write.
@@ -926,13 +1002,15 @@ Tests:
 - `TestSecretRedactionBeforeSave`;
 - `TestSecretBlockedInMemoryProposal`;
 - `TestManualSaveWithSecretBlocked`;
+- `TestRawSecretNeverReachesFakeProvider`;
+- `TestRejectedIgnoredRecordsDoNotPersistSensitiveRawTextByDefault`;
 - `TestGatekeeperBlocksPausedTask`;
 - `TestPromptInjectionRedaction`;
 - `TestLongTermCannotBeSavedWithoutExplicitAction`.
 
 Done criteria:
 
-- secrets do not appear in `.assistant/`;
+- secrets do not appear in storage root, provider payload records, audit, logs, transcripts, or memory files;
 - blocked proposal records visible as blocked without raw secret;
 - paused task не продолжает execution without resume.
 
@@ -972,6 +1050,7 @@ Done criteria:
 - установить plan, criteria, current_step, expected_action;
 - move planning -> execution -> validation in allowed path;
 - pause на каждом рабочем stage in tests;
+- проверить `stage=done` pause как terminal no-op без reopening work;
 - simulate restart через новый App instance с тем же temp storage;
 - `/task resume` восстанавливает current task;
 - PromptBuilder после resume включает state и working memory;
@@ -1032,7 +1111,8 @@ Done criteria:
 - no stack trace in normal mode;
 - diagnostics to stderr;
 - primary command output to stdout;
-- `--json` для ключевых inspection commands можно добавить, если нужно для smoke tests;
+- `--json` обязателен для ключевых inspection/smoke commands;
+- non-interactive commands use stable exit codes and JSON error envelope;
 - control characters from provider/storage output escape by default;
 - graceful handling for missing current task/profile/model.
 
@@ -1042,7 +1122,8 @@ Tests:
 - `TestMissingActiveProfileError`;
 - `TestMissingActiveTaskForWorkSave`;
 - `TestBrokenStorageDoesNotPanic`;
-- `TestMachineReadableOutputIsParseable` if `--json` added.
+- `TestMachineReadableOutputIsParseable`;
+- `TestExitCodesAndJSONErrorEnvelope`.
 
 Done criteria:
 
@@ -1087,7 +1168,7 @@ Done criteria:
 
 | Criterion | Implementation | Verification |
 | --- | --- | --- |
-| User profile exists | `.assistant/profiles/<id>.json` | `TestCreateProfile` |
+| User profile exists | `<storage_root>/profiles/<id>.json` | `TestCreateProfile` |
 | Style/format/constraints | `UserProfile` fields | profile validation tests |
 | Profile every prompt | PromptBuilder active profile block | `TestProfileAttachedToPrompt` |
 | Different profiles | `student`, `senior` render differently | `TestSameQueryDifferentProfilesChangePrompt` |
@@ -1120,10 +1201,10 @@ assistant init --model openai/gpt-4.1-mini
 
 Expected:
 
-- `.assistant/config.json` exists;
+- `<storage_root>/config.json` exists;
 - profile files exist;
 - `tasks/current.json` contains `stage=planning`, `current_step`, `expected_action=user_confirmation`, `status=active`;
-- no API key in `.assistant/`.
+- no API key in storage root.
 
 ### 12.2. Day 11 memory flow
 
@@ -1232,25 +1313,26 @@ Expected:
 ## 14. Implementation sequence with checkpoints
 
 1. Bootstrap Go module and CLI help.
-2. Add `.assistant/` to `.gitignore`.
-3. Implement config and safe storage.
-4. Implement provider interface, OpenRouter provider, fake provider.
+2. Add `.assistant/` to `.gitignore` for demo/test opt-in.
+3. Implement config and safe storage with OS user-data default, permissions, locks, and path/symlink checks.
+4. Implement provider interface, OpenRouter provider, fake provider, and pre-provider scanner.
 5. Implement profile manager and commands.
-6. Implement task state manager and commands.
-7. Implement memory manager and layer inspection.
-8. Implement prompt builder and rendered prompt tests.
-9. Implement basic chat loop with short-term history.
-10. Implement memory classifier prompt and strict JSON parser.
-11. Implement proposal audit store.
-12. Implement proposal apply with accept/edit/reject/blocked statuses.
-13. Add invariant checker and redaction.
-14. Add Day 11 acceptance test.
-15. Add Day 12 acceptance test.
-16. Add Day 13 acceptance test.
-17. Add error handling polish.
-18. Run `go test ./...`.
-19. Run fake-provider CLI smoke.
-20. Run optional live OpenRouter smoke if `OPENROUTER_API_KEY` exists.
+6. Implement task state manager and P0 commands.
+7. Implement memory manager, `WorkMemoryStore`, and layer inspection.
+8. Implement prompt builder, canonical block schema, and rendered prompt tests.
+9. Implement basic chat loop with short-term history after profile/task/memory/prompt gates.
+10. Implement memory classifier prompt and strict JSON parser through provider interface.
+11. Implement proposal audit store with minimized/redacted default retention.
+12. Implement proposal apply with accept/edit/reject/blocked statuses and idempotency.
+13. Add invariant checker, provider disclosure, redaction, and purge behavior.
+14. Add non-interactive JSON command smoke path and exit-code tests.
+15. Add Day 11 acceptance test.
+16. Add Day 12 acceptance test.
+17. Add Day 13 acceptance test.
+18. Add error handling polish.
+19. Run `go test ./...`.
+20. Run fake-provider CLI smoke.
+21. Run optional live OpenRouter smoke if `OPENROUTER_API_KEY` exists.
 
 ## 15. Non-goals for MVP
 
@@ -1312,7 +1394,7 @@ Mitigation:
 
 - run redaction/blocking before proposal persistence;
 - store block reason and secret type, not raw secret;
-- scan `.assistant/` in tests for forbidden patterns.
+- scan storage root in tests for forbidden patterns.
 
 ### Risk: live OpenRouter makes tests flaky
 
@@ -1341,5 +1423,5 @@ Implementation is done only when all conditions hold:
 - `/memory short|work|long` inspect each layer separately;
 - saved memory affects next prompt/response;
 - secrets are blocked/redacted in manual save, proposal, memory, audit;
-- `.assistant/` is gitignored;
+- `.assistant/` is gitignored for demo/test opt-in;
 - no Day 11/12/13 criterion is replaced by a manual-only or future-only flow.
