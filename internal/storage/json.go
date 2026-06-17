@@ -85,7 +85,6 @@ func ReadJSON(path string, value any) error {
 	}
 	defer f.Close()
 	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(value); err != nil {
 		return errStorage("broken_json", path, err)
 	}

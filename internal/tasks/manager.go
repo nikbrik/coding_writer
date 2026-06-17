@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -120,11 +121,13 @@ func (m *Manager) Move(next app.TaskStage) (app.TaskState, error) {
 		return state, app.NewError(app.CategoryValidation, "task_paused", "resume task before moving stage", nil)
 	}
 	if !IsAllowed(state.Stage, next) {
-		return state, app.NewError(app.CategoryValidation, "forbidden_transition", "forbidden task stage transition", nil)
+		return state, app.ErrorWithHint(app.CategoryValidation, "forbidden_transition", "forbidden task stage transition", fmt.Sprintf("allowed next stages from %s: %v", state.Stage, AllowedNext(state.Stage)), nil)
 	}
+	prevStage := state.Stage
 	state.Stage = next
 	state.ExpectedAction = defaultExpectedAction(next)
 	state.UpdatedAt = time.Now().UTC()
+	state.HistoryLog = append(state.HistoryLog, fmt.Sprintf("%s: %s -> %s", time.Now().UTC().Format(time.RFC3339), prevStage, next))
 	if next == app.StageDone {
 		state.Status = app.TaskStatusActive
 	}

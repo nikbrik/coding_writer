@@ -3,6 +3,8 @@ package app
 import (
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 )
 
 type ErrorCategory string
@@ -30,9 +32,20 @@ func (e *Error) Error() string {
 		return ""
 	}
 	if e.Path != "" {
-		return fmt.Sprintf("%s: %s: %s", e.Category, e.Code, e.Path)
+		return fmt.Sprintf("%s: %s: %s", e.Category, e.Code, redactHomePath(e.Path))
 	}
 	return fmt.Sprintf("%s: %s: %s", e.Category, e.Code, e.Message)
+}
+
+func redactHomePath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
 }
 
 func (e *Error) Unwrap() error { return e.Err }

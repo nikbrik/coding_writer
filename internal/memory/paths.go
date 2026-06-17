@@ -48,6 +48,8 @@ func workPath(root, taskID string) (string, error) {
 	return path, nil
 }
 
+var LongTermKinds = []string{"preference", "decision", "constraint", "knowledge"}
+
 func longPath(root, kind string) (string, error) {
 	file := "knowledge.jsonl"
 	kind = strings.ToLower(strings.TrimSpace(kind))
@@ -85,6 +87,9 @@ func LatestSessionID(root string) (string, error) {
 	var candidates []candidate
 	for _, entry := range entries {
 		if !entry.IsDir() {
+			continue
+		}
+		if err := storage.ValidateID(entry.Name()); err != nil {
 			continue
 		}
 		info, err := entry.Info()

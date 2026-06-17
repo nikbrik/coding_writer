@@ -22,6 +22,8 @@ var secretPatterns = []struct {
 	{"bearer_token", regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9._~+/=-]{12,}`)},
 	{"sk_token", regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`)},
 	{"password", regexp.MustCompile(`(?i)\b(password|passwd|token|secret|api[_-]?key)\s*[:=]\s*[^\s]+`)},
+	{"aws_access_key", regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)},
+	{"gcp_service_account", regexp.MustCompile(`"type"\s*:\s*"service_account"`)},
 }
 
 func DetectSecrets(text string) []SecretFinding {

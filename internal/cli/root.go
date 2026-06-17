@@ -34,6 +34,7 @@ type globalOptions struct {
 	OpenRouterBaseURL      string
 	TrustOpenRouterBaseURL bool
 	JSON                   bool
+	Quiet                  bool
 }
 
 type runtime struct {
@@ -48,6 +49,7 @@ type runtime struct {
 	Builder         *prompting.Builder
 	Classifier      *memory.Classifier
 	DisclosureShown bool
+	Quiet           bool
 }
 
 func Execute() error {
@@ -77,6 +79,7 @@ func newRootCommand(opts *globalOptions) *cobra.Command {
 	cmd.PersistentFlags().StringVar(&opts.OpenRouterBaseURL, "openrouter-base-url", "", "OpenRouter-compatible base URL")
 	cmd.PersistentFlags().BoolVar(&opts.TrustOpenRouterBaseURL, "trust-openrouter-base-url", false, "trust non-default OpenRouter-compatible base URL for this invocation")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON")
+	cmd.PersistentFlags().BoolVar(&opts.Quiet, "quiet", false, "suppress diagnostic output")
 	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), taskCommand(opts), privacyCommand(opts))
 	return cmd
 }
@@ -193,24 +196,24 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 		Short: "Start chat loop or run one request",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.JSON && !chatOpts.Once {
-				return app.NewError(app.CategoryCLI, "json_repl_unsupported", "chat --json requires --once or --non-interactive", nil)
+				return app.ErrorWithHint(app.CategoryCLI, "json_repl_unsupported", "chat --json requires --once", "use --once for single-request JSON output", nil)
 			}
 			rt, err := newRuntime(cmd.Context(), opts)
 			if err != nil {
 				return err
 			}
-			if chatOpts.Once {
-				if strings.TrimSpace(chatOpts.Input) == "" {
-					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
-				}
+		if chatOpts.Once {
+			if strings.TrimSpace(chatOpts.Input) == "" {
+				return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
+			}
 			if !chatOpts.RenderPrompt {
 				rt.ensureProvider()
 				ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 			}
 			result, err := runChatExchange(cmd.Context(), rt, app.NewID("session"), chatOpts.Input, chatOpts.RenderPrompt)
-				if err != nil {
-					return err
-				}
+			if err != nil {
+				return err
+			}
 			for _, warning := range result.Warnings {
 				_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
 			}
@@ -300,6 +303,9 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		Profile:            profile,
 		Task:               taskPtr,
 		Model:              rt.Config.MemoryModel,
+		ExistingShort:      bundle.Short,
+		ExistingWork:       bundle.Work,
+		ExistingLong:       bundle.Long,
 	})
 	if err != nil {
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
@@ -475,15 +481,49 @@ func profileCreateCommand(opts *globalOptions) *cobra.Command {
 		return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "profile": profile}, fmt.Sprintf("created profile: %s\n", profile.ID))
 	}}
 	cmd.Flags().StringVar(&displayName, "display-name", "", "profile display name")
-	cmd.Flags().StringArrayVar(&style, "style", nil, "style key=value, repeatable")
-	cmd.Flags().StringArrayVar(&responseFormat, "format", nil, "response format key=value, repeatable")
-	cmd.Flags().StringArrayVar(&constraints, "constraint", nil, "profile constraint, repeatable")
+	cmd.Flags().StringArrayVar(&style, "style", nil, "style key=value, repeatable (default: language=ru,tone=direct)")
+	cmd.Flags().StringArrayVar(&responseFormat, "format", nil, "response format key=value, repeatable (default: structure=concise)")
+	cmd.Flags().StringArrayVar(&constraints, "constraint", nil, "profile constraint, repeatable (default: follow user preferences)")
 	return cmd
 }
 
 func memoryCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "memory", Short: "Inspect/propose/apply memory"}
-	cmd.AddCommand(memoryListCommand(opts), memoryProposeCommand(opts), memoryApplyCommand(opts))
+	cmd.AddCommand(memoryListCommand(opts), memoryProposeCommand(opts), memoryApplyCommand(opts), memoryProposalsCommand(opts))
+	return cmd
+}
+
+func memoryProposalsCommand(opts *globalOptions) *cobra.Command {
+	var sessionFlag string
+	cmd := &cobra.Command{
+		Use:   "proposals",
+		Short: "List pending memory proposals",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			proposals, err := rt.Proposals.List(cmd.Context(), sessionFlag)
+			if err != nil {
+				return err
+			}
+			var pending []app.MemoryProposal
+			for _, p := range proposals {
+				hasPending := false
+				for _, r := range p.Records {
+					if r.Status == app.ProposalPending {
+						hasPending = true
+						break
+					}
+				}
+				if hasPending {
+					pending = append(pending, p)
+				}
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "proposals": pending}, proposalsText(pending))
+		},
+	}
+	cmd.Flags().StringVar(&sessionFlag, "session", "", "filter by session id")
 	return cmd
 }
 
@@ -558,7 +598,8 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			}
 			rt.ensureProvider()
 			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
-			proposal, err := rt.ensureClassifier().Propose(cmd.Context(), memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel})
+			bundle, _ := rt.Memory.SelectForPrompt(cmd.Context(), sessionID, taskID(taskPtr), profile.ID)
+			proposal, err := rt.ensureClassifier().Propose(cmd.Context(), memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel, ExistingShort: bundle.Short, ExistingWork: bundle.Work, ExistingLong: bundle.Long})
 			if err != nil {
 				return err
 			}
@@ -572,7 +613,8 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 }
 
 func memoryApplyCommand(opts *globalOptions) *cobra.Command {
-	var proposalID, accept, reject, edit string
+	var proposalID string
+	var accept, reject, edit []string
 	cmd := &cobra.Command{
 		Use:   "apply",
 		Short: "Apply memory proposal",
@@ -598,14 +640,23 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptAll: accept == "all", RejectAll: reject == "all", RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskState.ID, ProfileID: profile.ID}
-			if reject != "" {
-				if reject != "all" {
-					optsApply.RejectIDs[reject] = true
+			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptIDs: map[string]bool{}, RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskState.ID, ProfileID: profile.ID}
+			for _, v := range accept {
+				if v == "all" {
+					optsApply.AcceptAll = true
+				} else {
+					optsApply.AcceptIDs[v] = true
 				}
 			}
-			if edit != "" {
-				id, parsed, err := parseEdit(edit)
+			for _, v := range reject {
+				if v == "all" {
+					optsApply.RejectAll = true
+				} else {
+					optsApply.RejectIDs[v] = true
+				}
+			}
+			for _, v := range edit {
+				id, parsed, err := parseEdit(v)
 				if err != nil {
 					return err
 				}
@@ -619,9 +670,9 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&proposalID, "proposal", "", "proposal id")
-	cmd.Flags().StringVar(&accept, "accept", "", "accept all")
-	cmd.Flags().StringVar(&reject, "reject", "", "reject record id")
-	cmd.Flags().StringVar(&edit, "edit", "", "edit record_id:layer=<layer>,content=<text>")
+	cmd.Flags().StringArrayVar(&accept, "accept", nil, "accept 'all' or record id, repeatable")
+	cmd.Flags().StringArrayVar(&reject, "reject", nil, "reject record id, repeatable")
+	cmd.Flags().StringArrayVar(&edit, "edit", nil, "edit record_id:layer=<layer>,content=<text>, repeatable")
 	return cmd
 }
 
@@ -830,7 +881,7 @@ func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int
 			return nil
 		}
 		name := entry.Name()
-		shouldRemove := purgeAudit && name == "memory_proposals.jsonl" || purgeTranscripts && name == "transcript.md"
+		shouldRemove := (purgeAudit && name == "memory_proposals.jsonl") || (purgeTranscripts && name == "transcript.md")
 		if !shouldRemove {
 			return nil
 		}
@@ -894,8 +945,51 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 			if len(parts) > 2 {
 				id = parts[2]
 			}
+			styleMap := map[string]string{"language": "ru", "tone": "direct"}
+			formatMap := map[string]string{"structure": "concise"}
+			constraints := []string{"be concise"}
+			remainder := strings.TrimSpace(strings.TrimPrefix(line, "/profile create "+id))
+			if remainder == "" {
+				remainder = strings.TrimSpace(strings.TrimPrefix(line, "/profile create"))
+			}
+			if remainder != "" {
+				tokens := splitShellTokens(remainder)
+				for i := 0; i < len(tokens); {
+					switch tokens[i] {
+					case "--style":
+						if i+1 < len(tokens) {
+							k, v, ok := strings.Cut(tokens[i+1], "=")
+							if ok {
+								styleMap[k] = v
+							}
+							i += 2
+						} else {
+							i++
+						}
+					case "--format":
+						if i+1 < len(tokens) {
+							k, v, ok := strings.Cut(tokens[i+1], "=")
+							if ok {
+								formatMap[k] = v
+							}
+							i += 2
+						} else {
+							i++
+						}
+					case "--constraint":
+						if i+1 < len(tokens) {
+							constraints = append(constraints, tokens[i+1])
+							i += 2
+						} else {
+							i++
+						}
+					default:
+						i++
+					}
+				}
+			}
 			now := time.Now().UTC()
-			p := app.UserProfile{ID: id, DisplayName: id, Style: map[string]string{"language": "ru", "tone": "direct"}, ResponseFormat: map[string]string{"structure": "concise"}, Constraints: []string{"be concise"}, CreatedAt: now, UpdatedAt: now}
+			p := app.UserProfile{ID: id, DisplayName: id, Style: styleMap, ResponseFormat: formatMap, Constraints: constraints, CreatedAt: now, UpdatedAt: now}
 			if err := rt.Profiles.Create(p); err != nil {
 				return false, err
 			}
@@ -945,14 +1039,14 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		}
 		_, _ = fmt.Fprintf(out, "saved: %s\n", record.ID)
 	case "/memory":
-		return false, handleMemorySlash(ctx, out, diag, rt, sessionID, parts)
+		return false, handleMemorySlash(ctx, out, diag, rt, sessionID, parts, line)
 	case "/clear":
 		if len(parts) == 2 && parts[1] == "short" {
 			return false, rt.Memory.ClearShort(ctx, sessionID)
 		}
 		return false, app.NewError(app.CategoryCLI, "unknown_command", "unknown clear command", nil)
 	default:
-		return false, app.NewError(app.CategoryCLI, "unknown_command", "unknown slash command", nil)
+		return false, app.ErrorWithHint(app.CategoryCLI, "unknown_command", "unknown slash command", "type /help for available commands", nil)
 	}
 	return false, nil
 }
@@ -1030,7 +1124,7 @@ func handleTaskSlash(out io.Writer, rt *runtime, parts []string, rest string) er
 	return nil
 }
 
-func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime, sessionID string, parts []string) error {
+func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime, sessionID string, parts []string, rawLine string) error {
 	if len(parts) < 2 {
 		return app.NewError(app.CategoryCLI, "missing_memory_command", "memory command required", nil)
 	}
@@ -1058,7 +1152,8 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
-		proposal, err := rt.ensureClassifier().Propose(ctx, memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel})
+		bundle, _ := rt.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
+		proposal, err := rt.ensureClassifier().Propose(ctx, memory.ClassificationInput{SessionID: sessionID, UserMessageID: userRecord.ID, AssistantMessageID: assistantRecord.ID, UserMessage: userRecord.Content, AssistantMessage: assistantRecord.Content, Profile: profile, Task: taskPtr, Model: rt.Config.MemoryModel, ExistingShort: bundle.Short, ExistingWork: bundle.Work, ExistingLong: bundle.Long})
 		if err != nil {
 			return err
 		}
@@ -1081,7 +1176,7 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		if err != nil {
 			return err
 		}
-		applyOpts, err := parseMemoryApplyArgs(parts)
+		applyOpts, err := parseMemoryApplyArgsRaw(rawLine)
 		if err != nil {
 			latest, latestErr := rt.Proposals.Latest(ctx, sessionID)
 			if latestErr == nil {
@@ -1107,7 +1202,7 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 func parseMemoryApplyArgs(parts []string) (memory.ApplyOptions, error) {
 	opts := memory.ApplyOptions{AcceptIDs: map[string]bool{}, RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}}
 	if len(parts) == 2 {
-		return opts, app.NewError(app.CategoryCLI, "missing_apply_action", "/memory apply requires --accept all|--accept <id>, --reject <id>, or --edit <id>:layer=<layer>,content=<text>", nil)
+		return opts, app.ErrorWithHint(app.CategoryCLI, "missing_apply_action", "/memory apply requires --accept all|--accept <id>, --reject <id>, or --edit <id>:layer=<layer>,content=<text>", "example: /memory apply --accept all", nil)
 	}
 	for i := 2; i < len(parts); {
 		switch parts[i] {
@@ -1146,6 +1241,87 @@ func parseMemoryApplyArgs(parts []string) (memory.ApplyOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func parseMemoryApplyArgsRaw(rawLine string) (memory.ApplyOptions, error) {
+	remainder := strings.TrimSpace(strings.TrimPrefix(rawLine, "/memory apply"))
+	if remainder == "" {
+		return memory.ApplyOptions{}, app.ErrorWithHint(app.CategoryCLI, "missing_apply_action", "/memory apply requires --accept all|--accept <id>, --reject <id>, or --edit <id>:layer=<layer>,content=<text>", "example: /memory apply --accept all", nil)
+	}
+	tokens := splitShellTokens(remainder)
+	opts := memory.ApplyOptions{AcceptIDs: map[string]bool{}, RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}}
+	for i := 0; i < len(tokens); {
+		switch tokens[i] {
+		case "--accept":
+			if i+1 >= len(tokens) {
+				return opts, app.NewError(app.CategoryCLI, "missing_accept_target", "--accept requires 'all' or a record id", nil)
+			}
+			if tokens[i+1] == "all" {
+				opts.AcceptAll = true
+			} else {
+				opts.AcceptIDs[tokens[i+1]] = true
+			}
+			i += 2
+		case "--reject":
+			if i+1 >= len(tokens) {
+				return opts, app.NewError(app.CategoryCLI, "missing_reject_target", "--reject requires 'all' or a record id", nil)
+			}
+			if tokens[i+1] == "all" {
+				opts.RejectAll = true
+			} else {
+				opts.RejectIDs[tokens[i+1]] = true
+			}
+			i += 2
+		case "--edit":
+			if i+1 >= len(tokens) {
+				return opts, app.NewError(app.CategoryCLI, "missing_edit_value", "--edit requires record_id:layer=<layer>,content=<text>", nil)
+			}
+			id, edit, err := parseEdit(tokens[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.Edits[id] = edit
+			i += 2
+		default:
+			return opts, app.NewError(app.CategoryCLI, "unknown_apply_option", "unknown /memory apply option: "+tokens[i], nil)
+		}
+	}
+	return opts, nil
+}
+
+func splitShellTokens(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	inQuote := false
+	quoteChar := byte(0)
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote {
+			if c == quoteChar {
+				inQuote = false
+			} else {
+				current.WriteByte(c)
+			}
+			continue
+		}
+		if c == '"' || c == '\'' {
+			inQuote = true
+			quoteChar = c
+			continue
+		}
+		if c == ' ' || c == '\t' {
+			if current.Len() > 0 {
+				tokens = append(tokens, current.String())
+				current.Reset()
+			}
+			continue
+		}
+		current.WriteByte(c)
+	}
+	if current.Len() > 0 {
+		tokens = append(tokens, current.String())
+	}
+	return tokens
 }
 
 func taskID(task *app.TaskState) string {
@@ -1192,7 +1368,7 @@ func providerDisclosureText(host string) string {
 
 func validateModelSyntax(model string) error {
 	if strings.TrimSpace(model) == "" || strings.ContainsAny(model, " \t\n\r") || len(model) > 200 || !strings.Contains(model, "/") {
-		return app.NewError(app.CategoryValidation, "invalid_model", "invalid model id", nil)
+		return app.ErrorWithHint(app.CategoryValidation, "invalid_model", "invalid model id", "model id must be in provider/model format, e.g. openai/gpt-4.1-mini", nil)
 	}
 	return nil
 }
@@ -1373,6 +1549,17 @@ func proposalText(proposal app.MemoryProposal) string {
 	return b.String()
 }
 
+func proposalsText(proposals []app.MemoryProposal) string {
+	if len(proposals) == 0 {
+		return "no pending proposals\n"
+	}
+	var b strings.Builder
+	for _, p := range proposals {
+		b.WriteString(fmt.Sprintf("proposal=%s session=%s records=%d\n", p.ID, p.SessionID, len(p.Records)))
+	}
+	return b.String()
+}
+
 func safeTerminalText(text string) string {
 	var b strings.Builder
 	for _, r := range text {
@@ -1387,11 +1574,4 @@ func safeTerminalText(text string) string {
 
 func taskText(state app.TaskState) string {
 	return fmt.Sprintf("task=%s title=%s objective=%s stage=%s current_step=%s expected_action=%s status=%s plan=%v acceptance_criteria=%v decisions=%v open_questions=%v allowed=%v\n", state.ID, safeTerminalText(state.Title), safeTerminalText(state.Objective), state.Stage, safeTerminalText(state.CurrentStep), state.ExpectedAction, state.Status, state.Plan, state.AcceptanceCriteria, state.Decisions, state.OpenQuestions, tasks.AllowedNext(state.Stage))
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

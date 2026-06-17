@@ -45,7 +45,7 @@ func (b *Builder) Build(input BuildInput) ([]app.ChatMessage, error) {
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.working", "working_memory", input.Memory.Work), CreatedAt: now},
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.long", "long_memory", input.Memory.Long), CreatedAt: now},
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.short", "short_history", input.Memory.Short), CreatedAt: now},
-		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: input.Query, CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: `<context_block id="query.current" type="user_query" source="user" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.Query) + "\n</context_block>", CreatedAt: now},
 	)
 	return messages, nil
 }
@@ -61,8 +61,18 @@ func RenderMessages(messages []app.ChatMessage) string {
 	return b.String()
 }
 
+type promptMemoryRecord struct {
+	Kind    string `json:"kind"`
+	Content string `json:"content"`
+	Time    string `json:"time"`
+}
+
 func renderMemoryBlock(id, typ string, records []app.MemoryRecord) string {
-	data, _ := json.MarshalIndent(records, "", "  ")
+	compact := make([]promptMemoryRecord, 0, len(records))
+	for _, r := range records {
+		compact = append(compact, promptMemoryRecord{Kind: r.Kind, Content: r.Content, Time: r.CreatedAt.Format("2006-01-02")})
+	}
+	data, _ := json.MarshalIndent(compact, "", "  ")
 	return `<context_block id="` + id + `" type="` + typ + `" source="storage" trust="untrusted">` + "\n" + validation.EscapeUntrusted(string(data)) + "\n</context_block>"
 }
 

@@ -129,7 +129,7 @@ func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, ta
 		return storage.ReadJSONL[app.MemoryRecord](path)
 	case app.LayerLong:
 		var all []app.MemoryRecord
-		for _, kind := range []string{"preference", "decision", "constraint", "knowledge"} {
+		for _, kind := range LongTermKinds {
 			path, err := longPath(m.StorageDir, kind)
 			if err != nil {
 				return nil, err
@@ -220,7 +220,21 @@ func latestWithinBudget(records []app.MemoryRecord, maxCount, maxBytes int) []ap
 		}
 		start = i
 	}
-	return records[start:]
+	result := records[start:]
+	if len(records) > 0 && start > 0 {
+		first := records[0]
+		found := false
+		for _, r := range result {
+			if r.ID == first.ID {
+				found = true
+				break
+			}
+		}
+		if !found && first.Kind == "message_user" {
+			result = append([]app.MemoryRecord{first}, result...)
+		}
+	}
+	return result
 }
 
 func filterLongForProfile(records []app.MemoryRecord, activeProfileID string) []app.MemoryRecord {

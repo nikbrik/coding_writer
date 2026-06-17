@@ -10,12 +10,14 @@ import (
 )
 
 type FakeProvider struct {
-	mu                 sync.Mutex
-	Calls              []CompletionRequest
-	Models             []string
-	ChatResponse       string
-	ClassifierResponse string
-	Err                error
+	mu                   sync.Mutex
+	Calls                []CompletionRequest
+	Models               []string
+	ChatResponse         string
+	ClassifierResponse   string
+	ClassifierResponses  []string
+	Err                  error
+	classifierCallIdx    int
 }
 
 func NewFakeProvider() *FakeProvider {
@@ -42,7 +44,18 @@ func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (Com
 	p.Calls = append(p.Calls, sanitized)
 	p.mu.Unlock()
 	if req.Purpose == PurposeClassifier {
-		content := p.ClassifierResponse
+		var content string
+		if len(p.ClassifierResponses) > 0 {
+			p.mu.Lock()
+			if p.classifierCallIdx < len(p.ClassifierResponses) {
+				content = p.ClassifierResponses[p.classifierCallIdx]
+				p.classifierCallIdx++
+			}
+			p.mu.Unlock()
+		}
+		if content == "" {
+			content = p.ClassifierResponse
+		}
 		if content == "" {
 			content = defaultClassifierJSON(joinMessages(sanitized.Messages))
 		}
@@ -86,10 +99,10 @@ func joinMessages(messages []app.ChatMessage) string {
 func defaultChatAnswer(prompt string) string {
 	lower := strings.ToLower(prompt)
 	parts := []string{"fake assistant response"}
-	if strings.Contains(prompt, `"id": "student"`) || strings.Contains(prompt, "&#34;id&#34;: &#34;student&#34;") || strings.Contains(lower, "student") && strings.Contains(lower, "teacher") {
+	if strings.Contains(prompt, `Profile: student`) || strings.Contains(prompt, `"id": "student"`) || strings.Contains(prompt, "&#34;id&#34;: &#34;student&#34;") || strings.Contains(lower, "student") && strings.Contains(lower, "teacher") {
 		parts = append(parts, "student profile: подробно, с шагами и примерами")
 	}
-	if strings.Contains(prompt, `"id": "senior"`) || strings.Contains(prompt, "&#34;id&#34;: &#34;senior&#34;") || strings.Contains(lower, "senior") && strings.Contains(lower, "trade") {
+	if strings.Contains(prompt, `Profile: senior`) || strings.Contains(prompt, `"id": "senior"`) || strings.Contains(prompt, "&#34;id&#34;: &#34;senior&#34;") || strings.Contains(lower, "senior") && strings.Contains(lower, "trade") {
 		parts = append(parts, "senior profile: кратко, риски и trade-offs")
 	}
 	if strings.Contains(prompt, "CLI должен поддерживать выбор модели OpenRouter") {

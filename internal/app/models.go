@@ -139,6 +139,7 @@ type TaskState struct {
 	Decisions          []string       `json:"decisions"`
 	OpenQuestions      []string       `json:"open_questions"`
 	ValidationStatus   string         `json:"validation_status,omitempty"`
+	HistoryLog         []string       `json:"history_log,omitempty"`
 	PausedAt           *time.Time     `json:"paused_at,omitempty"`
 	ResumedAt          *time.Time     `json:"resumed_at,omitempty"`
 	UpdatedAt          time.Time      `json:"updated_at"`
