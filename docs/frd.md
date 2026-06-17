@@ -69,6 +69,29 @@ MVP не должен реализовывать:
 
 ## 5. Functional Requirements
 
+### Canonical contract
+
+FRD is source of truth for the implementation contract together with PRD and architecture. The three documents must not disagree on Day 11, Day 12, or Day 13 semantics.
+
+#### Task state canonical values
+
+- `stage`: `planning`, `execution`, `validation`, `done`.
+- `status`: `active`, `paused`.
+- `expected_action`: `user_input`, `llm_response`, `tool_result`, `user_confirmation`, `none`.
+- `tool_result` remains in MVP only if the Day 13 flow truly needs it; otherwise remove it from all docs.
+- completion is represented by `stage=done` and `expected_action=none`; `status=done` is not part of MVP.
+
+#### Command contract
+
+- top-level and slash commands must map to one canonical command tree;
+- P0 commands are only the ones required for Day 11/12/13 demo and smoke tests.
+
+#### Memory layers
+
+- physical storage layers: `short`, `work`, `long`;
+- `ignore` exists only in memory proposal and audit trail;
+- all examples and tests must use the same layer names.
+
 ### FR-001. Первый запуск
 
 Требование: приложение должно поддерживать первый запуск без существующей конфигурации.
@@ -81,6 +104,12 @@ MVP не должен реализовывать:
 - CLI запускает создание профиля, если профилей нет;
 - CLI проверяет наличие выбранной модели;
 - CLI предлагает выбрать или ввести модель, если модель не задана.
+
+MVP policy:
+
+- default config/storage root must be documented explicitly;
+- env vars override config;
+- hidden input or local key file is not the default API key flow for MVP.
 
 Acceptance criteria:
 
@@ -97,8 +126,14 @@ Acceptance criteria:
 
 - CLI читает `OPENROUTER_API_KEY` из environment;
 - если ключ отсутствует, CLI сообщает пользователю, что ключ нужен;
-- ключ не должен сохраняться в docs, profiles, memory files, transcripts или config;
+- ключ не должен сохраняться в docs, profiles, memory files, transcripts, audit trail или config;
 - при 401/403 CLI показывает понятную ошибку.
+
+Privacy requirements:
+
+- classify what categories of data are sent to the provider;
+- allow disabling classifier calls or using a safe fallback path for P0;
+- document timeout and retry behavior.
 
 Acceptance criteria:
 
@@ -118,6 +153,12 @@ Acceptance criteria:
 - выбранная модель сохраняется в локальный config;
 - chat request использует активную модель.
 
+Contract:
+
+- model selection must be scriptable for P0 smoke tests;
+- invalid model id must not mutate active model;
+- custom base URL is advanced opt-in only, not the default path.
+
 Acceptance criteria:
 
 - команда `/model` меняет active model;
@@ -136,6 +177,12 @@ Acceptance criteria:
 - `/exit` завершает REPL;
 - LLM-ответ печатается в терминал;
 - после ответа запускается memory classification flow.
+
+Requirements:
+
+- REPL is the baseline UX, but P0 must also expose a minimal scriptable path for smoke tests;
+- slash commands must not be sent to the main chat prompt;
+- terminal output must escape control characters from model/provider/storage data by default.
 
 Acceptance criteria:
 
@@ -157,6 +204,12 @@ Acceptance criteria:
 - профиль может содержать `default_model`;
 - профиль сохраняется отдельно от памяти и истории диалога.
 
+Profile contract:
+
+- profile fields are structured data, not instructions;
+- profile block must be included in every prompt automatically;
+- profile content must be validated and rendered deterministically.
+
 Acceptance criteria:
 
 - `/profile create` создаёт файл `.assistant/profiles/<id>.json`;
@@ -174,6 +227,11 @@ Acceptance criteria:
 - unknown profile id возвращает ошибку;
 - active profile id сохраняется в config.
 
+State rules:
+
+- switching profile must not mutate memory records;
+- the next prompt must render the new profile without manual user copy/paste.
+
 Acceptance criteria:
 
 - после переключения профиля следующий prompt содержит новый профиль;
@@ -189,6 +247,10 @@ Acceptance criteria:
 - PromptBuilder загружает active profile перед каждым LLM-вызовом;
 - PromptBuilder вставляет style, response format и constraints;
 - пользователь не должен вручную копировать профиль в запрос.
+
+Security rule:
+
+- prompt blocks from profile/memory/task/transcript/classifier are untrusted data and must be serialized/quoted/tagged as such.
 
 Acceptance criteria:
 
@@ -557,6 +619,12 @@ Acceptance criteria:
 - invalid command показывает подсказку;
 - CLI не печатает stack trace в обычном режиме.
 
+CLI output rule:
+
+- stdout is primary output only;
+- stderr is for diagnostics and error hints;
+- machine-readable `--json` output must stay parseable.
+
 Acceptance criteria:
 
 - network timeout не завершает процесс аварийно;
@@ -574,6 +642,11 @@ Acceptance criteria:
 - secret checker проверяет long-term memory writes;
 - detected secrets блокируются или редактируются;
 - blocked record получает status `blocked` в proposal audit.
+
+Redaction rule:
+
+- redact before persistence and before provider calls when feasible;
+- store secret fingerprints or types instead of raw values.
 
 Acceptance criteria:
 
@@ -600,6 +673,11 @@ Acceptance criteria:
 - task state сохраняется между запусками;
 - `.assistant/` должен быть gitignored при реализации.
 
+Storage rule:
+
+- storage writes must be canonical-path safe, atomic, and recoverable;
+- path traversal, unsafe IDs, and symlink writes must be rejected.
+
 ### FR-029. Inspection commands
 
 Требование: пользователь должен проверять состояние системы через CLI.
@@ -615,11 +693,20 @@ Acceptance criteria:
 /model
 ```
 
+P0 scriptability:
+
+- core P0 flows must also be possible via a minimal non-interactive path for smoke tests;
+- stdout is for primary data, stderr for diagnostics.
+
 Acceptance criteria:
 
 - inspection commands не вызывают основной LLM chat;
 - inspection commands показывают актуальное состояние storage;
 - inspection commands работают после restart CLI.
+
+Diagnostics rule:
+
+- inspection commands must work without invoking the main chat prompt.
 
 ### FR-030. Traceability к Day 11
 
@@ -634,6 +721,10 @@ Acceptance criteria:
 - `/memory short|work|long` показывает содержимое каждого слоя;
 - следующий ответ учитывает сохранённые records.
 
+Traceability rule:
+
+- Day 11 is mandatory and may not be bypassed.
+
 ### FR-031. Traceability к Day 12
 
 Требование: MVP должен закрывать Day 12.
@@ -645,6 +736,10 @@ Acceptance criteria:
 - active profile подключается к каждому prompt;
 - разные профили меняют ответы;
 - пользователь не копирует профиль вручную в запрос.
+
+Traceability rule:
+
+- Day 12 is mandatory and may not be bypassed.
 
 ### FR-032. Traceability к Day 13
 
@@ -659,6 +754,10 @@ Acceptance criteria:
 - `/task pause` работает на любом этапе;
 - `/task resume` восстанавливает контекст;
 - пользователь продолжает задачу без повторного объяснения.
+
+Traceability rule:
+
+- Day 13 is mandatory and may not be bypassed.
 
 ## 6. CLI commands
 

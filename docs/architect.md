@@ -6,6 +6,28 @@
 
 Ключевой принцип: LLM не должна сама решать, что помнить и какие правила важны. Приложение хранит состояние явно, разделяет memory layers, собирает prompt через prompt builder и постепенно добавляет deterministic checks.
 
+## 1.1. Canonical contract
+
+Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, and Day 13.
+
+### Task state
+
+- `stage`: `planning`, `execution`, `validation`, `done`.
+- `status`: `active`, `paused`.
+- `expected_action`: `user_input`, `llm_response`, `tool_result`, `user_confirmation`, `none`.
+- terminal completion is `stage=done` and `expected_action=none`.
+- `status=done` is not part of MVP.
+
+### Commands
+
+- top-level and slash commands must describe one canonical command tree;
+- P0 includes only commands needed for the mandatory Day 11/12/13 demo path and smoke tests.
+
+### Memory layers
+
+- only physical storage layers: `short`, `work`, `long`;
+- `ignore` exists only in proposal/audit trail.
+
 Главные блоки:
 
 - CLI interface;
@@ -110,6 +132,13 @@ Runtime data лучше хранить отдельно от исходного 
 
 Для этого проекта удобнее `.assistant/`, но её нужно добавить в `.gitignore` при реализации.
 
+Storage contract:
+
+- repo-local `.assistant/` remains the default for the project demo unless docs explicitly change it;
+- path precedence must be documented in FRD before coding;
+- storage writes must be canonical-path safe, atomic, and recoverable;
+- path traversal, unsafe IDs, and symlink writes must be rejected.
+
 Структура storage:
 
 ```text
@@ -136,8 +165,15 @@ Runtime data лучше хранить отдельно от исходного 
 Секреты:
 
 - предпочтительно хранить OpenRouter key только в `OPENROUTER_API_KEY`;
-- если нужен локальный файл с ключом, он должен быть вне git и явно игнорироваться;
+- if MVP ever supports any local key file, it must be an explicit non-default opt-in and outside git;
 - memory manager обязан редактировать или отклонять секреты перед сохранением.
+
+Privacy contract:
+
+- classify what categories of data are sent to the provider;
+- provider calls must have timeout, typed errors, and bounded retries;
+- custom base URL is explicit opt-in only and must be HTTPS/allowlisted;
+- API key must not be persisted in config, profiles, memory, transcripts, or audit data.
 
 ## 5. Data models
 
@@ -266,6 +302,12 @@ type AppConfig struct {
 
 Назначение: локальные настройки без секретов.
 
+Config precedence:
+
+- CLI flags > env vars > config file > defaults.
+- `OPENROUTER_API_KEY` is env-only for MVP.
+- `StorageDir` and `OpenRouterBaseURL` must be explicit opt-in overrides when not default.
+
 ## 6. Компоненты
 
 ### 6.1. CLI
@@ -322,6 +364,12 @@ ClearShort(ctx context.Context, sessionID string) error
 SelectForPrompt(ctx context.Context, profileID string, taskID string) (MemoryBundle, error)
 ```
 
+Storage scope:
+
+- save/apply methods must carry explicit session/task/proposal scope in the real implementation;
+- proposal application must be idempotent by proposal ID;
+- `ignore` must never be stored as a physical memory layer.
+
 ### 6.4. MemoryClassifier
 
 Отвечает за LLM-выбор того, какие факты куда сохранять.
@@ -375,6 +423,12 @@ type MemoryClassifier interface {
 ```
 
 `ignore` есть только в proposal. Физического memory layer `ignore` нет: такие записи не попадают в memory storage, но остаются в audit trail.
+
+Auditability:
+
+- classifier input is untrusted data and must be serialized/redacted before provider calls when feasible;
+- invalid JSON must not create records;
+- proposal audit must store provider/model/template/hash/retry/error metadata.
 
 MemoryClassifier использует тот же OpenRouter API. Модель может быть:
 
@@ -738,6 +792,12 @@ system rules > security invariants > active profile > task state > working memor
 
 Если текущий запрос конфликтует с профилем или инвариантом, ассистент должен явно назвать конфликт. Например: пользователь просит сохранить API key в long-term memory, но invariant checker блокирует запись.
 
+Trust contract:
+
+- profile, memory, task state, transcripts, and classifier output are untrusted data;
+- these blocks must be serialized/quoted/tagged as data, not instructions;
+- system/application/security policy always outranks user/saved context.
+
 ### 7.6. Storage interaction
 
 MVP storage файловый и append-friendly.
@@ -767,6 +827,13 @@ Write path after LLM response:
 
 Файловый storage выбран не потому, что это максимум, а потому что он прозрачен для обучения. Пользователь может открыть `.assistant/` и увидеть, где лежит каждый слой памяти.
 
+Storage policy:
+
+- writes must be atomic and recoverable;
+- path traversal and symlink writes are rejected;
+- app should prefer single-writer or locked access in MVP;
+- JSONL append must be serialized.
+
 ### 7.7. Error and retry boundaries
 
 Ошибки делятся по границам:
@@ -792,6 +859,12 @@ LLM content errors:
 ```
 
 MVP должен retry делать только для provider errors с timeout/temporary network failure и для classifier invalid JSON. Validation errors не retry, а возвращаются пользователю как локальный отказ.
+
+CLI/output contract:
+
+- stdout for primary data, stderr for diagnostics;
+- stable error categories should map to typed errors;
+- machine-readable mode must remain parseable.
 
 ### 7.8. Future architecture map
 
@@ -1350,6 +1423,28 @@ Day 13 tests:
 - `TestPausePreservesStageStepExpectedAction`;
 - `TestResumeRestoresStageStepExpectedAction`;
 - `TestResumeKeepsWorkingMemoryAvailable`.
+
+Additional P0 tests:
+
+- `TestPromptBuilderMarksUntrustedBlocks`;
+- `TestStorageRejectsUnsafePaths`;
+- `TestAtomicWriteAndRecovery`;
+- `TestProviderTimeoutAndTypedErrors`;
+- `TestDuplicateProposalApplyIsIdempotent`;
+- `TestGatekeeperBlocksPausedTask`;
+- `TestPromptInjectionRedaction`.
+
+Day 11/12/13 are mandatory acceptance criteria and may not be bypassed.
+
+## 16. Definition of ready
+
+Before implementation starts, docs must have:
+
+- one canonical contract for state/commands/memory layers;
+- explicit P0 vertical slice;
+- env-only API key rule for MVP;
+- storage/privacy/gatekeeper policies;
+- deterministic test matrix for Day 11/12/13.
 
 Security tests:
 
