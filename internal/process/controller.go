@@ -582,6 +582,9 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		autoReason = "planning intent requires planning stage"
 		stage = app.StagePlanning
 	}
+	if taskPtr != nil && taskPtr.Stage == app.StagePlanning && action == ActionProposeTransition && taskPtr.PendingPlanning == nil && !hasReadyPlanningState(*taskPtr) {
+		action = ActionPlanTask
+	}
 
 	if stage == "" && action != ActionAnswerQuestion && autoStartTitle == "" {
 		return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "missing_task", "no active task; start a task before process actions", "use /task start <title> to create a task", nil)
@@ -623,6 +626,10 @@ func taskTitleFromPlanningIntent(input string) string {
 		return strings.TrimSpace(string(runes[:maxTitleRunes]))
 	}
 	return title
+}
+
+func hasReadyPlanningState(state app.TaskState) bool {
+	return hasNonEmpty(state.Plan) && hasNonEmpty(state.AcceptanceCriteria) && !hasNonEmpty(state.OpenQuestions)
 }
 
 func isPausedTaskScopedInput(input string) bool {

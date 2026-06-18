@@ -393,6 +393,29 @@ func TestProcessControllerAutoStartsPlanningIntent(t *testing.T) {
 	}
 }
 
+func TestProcessControllerPlanningContinueWithoutPendingReplans(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"continued planning","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Продолжай задачу. Не повторяй исходные требования, просто используй сохраненный контекст."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil && res.Transition.Moved {
+		t.Fatalf("continue without pending planning should not force transition: %+v", res.Transition)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StagePlanning || current.PendingPlanning == nil {
+		t.Fatalf("continue should save pending planning proposal: %+v", current)
+	}
+}
+
 func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
