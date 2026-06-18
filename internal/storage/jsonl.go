@@ -27,7 +27,7 @@ func AppendJSONL(path string, value any) error {
 	if err := withJSONLLock(path, true, func() error {
 		_, statErr := os.Stat(path)
 		created := errors.Is(statErr, os.ErrNotExist)
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
+		f, err := openFileNoFollow(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
 		if err != nil {
 			return errStorage("append", path, err)
 		}
@@ -105,7 +105,7 @@ func WithFileLock(path string, createDir bool, fn func() error) error {
 }
 
 func readJSONLUnlocked[T any](path string) ([]T, error) {
-	f, err := os.Open(path)
+	f, err := openFileNoFollow(path, os.O_RDONLY, FileMode)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -207,7 +207,7 @@ func TruncateJSONL(path string) error {
 		return errStorage("lock", path, err)
 	}
 	defer unlock()
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, FileMode)
+	f, err := openFileNoFollow(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, FileMode)
 	if err != nil {
 		return errStorage("truncate", path, err)
 	}
@@ -226,7 +226,7 @@ func acquireFileLock(path string) (func(), error) {
 	if err := RejectSymlinkTarget(lockPath); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, FileMode)
+	f, err := openFileNoFollow(lockPath, os.O_CREATE|os.O_RDWR, FileMode)
 	if err != nil {
 		return nil, err
 	}
@@ -252,4 +252,8 @@ func acquireFileLock(path string) (func(), error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil
+}
+
+func openFileNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
+	return os.OpenFile(path, flag|syscall.O_NOFOLLOW, perm)
 }

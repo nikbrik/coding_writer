@@ -35,7 +35,8 @@ func validateAnswerQuestion(raw string) []string {
 	if containsSideEffectClaim(raw) || containsTestPassClaim(raw) && !isExplicitNotRun(raw) {
 		errs = append(errs, "answer_question must not claim file, memory, state, command, tool, or test side effects")
 	}
-	if strings.Contains(lower, "ready_for_validation") || strings.Contains(lower, "ready_for_done") || strings.Contains(lower, "stage=done") || strings.Contains(lower, `"stage":"done"`) {
+	transitionTokens := []string{"ready_for_execution_proposal", "ready_for_validation", "ready_for_done", "planning_required", "needs_execution_fixes", "blocked_missing_evidence", "stage=done", `"stage":"done"`, `"next_signal"`, `"readiness"`, `"verdict"`}
+	if containsAny(lower, transitionTokens) {
 		errs = append(errs, "answer_question must not propose or claim task transition")
 	}
 	return errs

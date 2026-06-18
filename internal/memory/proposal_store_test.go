@@ -56,9 +56,53 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 		if record.ProposalID == proposal.ID && record.ProposalRecordID == "" {
 			t.Fatalf("saved proposal record id missing: %+v", record)
 		}
-		if record.Scope != "profile" || record.ProfileID != "student" {
-			t.Fatalf("long proposal memory missing profile scope: %+v", record)
+		switch record.Kind {
+		case "preference":
+			if record.Scope != "profile" || record.ProfileID != "student" {
+				t.Fatalf("preference should be profile-scoped: %+v", record)
+			}
+		default:
+			if record.Scope != "global" || record.ProfileID != "student" {
+				t.Fatalf("non-preference long memory should be global and auditable to profile: %+v", record)
+			}
 		}
+	}
+}
+
+func TestProposalApplyRequiresExplicitAction(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	store := NewProposalStore(dir, mgr)
+	proposal := app.MemoryProposal{ID: "proposal_empty_apply", SessionID: "session_empty_apply", CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
+		{ID: "r_short", Layer: app.ProposedLayerShort, Kind: "context", Content: "short", Reason: "context", Status: app.ProposalPending},
+	}}
+	if err := store.Save(ctx, proposal); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, SessionID: "session_empty_apply"})
+	if err == nil || app.AsError(err).Code != "missing_apply_action" {
+		t.Fatalf("want missing_apply_action, got %v", err)
+	}
+}
+
+func TestLongDecisionDefaultsGlobalAcrossProfiles(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	record, err := mgr.Save(ctx, SaveInput{Layer: app.LayerLong, Kind: "decision", Content: "Use PostgreSQL", Source: "proposal", ProfileID: "student"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Scope != "global" || record.ProfileID != "student" {
+		t.Fatalf("decision should be global while preserving source profile: %+v", record)
+	}
+	bundle, err := mgr.SelectForPrompt(ctx, "session_scope", "", "senior")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.Long) != 1 || bundle.Long[0].Content != "Use PostgreSQL" {
+		t.Fatalf("global decision hidden from other profile: %+v", bundle.Long)
 	}
 }
 

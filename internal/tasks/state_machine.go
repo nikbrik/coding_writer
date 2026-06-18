@@ -61,6 +61,9 @@ func ValidateState(state app.TaskState) error {
 	if state.Stage == app.StageDone && state.ExpectedAction != app.ExpectedNone {
 		return app.NewError(app.CategoryValidation, "invalid_task_state", "done task must use expected_action none", nil)
 	}
+	if state.Stage == app.StageDone && state.Status != app.TaskStatusActive {
+		return app.NewError(app.CategoryValidation, "invalid_task_state", "done task must remain active terminal state", nil)
+	}
 	if state.Stage != app.StageDone && state.ExpectedAction == app.ExpectedNone {
 		return app.NewError(app.CategoryValidation, "invalid_task_state", "expected_action none is only valid for done task", nil)
 	}

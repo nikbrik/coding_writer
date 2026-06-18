@@ -61,9 +61,15 @@ func (g *TransitionGate) Apply(state app.TaskState, parsed ParsedResponse, opts 
 		return result, app.NewError(app.CategoryStorage, "task_changed_before_transition", "task changed before transition could be applied", nil)
 	}
 	if state.Stage == app.StagePlanning && next == app.StageExecution && parsed.Planning != nil {
-		if _, err := g.Tasks.SetPlanningOutput(parsed.Planning.Summary, parsed.Planning.AcceptanceCriteria, parsed.Planning.Plan, parsed.Planning.OpenQuestions); err != nil {
+		moved, err := g.Tasks.MoveWithPlanningOutput(parsed.Planning.Summary, parsed.Planning.AcceptanceCriteria, parsed.Planning.Plan, parsed.Planning.OpenQuestions, next)
+		if err != nil {
 			return result, err
 		}
+		result.Moved = true
+		result.To = moved.Stage
+		result.Reason = reason
+		result.State = moved
+		return result, nil
 	}
 	moved, err := g.Tasks.Move(next)
 	if err != nil {

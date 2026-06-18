@@ -80,6 +80,17 @@ func TestAnswerQuestionRejectsImplementationClaim(t *testing.T) {
 	}
 }
 
+func TestAnswerQuestionRejectsTransitionSignals(t *testing.T) {
+	errs := validateAnswerQuestion(`{"next_signal":"ready_for_validation"}`)
+	if len(errs) == 0 {
+		t.Fatal("expected answer_question transition signal rejection")
+	}
+	errs = validateAnswerQuestion("readiness: ready_for_execution_proposal")
+	if len(errs) == 0 {
+		t.Fatal("expected answer_question readiness rejection")
+	}
+}
+
 func TestExecutionRejectsPassedAndNotRunMix(t *testing.T) {
 	errs := validateExecution(&ExecutionOutput{Summary: "s", Verification: []string{"tests passed; not run"}, NextSignal: "continue_execution"})
 	if len(errs) == 0 {

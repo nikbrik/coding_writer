@@ -38,6 +38,7 @@ type ExchangeInput struct {
 	ActionKind             ActionKind
 	AutoApproveTransitions bool
 	TrustedEvidence        []string
+	RequireMemoryProposal  bool
 }
 
 // RunExchange executes the gated process loop.
@@ -96,17 +97,26 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 	}
 
-	bundle, err := c.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
+	promptTask := taskPtr
+	promptStage := stage
+	promptTaskID := taskID(taskPtr)
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionAnswerQuestion {
+		promptTask = nil
+		promptStage = ""
+		promptTaskID = ""
+	}
+
+	bundle, err := c.Memory.SelectForPrompt(ctx, sessionID, promptTaskID, profile.ID)
 	if err != nil {
 		return nil, err
 	}
 
 	messages, err := c.Builder.Build(PromptBuildInput{
 		Profile:    profile,
-		Task:       taskPtr,
+		Task:       promptTask,
 		Memory:     bundle,
 		Query:      input.Input,
-		Stage:      stage,
+		Stage:      promptStage,
 		ActionKind: action,
 	})
 	if err != nil {
@@ -230,17 +240,6 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 	}
 
-	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, taskID(taskPtr), input.Input, lastRaw)
-	if err != nil {
-		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", result.Model, auditError(err)); auditErr != nil {
-			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
-		}
-		return result, err
-	}
-	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
-		result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
-	}
-
 	if transitionCandidate != nil {
 		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
 		if err != nil {
@@ -255,6 +254,17 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			}
 			taskPtr = &transition.State
 		}
+	}
+
+	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, taskID(taskPtr), input.Input, lastRaw)
+	if err != nil {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", result.Model, auditError(err)); auditErr != nil {
+			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
+		return result, err
+	}
+	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
+		result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 	}
 
 	memoryModel := c.MemoryModel
@@ -281,12 +291,18 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", nil, "", "", memoryModel, auditError(err)); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 		}
+		if input.RequireMemoryProposal {
+			return result, err
+		}
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
 		return result, nil
 	}
 	if err := c.Proposals.Save(ctx, proposal); err != nil {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", memoryModel, auditError(err)); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
+		if input.RequireMemoryProposal {
+			return result, err
 		}
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
 		return result, nil
@@ -363,7 +379,7 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "missing_task", "no active task; start a task before process actions", "use /task start <title> to create a task", nil)
 	}
 
-	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action != ActionAnswerQuestion {
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && (action != ActionAnswerQuestion || isPausedTaskScopedInput(input.Input)) {
 		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "task_paused", "task is paused; resume before continuing", nil)
 	}
 
@@ -386,6 +402,11 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		}
 	}
 	return resolvedProcessState{Task: taskPtr, Stage: stage, Action: action}, nil
+}
+
+func isPausedTaskScopedInput(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	return containsAny(lower, []string{"task", "задач", "stage", "current_step", "expected_action", "plan", "criteria", "work memory", "working memory", "продолж", "continue", "resume", "реализ", "исполн", "выполн", "план", "критери", "шаг", "стад", "этап", "исправ", "fix", "edit", "change", "update", "write", "create", "delete"})
 }
 
 type auditMeta struct {

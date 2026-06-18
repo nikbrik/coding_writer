@@ -51,11 +51,7 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 		input.Source = "user"
 	}
 	if input.Layer == app.LayerLong && input.Scope == "" {
-		if input.ProfileID != "" {
-			input.Scope = "profile"
-		} else {
-			input.Scope = "global"
-		}
+		input.Scope = defaultLongScope(input.Kind, input.ProfileID)
 	}
 	record := app.MemoryRecord{
 		ID:               app.NewID("mem"),
@@ -101,6 +97,16 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 		return record, app.NewError(app.CategoryStorage, "memory_write", err.Error(), err)
 	}
 	return record, nil
+}
+
+func defaultLongScope(kind, profileID string) string {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "preference":
+		if profileID != "" {
+			return "profile"
+		}
+	}
+	return "global"
 }
 
 func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, profileID, taskID, userContent, assistantContent string) (app.MemoryRecord, app.MemoryRecord, error) {

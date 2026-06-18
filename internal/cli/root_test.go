@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,80 @@ func TestChatOnceRenderPromptJSONUsesFakeProviderAndProfile(t *testing.T) {
 	}
 	if parsed["ok"] != true || !strings.Contains(out.String(), "profile.active") || !strings.Contains(out.String(), "memory.working") {
 		t.Fatalf("bad chat render output: %s", out.String())
+	}
+}
+
+func TestChatOnceJSONDoesNotExposeRawPromptByDefault(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Объясни memory layers"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute failed: %v output=%s", err, out.String())
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("bad JSON: %v output=%s", err, out.String())
+	}
+	if parsed["rendered_prompt_id"] == nil || parsed["rendered_prompt"] != nil || parsed["messages"] != nil {
+		t.Fatalf("raw prompt leaked in default JSON: %s", out.String())
+	}
+}
+
+func TestCLIP0DayFlowsUseScriptableCommands(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	runJSON := func(args ...string) map[string]any {
+		t.Helper()
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		base := []string{"--storage-dir", storageDir, "--model", "fake/model", "--json"}
+		cmd.SetArgs(append(base, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v output=%s", args, err, out.String())
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+			t.Fatalf("bad JSON for %v: %v output=%s", args, err, out.String())
+		}
+		return parsed
+	}
+
+	runJSON("task", "start", "CLI assistant MVP")
+	chat := runJSON("chat", "--once", "--input", "Спланируй модуль памяти. Требование: CLI должен поддерживать выбор модели OpenRouter. Я предпочитаю короткие ответы на русском.")
+	proposal, ok := chat["proposal"].(map[string]any)
+	if !ok || proposal["id"] == "" || chat["rendered_prompt"] != nil || chat["rendered_prompt_id"] == nil {
+		t.Fatalf("bad chat/proposal JSON: %+v", chat)
+	}
+	proposalID := proposal["id"].(string)
+	apply := runJSON("memory", "apply", "--proposal", proposalID, "--accept", "all")
+	if apply["ok"] != true {
+		t.Fatalf("apply failed: %+v", apply)
+	}
+	work := runJSON("memory", "list", "work")
+	long := runJSON("memory", "list", "long")
+	if !strings.Contains(fmt.Sprint(work["records"]), "выбор модели OpenRouter") || !strings.Contains(fmt.Sprint(long["records"]), "короткие ответы на русском") {
+		t.Fatalf("memory apply/list did not expose Day 11 records: work=%+v long=%+v", work, long)
+	}
+
+	runJSON("profiles", "set", "student")
+	student := runJSON("chat", "--once", "--input", "Объясни архитектуру memory layers.", "--render-prompt")
+	runJSON("profiles", "set", "senior")
+	senior := runJSON("chat", "--once", "--input", "Объясни архитектуру memory layers.", "--render-prompt")
+	if student["rendered_prompt"] == senior["rendered_prompt"] || !strings.Contains(fmt.Sprint(student["rendered_prompt"]), "profile.active") || !strings.Contains(fmt.Sprint(senior["rendered_prompt"]), "profile.active") {
+		t.Fatalf("profile prompts did not differ: student=%+v senior=%+v", student, senior)
+	}
+
+	runJSON("task", "step", "реализовать MemoryManager")
+	runJSON("task", "expect", "llm_response")
+	runJSON("task", "move", "execution")
+	runJSON("task", "pause")
+	resumed := runJSON("task", "resume")
+	if !strings.Contains(fmt.Sprint(resumed["task"]), "реализовать MemoryManager") || !strings.Contains(fmt.Sprint(resumed["task"]), "llm_response") {
+		t.Fatalf("resume did not preserve Day 13 state: %+v", resumed)
 	}
 }
 
@@ -246,33 +321,23 @@ func TestSecretInputHardGateBeforeProviderValidation(t *testing.T) {
 	}
 }
 
-func TestTopLevelTaskPlanCriteriaCommands(t *testing.T) {
+func TestTopLevelTaskPlanCriteriaCommandsAreNotP0(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
-	args := [][]string{
-		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "start", "CLI assistant MVP"},
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "start", "CLI assistant MVP"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range [][]string{
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "plan", "build memory manager"},
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "criteria", "memory layers are separate files"},
-	}
-	for _, arg := range args {
+	} {
 		cmd := newRootCommand(&globalOptions{})
-		var out bytes.Buffer
-		cmd.SetOut(&out)
 		cmd.SetArgs(arg)
-		if err := cmd.Execute(); err != nil {
-			t.Fatalf("command %v failed: %v", arg, err)
+		if err := cmd.Execute(); err == nil {
+			t.Fatalf("P1 top-level command should be absent: %v", arg)
 		}
-	}
-	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := rt.Tasks.Current()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(state.Plan) != 1 || len(state.AcceptanceCriteria) != 1 {
-		t.Fatalf("plan/criteria commands failed: %+v", state)
 	}
 }
 
@@ -298,6 +363,15 @@ func TestChatTextShowsProposalRecords(t *testing.T) {
 	}
 }
 
+func TestMemoryApplyCLIRequiresExplicitAction(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", t.TempDir(), "--model", "fake/model", "--json", "memory", "apply"})
+	if err := cmd.Execute(); err == nil || app.AsError(err).Code != "missing_apply_action" {
+		t.Fatalf("want missing_apply_action, got %v", err)
+	}
+}
+
 func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
@@ -306,12 +380,26 @@ func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, nil)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Answer == "" || len(result.Warnings) == 0 || result.Proposal != nil {
 		t.Fatalf("classifier failure did not return answer with warning: %+v", result)
+	}
+}
+
+func TestChatOnceJSONFailsWhenClassifierFails(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Provider = providers.NewFakeProvider()
+	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail_json", "hello", false, nil, true)
+	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
+		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
 	}
 }
 
@@ -333,7 +421,7 @@ func TestRunChatExchangePassesTrustedEvidenceToValidation(t *testing.T) {
 	if _, err := rt.Tasks.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runChatExchange(context.Background(), rt, "session_validation_done", "проверь", false, []string{"go test ./... passed"})
+	result, err := runChatExchange(context.Background(), rt, "session_validation_done", "проверь", false, []string{"go test ./... passed"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +552,7 @@ func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, nil)
+	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, nil, false)
 	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret_blocked, got %v", err)
 	}
@@ -530,5 +618,28 @@ func TestPrivacyPurgeRemovesAuditAndTranscriptsOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir, "short_term.jsonl")); err != nil {
 		t.Fatalf("memory layer removed unexpectedly: %v", err)
+	}
+}
+
+func TestPrivacyPurgeRejectsSymlinkAuditFile(t *testing.T) {
+	storageDir := t.TempDir()
+	sessionDir := filepath.Join(storageDir, "sessions", "session_test")
+	if err := os.MkdirAll(sessionDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(storageDir, "outside.jsonl")
+	if err := os.WriteFile(target, []byte("secret audit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(sessionDir, "memory_proposals.jsonl")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "privacy", "purge", "--audit", "--yes"})
+	if err := cmd.Execute(); err == nil || app.AsError(err).Code != "privacy_purge" {
+		t.Fatalf("want privacy_purge symlink rejection, got %v", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("purge followed symlink target: %v", err)
 	}
 }

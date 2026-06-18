@@ -115,3 +115,31 @@ func TestReadJSONLHandlesLargeRecord(t *testing.T) {
 		t.Fatalf("large record did not round-trip: %d", len(records))
 	}
 }
+
+func TestJSONLRejectsSymlinkTargetAndLockFile(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.jsonl")
+	if err := os.WriteFile(target, []byte{}, FileMode); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "records.jsonl")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := AppendJSONL(link, map[string]string{"bad": "write"}); err == nil {
+		t.Fatal("jsonl symlink target accepted")
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	lockTarget := filepath.Join(root, "lock-target")
+	if err := os.WriteFile(lockTarget, []byte{}, FileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(lockTarget, link+".lock"); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := AppendJSONL(link, map[string]string{"bad": "lock"}); err == nil {
+		t.Fatal("jsonl symlink lock accepted")
+	}
+}

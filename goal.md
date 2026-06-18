@@ -70,6 +70,14 @@ Requirements source of truth:
 - Forbidden docs check: `git diff --name-only -- "day11.md" "day12.md" "03-memory-state-notes.md" "docs/day11.md" "docs/day12.md" "docs/03-memory-state-notes.md"` returned empty.
 - Latest self-review: no unresolved valid findings scored 5+ after final fixes.
 
+### Follow-up review/fix pass
+
+- Re-reviewed the codebase against `docs/*` after the first ledger and found 14 additional valid findings scored 5+.
+- Fixed safe privacy purge, JSONL no-follow opens, paused task-scoped Q&A gates, atomic planning transition, transition-before-accepted-history ordering, answer_question transition-signal validation, done pause/resume no-op behavior, long-memory scope inference, explicit memory apply action requirement, `chat --once --json` classifier failure handling, default JSON prompt minimization, P1 top-level task command exposure, and CLI P0 acceptance coverage.
+- Added regression coverage in storage, tasks, memory, process, CLI, and acceptance tests.
+- Verification after follow-up: `go test ./internal/storage ./internal/tasks ./internal/memory ./internal/process ./internal/cli ./tests`, `go test ./...`, `go test ./tests/...`, and `git diff --check` passed.
+- Forbidden docs check after follow-up returned empty.
+
 ## Scored findings ledger
 
 | # | Score | Basis | Finding | Status |
@@ -128,3 +136,17 @@ Requirements source of truth:
 | 52 | 4 | testing | Some tests depend on fake provider heuristics. | No change: below 5, existing fake provider remains sufficient after regressions. |
 | 53 | 3 | product scope | No separate reviewer model/agent is implemented. | No change: docs mark separate model/agent as not required for P1. |
 | 54 | 3 | product scope | No autonomous commit automation. | No change: docs explicitly forbid commit automation. |
+| 55 | 6 | docs: storage/privacy | `privacy purge` deleted via raw joined paths and did not validate session/file symlink targets. | Fixed in `internal/cli/root.go` with `SafeJoin`, ID validation and symlink rejection. |
+| 56 | 5 | docs: storage safety | JSONL final/lock opens could follow a swapped symlink after precheck. | Fixed in `internal/storage/jsonl.go` with `O_NOFOLLOW` opens. |
+| 57 | 8 | docs: paused task gate | Paused task-scoped Q&A could still call provider as `answer_question`. | Fixed in `ProcessController` with task-scoped paused query rejection. |
+| 58 | 7 | docs: transition gate | Planning output could be persisted before a later stage move failure. | Fixed with atomic `MoveWithPlanningOutput`. |
+| 59 | 6 | docs: persistence ordering | Transition failure could leave model output in accepted short memory. | Fixed by applying transition before accepted short-memory persistence. |
+| 60 | 5 | docs: answer_question | `answer_question` allowed transition signals like `ready_for_execution_proposal`. | Fixed in `validateAnswerQuestion`. |
+| 61 | 5 | docs: done terminal no-op | Done pause/resume rewrote task files instead of terminal no-op. | Fixed in task manager and state validation. |
+| 62 | 6 | docs: long memory semantics | Long-term decisions/knowledge defaulted to profile scope and disappeared across profiles. | Fixed with kind-based long scope inference. |
+| 63 | 5 | docs: memory confirmation | Empty proposal apply returned success with zero user decisions. | Fixed with core/CLI `missing_apply_action`. |
+| 64 | 8 | docs: P0 scriptability | Day 11/12/13 acceptance lacked CLI-level scriptable coverage. | Fixed with CLI P0 day-flow regression. |
+| 65 | 8 | docs: classifier requirement | `chat --once --json` could succeed when classifier failed, violating Day 11 P0 flow. | Fixed with strict proposal requirement for non-interactive JSON. |
+| 66 | 7 | docs: privacy/output | Default `chat --once --json` exposed raw rendered prompt/messages instead of prompt id. | Fixed with default `rendered_prompt_id` and raw prompt only under `--render-prompt`. |
+| 67 | 6 | CLI correctness | Top-level `memory apply` with no action hid usage errors. | Fixed with CLI/core missing-action regression. |
+| 68 | 5 | docs: command boundary | Top-level `task plan`/`task criteria` were exposed despite P1/debug command boundary. | Fixed by removing top-level exposure; slash debug commands remain. |

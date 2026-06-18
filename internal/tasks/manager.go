@@ -137,6 +137,36 @@ func (m *Manager) Move(next app.TaskStage) (app.TaskState, error) {
 	return state, m.saveBothIfUnchanged(state, &snapshot)
 }
 
+func (m *Manager) MoveWithPlanningOutput(summary string, criteria, plan, openQuestions []string, next app.TaskStage) (app.TaskState, error) {
+	if next != app.StageExecution {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "invalid_stage", "planning output can only move to execution", nil)
+	}
+	if validation.HasSecret(summary) || hasSecretIn(criteria) || hasSecretIn(plan) || hasSecretIn(openQuestions) {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	snapshot, err := m.currentSnapshot()
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	state := snapshot.State
+	if state.Status == app.TaskStatusPaused {
+		return state, app.NewError(app.CategoryValidation, "task_paused", "resume task before moving stage", nil)
+	}
+	if state.Stage != app.StagePlanning || !IsAllowed(state.Stage, next) {
+		return state, app.ErrorWithHint(app.CategoryValidation, "forbidden_transition", "forbidden task stage transition", fmt.Sprintf("allowed next stages from %s: %v", state.Stage, AllowedNext(state.Stage)), nil)
+	}
+	now := time.Now().UTC()
+	state.Objective = strings.TrimSpace(summary)
+	state.AcceptanceCriteria = trimNonEmpty(criteria)
+	state.Plan = trimNonEmpty(plan)
+	state.OpenQuestions = trimNonEmpty(openQuestions)
+	state.Stage = next
+	state.ExpectedAction = defaultExpectedAction(next)
+	state.UpdatedAt = now
+	state.HistoryLog = append(state.HistoryLog, fmt.Sprintf("%s: %s -> %s", now.Format(time.RFC3339), app.StagePlanning, next))
+	return state, m.saveBothIfUnchanged(state, &snapshot)
+}
+
 func defaultExpectedAction(stage app.TaskStage) app.ExpectedAction {
 	switch stage {
 	case app.StagePlanning:
@@ -243,9 +273,7 @@ func (m *Manager) Pause() (app.TaskState, error) {
 	}
 	state := snapshot.State
 	if state.Stage == app.StageDone {
-		state.Status = app.TaskStatusActive
-		state.ExpectedAction = app.ExpectedNone
-		return state, m.saveBothIfUnchanged(state, &snapshot)
+		return state, nil
 	}
 	if state.Status == app.TaskStatusPaused {
 		return state, nil
@@ -264,9 +292,7 @@ func (m *Manager) Resume() (app.TaskState, error) {
 	}
 	state := snapshot.State
 	if state.Stage == app.StageDone {
-		state.Status = app.TaskStatusActive
-		state.ExpectedAction = app.ExpectedNone
-		return state, m.saveBothIfUnchanged(state, &snapshot)
+		return state, nil
 	}
 	if state.Status != app.TaskStatusPaused {
 		return state, app.NewError(app.CategoryValidation, "task_not_paused", "current task is not paused", nil)

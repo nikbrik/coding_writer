@@ -92,6 +92,25 @@ func TestProcessPausedTaskDoesNotCallProvider(t *testing.T) {
 	}
 }
 
+func TestProcessPausedTaskScopedQuestionDoesNotCallProvider(t *testing.T) {
+	ctx := context.Background()
+	rt := newAcceptanceRuntime(t)
+	if _, err := rt.tasks.Start("paused task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.tasks.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := newProcessAcceptanceController(rt)
+	_, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_paused_question", Input: "что по текущей задаче?"})
+	if err == nil || app.AsError(err).Code != "task_paused" {
+		t.Fatalf("want task_paused, got %v", err)
+	}
+	if processChatCalls(rt.provider.SnapshotCalls()) != 0 {
+		t.Fatal("provider chat should not be called for task-scoped paused question")
+	}
+}
+
 func TestProcessInvalidValidationRetriesThenBlocks(t *testing.T) {
 	ctx := context.Background()
 	rt := newAcceptanceRuntime(t)
@@ -129,5 +148,24 @@ func TestProcessSuccessfulValidationTransitionsToDone(t *testing.T) {
 	current, _ := rt.tasks.Current()
 	if current.Stage != app.StageDone || current.ExpectedAction != app.ExpectedNone {
 		t.Fatalf("task not done through transition gate: %+v", current)
+	}
+}
+
+func TestProcessRejectedOutputDoesNotSaveAcceptedShortMemory(t *testing.T) {
+	ctx := context.Background()
+	rt := newAcceptanceRuntime(t)
+	state, _ := rt.tasks.Start("validate task")
+	state, _ = rt.tasks.Move(app.StageExecution)
+	state, _ = rt.tasks.Move(app.StageValidation)
+	_ = state
+	rt.provider.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tests passed"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+	ctrl := newProcessAcceptanceController(rt)
+	_, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_transition_fail", Input: "проверь", ActionKind: process.ActionReviewOutput})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want validation_failed, got %v", err)
+	}
+	short, _ := rt.memory.List(ctx, app.LayerShort, "process_transition_fail", "")
+	if len(short) != 0 {
+		t.Fatalf("failed transition saved accepted short memory: %+v", short)
 	}
 }

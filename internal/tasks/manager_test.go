@@ -117,12 +117,28 @@ func TestDoneStageUsesExpectedNoneNoStatusDone(t *testing.T) {
 	if state.Stage != app.StageDone || state.ExpectedAction != app.ExpectedNone || state.Status != app.TaskStatusActive {
 		t.Fatalf("bad done state: %+v", state)
 	}
+	path := filepath.Join(dir, "tasks", "current.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	state, err = mgr.Pause()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if state.Stage != app.StageDone || state.Status != app.TaskStatusActive {
 		t.Fatalf("done pause reopened task: %+v", state)
+	}
+	state, err = mgr.Resume()
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("done pause/resume should be terminal no-op without rewriting state")
 	}
 }
 
@@ -180,5 +196,12 @@ func TestCurrentRejectsInvalidPersistedState(t *testing.T) {
 	_, err := NewManager(dir).Current()
 	if err == nil || !strings.Contains(err.Error(), "invalid_task_state") {
 		t.Fatalf("want invalid_task_state, got %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "current.json"), []byte(`{"id":"task_bad","title":"bad","stage":"done","status":"paused","expected_action":"none","updated_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewManager(dir).Current()
+	if err == nil || !strings.Contains(err.Error(), "invalid_task_state") {
+		t.Fatalf("want invalid_task_state for paused done, got %v", err)
 	}
 }

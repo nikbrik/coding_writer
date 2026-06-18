@@ -273,12 +273,16 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, chatOpts.TrustedEvidence)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, chatOpts.TrustedEvidence, opts.JSON && !chatOpts.RenderPrompt)
 				if err != nil {
 					return err
 				}
-				if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.Messages, result.RenderedPrompt); err != nil {
+				if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil {
 					result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
+				}
+				if !chatOpts.RenderPrompt {
+					result.RenderedPrompt = ""
+					result.Messages = nil
 				}
 				for _, warning := range result.Warnings {
 					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
@@ -296,18 +300,19 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 }
 
 type chatResult struct {
-	OK             bool                      `json:"ok"`
-	SessionID      string                    `json:"session_id"`
-	Answer         string                    `json:"answer,omitempty"`
-	Model          string                    `json:"model,omitempty"`
-	RenderedPrompt string                    `json:"rendered_prompt"`
-	Messages       []app.ChatMessage         `json:"messages,omitempty"`
-	Proposal       *app.MemoryProposal       `json:"proposal,omitempty"`
-	Transition     *process.TransitionResult `json:"transition,omitempty"`
-	Warnings       []string                  `json:"warnings,omitempty"`
+	OK               bool                      `json:"ok"`
+	SessionID        string                    `json:"session_id"`
+	Answer           string                    `json:"answer,omitempty"`
+	Model            string                    `json:"model,omitempty"`
+	RenderedPromptID string                    `json:"rendered_prompt_id,omitempty"`
+	RenderedPrompt   string                    `json:"rendered_prompt,omitempty"`
+	Messages         []app.ChatMessage         `json:"messages,omitempty"`
+	Proposal         *app.MemoryProposal       `json:"proposal,omitempty"`
+	Transition       *process.TransitionResult `json:"transition,omitempty"`
+	Warnings         []string                  `json:"warnings,omitempty"`
 }
 
-func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, trustedEvidence []string) (chatResult, error) {
+func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, trustedEvidence []string, requireMemoryProposal bool) (chatResult, error) {
 	if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -323,8 +328,8 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, TrustedEvidence: trustedEvidence})
-	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel}
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, TrustedEvidence: trustedEvidence, RequireMemoryProposal: requireMemoryProposal})
+	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel, RenderedPromptID: app.NewID("prompt")}
 	if procResult != nil {
 		result.Answer = procResult.Answer
 		result.Model = procResult.Model
@@ -372,7 +377,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
-		result, err := runChatExchange(ctx, rt, sessionID, line, false, nil)
+		result, err := runChatExchange(ctx, rt, sessionID, line, false, nil, false)
 		if err != nil {
 			failed = true
 			_, _ = fmt.Fprintln(diag, err.Error())
@@ -388,7 +393,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		if result.Transition != nil {
 			_, _ = fmt.Fprintf(out, "transition: %s -> %s\n", result.Transition.From, result.Transition.To)
 		}
-		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.Messages, result.RenderedPrompt); err != nil {
+		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil {
 			_, _ = fmt.Fprintln(diag, "prompt audit skipped: "+app.AsError(err).Code)
 		}
 	}
@@ -723,7 +728,9 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 }
 
 func taskCommand(opts *globalOptions) *cobra.Command {
-	cmd := &cobra.Command{Use: "task", Short: "Task state commands"}
+	cmd := &cobra.Command{Use: "task", Short: "Task state commands", RunE: func(cmd *cobra.Command, args []string) error {
+		return app.NewError(app.CategoryCLI, "unknown_task_command", "unknown task command", nil)
+	}}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "start <title>",
 		Short: "Start current task",
@@ -797,38 +804,6 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			state, err := rt.Tasks.SetExpectedAction(app.ExpectedAction(args[0]))
-			if err != nil {
-				return err
-			}
-			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
-		},
-	})
-	cmd.AddCommand(&cobra.Command{
-		Use:   "plan <text>",
-		Short: "Append current task plan item",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			rt, err := newRuntime(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			state, err := rt.Tasks.AddPlanItem(strings.Join(args, " "))
-			if err != nil {
-				return err
-			}
-			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
-		},
-	})
-	cmd.AddCommand(&cobra.Command{
-		Use:   "criteria <text>",
-		Short: "Append current task acceptance criteria",
-		Args:  cobra.MinimumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			rt, err := newRuntime(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			state, err := rt.Tasks.AddCriteria(strings.Join(args, " "))
 			if err != nil {
 				return err
 			}
@@ -949,41 +924,93 @@ func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int
 	if !purgeAudit && !purgeTranscripts {
 		return 0, app.NewError(app.CategoryCLI, "missing_purge_target", "choose --audit and/or --transcripts", nil)
 	}
-	sessionsDir := filepath.Join(storageDir, "sessions")
+	sessionsDir, err := storage.SafeJoin(storageDir, "sessions")
+	if err != nil {
+		return 0, app.NewError(app.CategoryStorage, "privacy_purge", "unsafe sessions path", err)
+	}
+	if err := storage.EnsureNoSymlinkParents(sessionsDir); err != nil {
+		return 0, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	if err := storage.RejectSymlinkTarget(sessionsDir); err != nil {
+		return 0, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
 	removed := 0
-	err := filepath.WalkDir(sessionsDir, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		name := entry.Name()
-		shouldRemove := (purgeAudit && (name == "memory_proposals.jsonl" || name == "prompts.jsonl")) || (purgeTranscripts && name == "transcript.md")
-		if !shouldRemove {
-			return nil
-		}
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		removed++
-		return nil
-	})
+	entries, err := os.ReadDir(sessionsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return removed, nil
 		}
 		return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
 	}
-	if purgeAudit {
-		path := filepath.Join(storageDir, "process_audit.jsonl")
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessionID := entry.Name()
+		if err := storage.ValidateID(sessionID); err != nil {
+			return removed, app.NewError(app.CategoryStorage, "privacy_purge", "unsafe session id", err)
+		}
+		sessionDir, err := storage.SafeJoin(storageDir, "sessions", sessionID)
+		if err != nil {
+			return removed, app.NewError(app.CategoryStorage, "privacy_purge", "unsafe session path", err)
+		}
+		if err := storage.EnsureNoSymlinkParents(sessionDir); err != nil {
 			return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
-		} else if err == nil {
+		}
+		if err := storage.RejectSymlinkTarget(sessionDir); err != nil {
+			return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+		}
+		if purgeAudit {
+			for _, name := range []string{"memory_proposals.jsonl", "prompts.jsonl"} {
+				ok, err := removePrivacyFile(storageDir, "sessions", sessionID, name)
+				if err != nil {
+					return removed, err
+				}
+				if ok {
+					removed++
+				}
+			}
+		}
+		if purgeTranscripts {
+			ok, err := removePrivacyFile(storageDir, "sessions", sessionID, "transcript.md")
+			if err != nil {
+				return removed, err
+			}
+			if ok {
+				removed++
+			}
+		}
+	}
+	if purgeAudit {
+		ok, err := removePrivacyFile(storageDir, "process_audit.jsonl")
+		if err != nil {
+			return removed, err
+		}
+		if ok {
 			removed++
 		}
 	}
 	return removed, nil
+}
+
+func removePrivacyFile(storageDir string, elems ...string) (bool, error) {
+	path, err := storage.SafeJoin(storageDir, elems...)
+	if err != nil {
+		return false, app.NewError(app.CategoryStorage, "privacy_purge", "unsafe purge path", err)
+	}
+	if err := storage.EnsureNoSymlinkParents(path); err != nil {
+		return false, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	if err := storage.RejectSymlinkTarget(path); err != nil {
+		return false, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	return true, nil
 }
 
 func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime, sessionID, line string) (bool, error) {
@@ -1446,7 +1473,7 @@ func stageOf(task *app.TaskState) app.TaskStage {
 	return task.Stage
 }
 
-func recordRenderedPrompt(storageDir, sessionID string, messages []app.ChatMessage, rendered string) error {
+func recordRenderedPrompt(storageDir, sessionID, promptID string, messages []app.ChatMessage, rendered string) error {
 	if os.Getenv("ASSISTANT_PROMPT_AUDIT") != "1" && os.Getenv("ASSISTANT_RAW_PROMPT_AUDIT") != "1" {
 		return nil
 	}
@@ -1461,7 +1488,7 @@ func recordRenderedPrompt(storageDir, sessionID string, messages []app.ChatMessa
 		return err
 	}
 	path := filepath.Join(dir, "prompts.jsonl")
-	record := map[string]any{"session_id": sessionID, "rendered_prompt": rendered, "messages": messages, "created_at": time.Now().UTC()}
+	record := map[string]any{"id": promptID, "session_id": sessionID, "rendered_prompt": rendered, "messages": messages, "created_at": time.Now().UTC()}
 	return storage.AppendJSONL(path, record)
 }
 

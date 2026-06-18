@@ -95,6 +95,9 @@ func (s *ProposalStore) Latest(ctx context.Context, sessionID string) (app.Memor
 }
 
 func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResult, error) {
+	if !hasApplyAction(opts) {
+		return ApplyResult{}, app.ErrorWithHint(app.CategoryCLI, "missing_apply_action", "memory apply requires --accept, --reject, or --edit", "example: assistant memory apply --proposal latest --accept all --json", nil)
+	}
 	if opts.SessionID == "" {
 		var err error
 		opts.SessionID, err = LatestSessionID(s.StorageDir)
@@ -188,11 +191,7 @@ func (s *ProposalStore) applyLocked(ctx context.Context, opts ApplyOptions, path
 					profileID = opts.ProfileID
 				}
 				if scope == "" {
-					if profileID != "" {
-						scope = "profile"
-					} else {
-						scope = "global"
-					}
+					scope = defaultLongScope(record.Kind, profileID)
 				}
 				record.Scope = scope
 				record.ProfileID = profileID
@@ -264,6 +263,10 @@ func (s *ProposalStore) applyLocked(ctx context.Context, opts ApplyOptions, path
 		}
 	}
 	return ApplyResult{Proposal: appliedProposal, SavedRecords: saved}, nil
+}
+
+func hasApplyAction(opts ApplyOptions) bool {
+	return opts.AcceptAll || opts.RejectAll || len(opts.AcceptIDs) > 0 || len(opts.RejectIDs) > 0 || len(opts.Edits) > 0
 }
 
 func physicalLayer(layer app.ProposedMemoryLayer) (app.MemoryLayer, error) {
