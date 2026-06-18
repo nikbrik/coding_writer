@@ -1,81 +1,85 @@
 # Ручное тестирование дней 11-13
 
-Документ описывает, как вручную подключить OpenRouter API key, запустить CLI-ассистента и проверить требования дней 11, 12 и 13.
+Цель: проверить дни 11, 12 и 13 максимально похоже на обычный пользовательский опыт. Один раз настраиваем команду `assistant`, добавляем ее в `PATH`, задаем понятный path для данных и дальше работаем через интерактивный чат с короткими slash-командами.
 
-## 1. Подключение ключа OpenRouter
+## 1. Предварительная Настройка
 
-### Что нужно заранее
-
-- Go 1.22 или новее.
-- Терминал в корне проекта `coding_writer`.
-- Аккаунт OpenRouter.
-- API key OpenRouter.
-- ID модели OpenRouter, например `openai/gpt-4.1-mini`, `anthropic/claude-3.5-sonnet` или другая доступная модель.
-
-Важно:
-
-- ключ передается только через переменную окружения `OPENROUTER_API_KEY`;
-- ключ не надо писать в prompt, профиль, память, название задачи или config;
-- реальные запросы к OpenRouter могут тратить деньги;
-- для чистого ручного теста лучше использовать отдельное временное хранилище.
-
-### Шаг 1. Открыть терминал в проекте
+### 1.1. Задать path проекта
 
 ```bash
+export CW_ROOT="/Users/nikita/code/coding_writer"
+cd "$CW_ROOT"
 pwd
 ```
 
 Ожидаемо:
 
-- путь заканчивается на `coding_writer`.
+- вывод: `/Users/nikita/code/coding_writer`;
+- все следующие команды запускаются из корня проекта.
 
-### Шаг 2. Указать API key
+### 1.2. Собрать `assistant` и добавить в `PATH`
+
+```bash
+mkdir -p "$CW_ROOT/.assistant/bin"
+go build -o "$CW_ROOT/.assistant/bin/assistant" ./cmd/assistant
+export PATH="$CW_ROOT/.assistant/bin:$PATH"
+which assistant
+assistant --help
+```
+
+Ожидаемо:
+
+- `which assistant` показывает `/Users/nikita/code/coding_writer/.assistant/bin/assistant`;
+- `assistant --help` показывает справку CLI;
+- дальше не нужно писать `go run ./cmd/assistant`, достаточно писать `assistant`.
+
+Важно:
+
+- этот `PATH` задан только для текущего терминала;
+- если откроете новый терминал, повторите команды из этого блока;
+- `.assistant/` уже игнорируется git, поэтому бинарь и локальные данные не попадут в коммит.
+
+### 1.3. Задать path хранилища
+
+```bash
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13"
+mkdir -p "$ASSISTANT_STORAGE_DIR"
+```
+
+Ожидаемо:
+
+- данные ручного теста будут лежать в `/Users/nikita/code/coding_writer/.assistant/storage/manual-day11-13`;
+- память, задачи, профили и audit будут сохраняться между запусками `assistant chat`;
+- это удобнее, чем `mktemp`, потому что после перезапуска терминала можно вернуться к тому же состоянию.
+
+Если нужен полностью чистый прогон, задайте другой path, например:
+
+```bash
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13-run2"
+mkdir -p "$ASSISTANT_STORAGE_DIR"
+```
+
+### 1.4. Подключить OpenRouter key и модель
 
 ```bash
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
-```
-
-Проверить, что переменная задана:
-
-```bash
+export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
 test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 ```
 
 Ожидаемо:
 
-- вывод: `OPENROUTER_API_KEY set`.
+- вывод: `OPENROUTER_API_KEY set`;
+- ключ не выводится в терминал полностью;
+- модель можно заменить на любую доступную в вашем OpenRouter аккаунте.
 
-Не выводите сам ключ командой `echo $OPENROUTER_API_KEY`, чтобы случайно не показать его в логах или скриншотах.
+Важно:
 
-### Шаг 3. Выбрать модель
+- не пишите ключ в чат, профиль, память или название задачи;
+- приложение читает ключ из env и не сохраняет его в config;
+- реальные запросы к OpenRouter могут тратить деньги.
 
-```bash
-export ASSISTANT_MODEL="openai/gpt-4.1-mini"
-```
-
-Если хотите другую модель, замените значение на ID модели из OpenRouter.
-
-Например, если вы хотите использовать DeepSeek:
-
-```bash
-export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
-```
-
-### Шаг 4. Создать отдельное хранилище для ручного теста
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-```
-
-Зачем это нужно:
-
-- все данные теста попадут во временную папку;
-- реальные пользовательские данные не будут затронуты;
-- тест можно безопасно повторять с нуля.
-
-### Шаг 5. Проверить сборку проекта
-
-Если вы уже задали `ASSISTANT_MODEL` и `ASSISTANT_STORAGE_DIR`, запускайте тесты так:
+### 1.5. Проверить тесты проекта без влияния ручных env
 
 ```bash
 env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./...
@@ -83,519 +87,271 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./...
 
 Ожидаемо:
 
-- команда завершается без ошибок;
-- в конце нет `FAIL`.
+- все пакеты проходят;
+- нет `FAIL`.
 
-Почему так: `ASSISTANT_MODEL` нужен для ручного запуска ассистента, но некоторые unit-тесты специально проверяют сценарий без выбранной модели.
+Почему так: `ASSISTANT_MODEL` нужен для ручного запуска, но часть unit-тестов специально проверяет сценарии без выбранной модели.
 
-### Шаг 6. Инициализировать ассистента
+### 1.6. Инициализировать ассистента
 
 ```bash
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
+assistant init --model "$ASSISTANT_MODEL"
+assistant profiles list
 ```
 
 Ожидаемо:
 
-- вывод начинается с `initialized`;
-- ошибок нет;
-- созданы стандартные профили `student` и `senior`;
-- ключ OpenRouter не печатается в выводе.
+- `init` выводит `initialized /Users/nikita/code/coding_writer/.assistant/storage/manual-day11-13`;
+- в профилях есть `student` и `senior`;
+- ключ OpenRouter не печатается.
 
-Если ошибка `OPENROUTER_API_KEY is required`, значит переменная окружения не задана в этом терминале.
+Если ошибка `OPENROUTER_API_KEY is required`, значит ключ не задан в этом терминале.
 
-Если ошибка про модель, проверьте, что модель доступна в вашем аккаунте OpenRouter.
+Если ошибка про модель, проверьте ID модели в OpenRouter.
 
-### Шаг 7. Проверить первый реальный запрос
+### 1.7. Запустить пользовательский режим
 
 ```bash
-go run ./cmd/assistant chat --once --input "Ответь одним коротким предложением: ассистент подключен?"
+assistant chat
+```
+
+Дальше вы внутри интерактивного режима. Обычный текст отправляется ассистенту. Строки с `/` управляют локальным CLI.
+
+Быстрая проверка внутри `assistant chat`:
+
+```text
+/help
+Ответь одним коротким предложением: ассистент подключен?
+/privacy
+/exit
 ```
 
 Ожидаемо:
 
-- ассистент отвечает обычным текстом;
-- нет ошибки `missing_api_key`;
-- нет ошибки модели;
-- в stderr может быть предупреждение provider disclosure: это нормально, оно объясняет, что prompt отправляется внешнему провайдеру.
+- `/help` показывает slash-команды;
+- обычное сообщение получает ответ от OpenRouter;
+- `/privacy` объясняет, что ключ хранится только в env;
+- `/exit` закрывает чат.
 
-### Шаг 8. Быстро проверить профили
+## 2. День 11. Память Через Удобный REPL
+
+### Что проверяем
+
+- Есть 3 слоя памяти: `short`, `work`, `long`.
+- Данные разных типов не смешиваются.
+- Ассистент предлагает, что сохранить и в какой слой.
+- Пользователь явно применяет память.
+- Следующий ответ использует сохраненную память.
+- Мусорная информация не сохраняется как полезная память.
+
+### Ручной сценарий
+
+Запустите чат:
 
 ```bash
-go run ./cmd/assistant profiles list
+assistant chat
+```
+
+Введите внутри чата:
+
+```text
+/task start CLI assistant MVP
+/task move execution
+Спланируй модуль памяти. Требование текущей задачи: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: отвечай коротко на русском. Случайная фраза для игнорирования: сегодня на улице облачно.
+/memory apply --accept all
+/memory short
+/memory work
+/memory long
+Продолжай задачу. Не повторяй исходные требования, просто используй сохраненный контекст.
+/exit
 ```
 
 Ожидаемо:
 
-- есть профиль `student`;
-- есть профиль `senior`;
-- один из профилей помечен как активный.
+- после обычного сообщения ассистент отвечает и показывает memory proposal;
+- если proposal не появился автоматически, выполните `/memory propose`;
+- `/memory apply --accept all` сохраняет предложенные полезные записи;
+- `/memory short` показывает контекст текущего диалога;
+- `/memory work` показывает требование текущей задачи про OpenRouter;
+- `/memory long` показывает стабильное предпочтение отвечать коротко на русском;
+- случайная фраза про погоду не должна сохраниться как полезная память;
+- финальное сообщение `Продолжай задачу...` должно использовать сохраненный контекст без повторного объяснения.
 
-## 2. День 11. Модель памяти ассистента
+Критерий готовности дня 11: `short`, `work`, `long` содержат разные типы данных, память применяется явно, следующий ответ учитывает сохраненные записи.
 
-### Требования дня 11 простыми словами
+## 3. День 12. Персонализация Через Профили
 
-Нужно проверить, что у ассистента есть 3 разных слоя памяти:
+### Что проверяем
 
-- `short` - краткосрочная память текущего диалога;
-- `work` - рабочая память текущей задачи;
-- `long` - долговременная память профиля, предпочтений и знаний.
+- Есть профили `student` и `senior`.
+- Профиль подключается к каждому запросу.
+- Разные профили меняют стиль ответа.
+- Можно создать свой профиль.
 
-Также нужно проверить:
+### Ручной сценарий
 
-- разные типы памяти хранятся отдельно;
-- ассистент явно предлагает, что сохранить и куда;
-- пользователь явно применяет предложение памяти;
-- память влияет на следующий ответ;
-- мусорные или неважные данные не сохраняются как полезная память.
-
-### Кейс 11.1. Создать задачу для рабочей памяти
+Запустите чат:
 
 ```bash
-go run ./cmd/assistant task start "CLI assistant MVP"
-go run ./cmd/assistant task move execution
+assistant chat
+```
+
+Введите внутри чата:
+
+```text
+/profile student
+Объясни архитектуру memory layers.
+/profile senior
+Объясни архитектуру memory layers.
+/profile create tester --style language=ru --style tone=checklist --format structure=checklist --constraint "answer as checklist"
+/profile tester
+Как проверить память?
+/exit
 ```
 
 Ожидаемо:
 
-- первая команда показывает задачу со стадией `planning`;
-- вторая команда показывает стадию `execution`;
-- задача стала текущей.
+- `/profile student` включает учебный профиль;
+- ответ для `student` подробнее, с шагами или объяснениями;
+- `/profile senior` включает профиль senior engineer;
+- ответ для `senior` короче, прямее, с фокусом на рисках и решениях;
+- `/profile create tester ...` создает новый профиль;
+- `/profile tester` активирует новый профиль;
+- ответ на `Как проверить память?` похож на чек-лист.
 
-### Кейс 11.2. Выполнить запрос, из которого можно извлечь память
+Дополнительная проверка вне REPL:
 
 ```bash
-go run ./cmd/assistant chat --once --input "Спланируй модуль памяти. Требование текущей задачи: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: отвечай коротко на русском. Случайная фраза для игнорирования: сегодня на улице облачно."
+assistant profiles show student --json
+assistant profiles show senior --json
+assistant profiles show tester --json
 ```
 
 Ожидаемо:
 
-- ассистент отвечает без ошибки;
-- ответ связан с модулем памяти;
-- после запроса появляется предложение памяти или его можно получить следующей командой.
+- в JSON видны `style`, `response_format`, `constraints`;
+- у каждого профиля разные настройки.
 
-### Кейс 11.3. Посмотреть предложения памяти
+Критерий готовности дня 12: активный профиль автоматически влияет на prompt и ответ, без повторения предпочтений в каждом запросе.
+
+## 4. День 13. Состояние Задачи Через REPL
+
+### Что проверяем
+
+- У задачи есть стадия: `planning`, `execution`, `validation`, `done`.
+- Есть текущий шаг.
+- Есть ожидаемое действие.
+- Можно поставить задачу на паузу.
+- Можно выйти из CLI, запустить снова и продолжить без повторного объяснения.
+
+### Ручной сценарий с паузой и перезапуском
+
+Запустите чат:
 
 ```bash
-go run ./cmd/assistant memory proposals
+assistant chat
+```
+
+Если после дня 11 текущая задача уже есть, используйте ее. Если задачи нет, начните новую:
+
+```text
+/task start Проверка конечного автомата
+/task move execution
+```
+
+Теперь проверьте состояние:
+
+```text
+/task step реализовать MemoryManager
+/task expect llm_response
+/task status
+/task pause
+/task status
+/exit
 ```
 
 Ожидаемо:
 
-- есть pending-предложение;
-- в предложении есть записи с разными слоями;
-- требование про OpenRouter должно быть предложено в `work` или близком рабочем слое;
-- предпочтение про короткие ответы на русском должно быть предложено в `long` или близком долговременном слое;
-- текущий контекст диалога может быть предложен в `short`;
-- случайная фраза про погоду не должна попадать в полезную память или должна быть помечена как `ignore`.
-
-Реальный LLM может формулировать записи иначе. Оценивайте смысл, а не точное совпадение текста.
-
-### Кейс 11.4. Явно применить предложение памяти
-
-```bash
-go run ./cmd/assistant memory apply --accept all
-```
-
-Ожидаемо:
-
-- вывод вида `saved N records`, где `N` больше нуля;
-- сохраняются только принятые полезные записи;
-- записи `ignore`, если они были, не становятся настоящей памятью.
-
-### Кейс 11.5. Проверить краткосрочную память `short`
-
-```bash
-go run ./cmd/assistant memory list short
-```
-
-Ожидаемо:
-
-- есть контекст текущего диалога, если LLM предложил сохранить его в `short`;
-- это не должно быть постоянным пользовательским предпочтением;
-- это не должно быть главным требованием всей задачи.
-
-### Кейс 11.6. Проверить рабочую память `work`
-
-```bash
-go run ./cmd/assistant memory list work
-```
-
-Ожидаемо:
-
-- есть требование текущей задачи про выбор модели OpenRouter;
-- запись привязана к текущей задаче;
-- это не просто пересказ всего диалога.
-
-### Кейс 11.7. Проверить долговременную память `long`
-
-```bash
-go run ./cmd/assistant memory list long
-```
-
-Ожидаемо:
-
-- есть предпочтение пользователя отвечать коротко на русском;
-- запись выглядит как долговременное предпочтение, а не как шаг текущей задачи.
-
-### Кейс 11.8. Проверить, что мусор не попал в память
-
-Выполнить все три команды:
-
-```bash
-go run ./cmd/assistant memory list short
-go run ./cmd/assistant memory list work
-go run ./cmd/assistant memory list long
-```
-
-Ожидаемо:
-
-- случайная фраза `сегодня на улице облачно` не сохранена как полезная память;
-- нет сохраненного слоя `ignore`;
-- если LLM все-таки предложил сохранить мусор, это дефект классификации памяти.
-
-### Кейс 11.9. Проверить влияние памяти на следующий ответ
-
-```bash
-go run ./cmd/assistant chat --once --input "Продолжай задачу. Не повторяй исходные требования, просто используй сохраненный контекст."
-```
-
-Ожидаемо:
-
-- ассистент продолжает тему текущей задачи;
-- ответ учитывает требование про выбор модели OpenRouter;
-- стиль ответа учитывает предпочтение коротко на русском;
-- ассистент не просит заново объяснить задачу.
-
-### Кейс 11.10. Проверить prompt без вызова провайдера
-
-```bash
-go run ./cmd/assistant chat --once --render-prompt --input "Продолжай задачу."
-```
-
-Ожидаемо:
-
-- команда не вызывает OpenRouter;
-- в выводе видны блоки профиля, задачи и памяти;
-- в памяти видны сохраненные данные из `short`, `work`, `long`.
-
-## 3. День 12. Персонализация ассистента
-
-### Требования дня 12 простыми словами
-
-Нужно проверить, что ассистент использует профиль пользователя:
-
-- профиль существует;
-- в профиле есть стиль, формат ответа и ограничения;
-- профиль подключается к каждому запросу;
-- разные профили дают разные prompt и заметно разные ответы;
-- ассистент учитывает профиль автоматически, без повторного объяснения в каждом запросе.
-
-### Кейс 12.1. Посмотреть профиль `student`
-
-```bash
-go run ./cmd/assistant profiles show student --json
-```
-
-Ожидаемо:
-
-- `id` равен `student`;
-- в `style` есть русский язык и учебный тон;
-- в `response_format` есть пошаговая структура;
-- в `constraints` есть требование объяснять термины.
-
-### Кейс 12.2. Посмотреть профиль `senior`
-
-```bash
-go run ./cmd/assistant profiles show senior --json
-```
-
-Ожидаемо:
-
-- `id` равен `senior`;
-- в `style` есть русский язык и прямой тон;
-- в `response_format` есть краткая структура;
-- в `constraints` есть фокус на рисках и решениях.
-
-### Кейс 12.3. Проверить ответ с профилем `student`
-
-```bash
-go run ./cmd/assistant profiles set student
-go run ./cmd/assistant chat --once --input "Объясни архитектуру memory layers."
-```
-
-Ожидаемо:
-
-- активный профиль стал `student`;
-- ответ подробнее, чем для senior;
-- есть объяснение шагами или с примерами;
-- ассистент пишет по-русски.
-
-### Кейс 12.4. Проверить ответ с профилем `senior`
-
-```bash
-go run ./cmd/assistant profiles set senior
-go run ./cmd/assistant chat --once --input "Объясни архитектуру memory layers."
-```
-
-Ожидаемо:
-
-- активный профиль стал `senior`;
-- ответ короче и прямее, чем для student;
-- больше фокуса на рисках, решениях или trade-offs;
-- ассистент пишет по-русски.
-
-### Кейс 12.5. Сравнить prompt для разных профилей
-
-```bash
-go run ./cmd/assistant profiles set student
-go run ./cmd/assistant chat --once --render-prompt --input "Объясни архитектуру memory layers."
-go run ./cmd/assistant profiles set senior
-go run ./cmd/assistant chat --once --render-prompt --input "Объясни архитектуру memory layers."
-```
-
-Ожидаемо:
-
-- оба prompt содержат блок активного профиля;
-- в первом prompt есть `student`;
-- во втором prompt есть `senior`;
-- prompt отличаются между собой;
-- это доказывает, что профиль подключается к каждому запросу.
-
-### Кейс 12.6. Создать свой профиль и проверить его подключение
-
-```bash
-go run ./cmd/assistant profiles create tester --display-name "Manual Tester" --style language=ru --style tone=checklist --format structure=checklist --constraint "answer as checklist"
-go run ./cmd/assistant profiles set tester
-go run ./cmd/assistant profiles show --json
-go run ./cmd/assistant chat --once --render-prompt --input "Как проверить память?"
-```
-
-Ожидаемо:
-
-- профиль `tester` создан;
-- активный профиль стал `tester`;
-- `profiles show --json` показывает стиль, формат и ограничения профиля;
-- render-prompt содержит данные профиля `tester`.
-
-### Кейс 12.7. Проверить реальный ответ с новым профилем
-
-```bash
-go run ./cmd/assistant chat --once --input "Как проверить память?"
-```
-
-Ожидаемо:
-
-- ответ похож на чек-лист;
-- ассистент учитывает профиль `tester` без дополнительного объяснения в запросе.
-
-## 4. День 13. Состояние задачи как конечный автомат
-
-### Требования дня 13 простыми словами
-
-Нужно проверить, что задача хранит формальное состояние:
-
-- этап задачи: `planning`, `execution`, `validation`, `done`;
-- текущий шаг;
-- ожидаемое действие;
-- можно поставить задачу на паузу на любом этапе;
-- можно продолжить без повторных объяснений;
-- после перезапуска CLI состояние не теряется.
-
-### Кейс 13.1. Создать новую задачу и проверить начальное состояние
-
-Для чистоты можно использовать новое хранилище, но ключ и модель оставить теми же:
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Проверка конечного автомата"
-go run ./cmd/assistant task status
-```
-
-Ожидаемо:
-
-- задача создана;
-- стадия началась с `planning`;
-- статус `active`;
-- в выводе есть список допустимых следующих стадий.
-
-### Кейс 13.2. Задать текущий шаг и ожидаемое действие
-
-```bash
-go run ./cmd/assistant task step "реализовать MemoryManager"
-go run ./cmd/assistant task expect llm_response
-go run ./cmd/assistant task status
-```
-
-Ожидаемо:
-
-- `current_step` или текстовый вывод содержит `реализовать MemoryManager`;
+- `current_step` содержит `реализовать MemoryManager`;
 - `expected_action` равен `llm_response`;
-- эти поля сохраняются в состоянии задачи.
-
-### Кейс 13.3. Пройти переходы автомата
-
-```bash
-go run ./cmd/assistant task move execution
-go run ./cmd/assistant task status
-go run ./cmd/assistant task move validation
-go run ./cmd/assistant task status
-go run ./cmd/assistant task move done
-go run ./cmd/assistant task status
-```
-
-Ожидаемо:
-
-- после первой команды стадия `execution`;
-- после второй команды стадия `validation`;
-- после третьей команды стадия `done`;
-- переходы идут по цепочке `planning -> execution -> validation -> done`.
-
-### Кейс 13.4. Проверить запрет неправильного перехода
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Проверка неверного перехода"
-go run ./cmd/assistant task move done
-```
-
-Ожидаемо:
-
-- команда `task move done` из `planning` завершается ошибкой;
-- состояние задачи не становится `done`;
-- это подтверждает, что переходы контролируются, а не выставляются произвольно.
-
-### Кейс 13.5. Проверить паузу на этапе `planning`
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Пауза на planning"
-go run ./cmd/assistant task pause
-go run ./cmd/assistant task status
-go run ./cmd/assistant task resume
-go run ./cmd/assistant task status
-```
-
-Ожидаемо:
-
-- после `pause` статус `paused`;
-- стадия остается `planning`;
-- после `resume` статус снова `active`;
-- стадия не сбрасывается.
-
-### Кейс 13.6. Проверить паузу на этапе `execution`
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Пауза на execution"
-go run ./cmd/assistant task step "реализовать MemoryManager"
-go run ./cmd/assistant task expect llm_response
-go run ./cmd/assistant task move execution
-go run ./cmd/assistant task pause
-go run ./cmd/assistant task status
-go run ./cmd/assistant task resume
-go run ./cmd/assistant task status
-```
-
-Ожидаемо:
-
-- после `pause` статус `paused`;
+- после `/task pause` статус становится `paused`;
 - стадия остается `execution`;
-- текущий шаг остается `реализовать MemoryManager`;
-- ожидаемое действие остается `llm_response`;
-- после `resume` статус снова `active`.
+- после `/exit` состояние остается в `ASSISTANT_STORAGE_DIR`.
 
-### Кейс 13.7. Проверить паузу на этапе `validation`
+Запустите CLI заново в том же терминале:
 
 ```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Пауза на validation"
-go run ./cmd/assistant task move execution
-go run ./cmd/assistant task move validation
-go run ./cmd/assistant task pause
-go run ./cmd/assistant task status
-go run ./cmd/assistant task resume
-go run ./cmd/assistant task status
+assistant chat
+```
+
+Введите внутри чата:
+
+```text
+/task resume
+/task status
+Продолжай задачу. Не проси заново объяснить контекст.
+/task move validation
+/task pause
+/task status
+/task resume
+/task move done
+/task status
+/exit
 ```
 
 Ожидаемо:
 
-- после `pause` статус `paused`;
-- стадия остается `validation`;
-- после `resume` статус снова `active`;
-- стадия остается `validation`.
+- после `/task resume` задача снова `active`;
+- стадия, шаг и ожидаемое действие не потерялись;
+- ассистент продолжает задачу без просьбы заново объяснить контекст;
+- переходы идут по цепочке `execution -> validation -> done`;
+- пауза на `validation` тоже сохраняет стадию;
+- финальный статус показывает `done` и `expected_action: none`.
 
-### Кейс 13.8. Проверить продолжение после перезапуска CLI
-
-```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Продолжение после перезапуска"
-go run ./cmd/assistant task step "реализовать MemoryManager"
-go run ./cmd/assistant task expect llm_response
-go run ./cmd/assistant task move execution
-go run ./cmd/assistant task pause
-echo "$ASSISTANT_STORAGE_DIR"
-```
-
-Скопируйте значение `ASSISTANT_STORAGE_DIR`, откройте новый терминал и задайте там те же переменные:
+Если открыли новый терминал, перед `assistant chat` повторите блок env:
 
 ```bash
+export CW_ROOT="/Users/nikita/code/coding_writer"
+cd "$CW_ROOT"
+export PATH="$CW_ROOT/.assistant/bin:$PATH"
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13"
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
-export ASSISTANT_MODEL="openai/gpt-4.1-mini"
-export ASSISTANT_STORAGE_DIR="путь_из_предыдущего_терминала"
+export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
 ```
 
-Затем продолжите:
+Критерий готовности дня 13: задача хранит stage, step, expected action, выдерживает pause/resume и продолжает после нового запуска CLI.
+
+## 5. Быстрые Команды Для Диагностики
+
+Эти команды можно запускать вне REPL, если нужно быстро посмотреть состояние:
 
 ```bash
-go run ./cmd/assistant task resume
-go run ./cmd/assistant task status
-go run ./cmd/assistant chat --once --input "Продолжай задачу. Не проси заново объяснить контекст."
+assistant task status
+assistant memory list short
+assistant memory list work
+assistant memory list long
+assistant profiles list
+assistant process audit --latest
 ```
 
-Ожидаемо:
-
-- после `resume` стадия остается `execution`;
-- текущий шаг остается `реализовать MemoryManager`;
-- ожидаемое действие остается `llm_response`;
-- ассистент продолжает задачу без повторного объяснения с нуля.
-
-### Кейс 13.9. Проверить, что рабочая память подхватывается после resume
-
-Сначала создайте состояние и сохраните рабочую память через обычный диалог дня 11:
+Полезный smoke-test с реальным OpenRouter:
 
 ```bash
-export ASSISTANT_STORAGE_DIR="$(mktemp -d)"
-go run ./cmd/assistant init --model "$ASSISTANT_MODEL"
-go run ./cmd/assistant task start "Проверка resume с рабочей памятью"
-go run ./cmd/assistant task step "реализовать MemoryManager"
-go run ./cmd/assistant task expect llm_response
-go run ./cmd/assistant task move execution
-go run ./cmd/assistant chat --once --input "Спланируй модуль памяти. Требование текущей задачи: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: отвечай коротко на русском."
-go run ./cmd/assistant memory apply --accept all
-go run ./cmd/assistant task pause
-go run ./cmd/assistant task resume
-go run ./cmd/assistant chat --once --render-prompt --input "Продолжай задачу."
+assistant chat --once --input "Ответь одним коротким предложением: ассистент подключен?"
 ```
 
-Ожидаемо:
-
-- render-prompt содержит стадию `execution`;
-- render-prompt содержит шаг `реализовать MemoryManager`;
-- render-prompt содержит рабочую память про выбор модели OpenRouter;
-- значит ассистент продолжает с контекстом, а не с пустого места.
-
-## 5. Общая проверка через автоматические acceptance-тесты
-
-После ручных кейсов полезно запустить целевые тесты:
+Проверка prompt без вызова OpenRouter:
 
 ```bash
-go test ./tests -run 'TestDay11|TestDay12|TestDay13'
+assistant chat --once --render-prompt --input "Продолжай задачу."
+```
+
+## 6. Автоматические Acceptance-Тесты
+
+Автотесты не заменяют ручную проверку с вашим ключом, но подтверждают базовую логику дней 11-13:
+
+```bash
+env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|TestDay12|TestDay13'
 ```
 
 Ожидаемо:
@@ -605,11 +361,9 @@ go test ./tests -run 'TestDay11|TestDay12|TestDay13'
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - итоговый статус `ok`.
 
-Эти тесты используют тестовый runtime и не заменяют ручную проверку с вашим OpenRouter key.
+## 7. Финальный Чек-Лист
 
-## 6. Краткий чек-лист готовности
-
-- Подключение готово, если `init` и первый `chat --once` проходят с вашим `OPENROUTER_API_KEY` и выбранной моделью.
-- День 11 готов, если `short`, `work`, `long` хранят разные данные, мусор не сохраняется, а следующий ответ использует сохраненную память.
-- День 12 готов, если `student`, `senior` и кастомный профиль дают разные prompt и заметно разные ответы, а активный профиль автоматически попадает в каждый запрос.
-- День 13 готов, если задача проходит стадии `planning -> execution -> validation -> done`, хранит текущий шаг и ожидаемое действие, пауза/продолжение не теряют контекст даже после нового запуска CLI.
+- Настройка готова, если `which assistant` указывает на `.assistant/bin/assistant`, `assistant init` проходит, а `assistant chat` отвечает через OpenRouter.
+- День 11 готов, если `short`, `work`, `long` хранят разные данные и следующий ответ использует сохраненную память.
+- День 12 готов, если `student`, `senior` и `tester` дают заметно разные ответы.
+- День 13 готов, если задача проходит `planning -> execution -> validation -> done`, хранит шаг и ожидаемое действие, а pause/resume работает после перезапуска CLI.
