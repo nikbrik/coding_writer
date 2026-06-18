@@ -12,5 +12,8 @@
       "timeout": 30000
     }
   },
-  "instructions": [".kilo/rules/ast-index.md", ".kilo/rules/keep_going_until_you_reach_the_goal.md", ".kilo/rules/*.md"]
+  "instructions": [".kilo/rules/ast-index.md", ".kilo/rules/keep_going_until_you_reach_the_goal.md", ".kilo/rules/*.md"],
+  "skills": {
+    "paths": [".kilo/skills"]
+  }
 }
