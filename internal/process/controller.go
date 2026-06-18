@@ -17,6 +17,7 @@ import (
 type ProcessController struct {
 	Tasks           *tasks.Manager
 	Profiles        *profiles.Manager
+	ActiveProfileID string
 	Memory          *memory.Manager
 	Proposals       *memory.ProposalStore
 	Classifier      *memory.Classifier
@@ -73,8 +74,28 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	taskPtr := preflight.Task
 	stage := preflight.Stage
 	action := preflight.Action
+	if !input.RenderOnly && taskPtr != nil && taskPtr.PendingPlanning != nil {
+		if isPlanningRejection(input.Input) {
+			state, err := c.Tasks.RejectPendingPlanningProposal()
+			if err != nil {
+				return nil, err
+			}
+			_ = c.saveAudit(sessionID, &state, state.Stage, action, "accepted", nil, "", "", c.Model)
+			return &ExchangeResult{Answer: "planning proposal rejected", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: nil}, nil
+		}
+		if action == ActionProposeTransition {
+			from := taskPtr.Stage
+			state, err := c.Tasks.ApprovePendingPlanningProposal()
+			if err != nil {
+				return nil, err
+			}
+			transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "pending planning approved", State: state}
+			_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
+			return &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+		}
+	}
 
-	profile, err := c.Profiles.Active()
+	profile, err := c.activeProfile()
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +127,11 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		promptTaskID = ""
 	}
 
-	bundle, err := c.Memory.SelectForPrompt(ctx, sessionID, promptTaskID, profile.ID)
+	promptSessionID := sessionID
+	if promptTask != nil && promptTask.LastSessionID != "" && promptTask.LastSessionID != sessionID {
+		promptSessionID = promptTask.LastSessionID
+	}
+	bundle, err := c.Memory.SelectForPrompt(ctx, promptSessionID, promptTaskID, profile.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -255,6 +280,20 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			taskPtr = &transition.State
 		}
 	}
+	if transitionCandidate == nil && taskPtr != nil && stage == app.StagePlanning && parsed.Planning != nil && parsed.Planning.Readiness == "ready_for_execution_proposal" && !input.AutoApproveTransitions {
+		state, err := c.Tasks.SavePendingPlanningProposal(parsed.Planning.Summary, parsed.Planning.AcceptanceCriteria, parsed.Planning.Plan, parsed.Planning.OpenQuestions)
+		if err != nil {
+			return result, err
+		}
+		taskPtr = &state
+	}
+	if transitionCandidate == nil && taskPtr != nil && stage == app.StageExecution && parsed.Execution != nil {
+		state, err := c.Tasks.SetExecutionProgress(parsed.Execution.CurrentStep, parsed.Execution.NextStep, parsed.Execution.CompletedSteps)
+		if err != nil {
+			return result, err
+		}
+		taskPtr = &state
+	}
 
 	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, taskID(taskPtr), input.Input, lastRaw)
 	if err != nil {
@@ -265,6 +304,13 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	}
 	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
 		result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+	}
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusActive && taskPtr.Stage != app.StageDone {
+		state, err := c.Tasks.SetLastSessionID(sessionID)
+		if err != nil {
+			return result, err
+		}
+		taskPtr = &state
 	}
 
 	memoryModel := c.MemoryModel
@@ -310,6 +356,42 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	result.Proposal = &proposal
 
 	return result, nil
+}
+
+func (c *ProcessController) activeProfile() (app.UserProfile, error) {
+	id := strings.TrimSpace(c.ActiveProfileID)
+	if id == "" {
+		return c.Profiles.Active()
+	}
+	profile, err := c.Profiles.Get(id)
+	if err == nil {
+		return profile, nil
+	}
+	appErr := app.AsError(err)
+	if appErr.Category == app.CategoryValidation && appErr.Code == "unknown_profile" {
+		for _, candidate := range profiles.DefaultProfiles(time.Now().UTC()) {
+			if candidate.ID == id {
+				return candidate, nil
+			}
+		}
+	}
+	return app.UserProfile{}, err
+}
+
+func noSaveProposal(sessionID string) *app.MemoryProposal {
+	return &app.MemoryProposal{ID: app.NewID("proposal"), SessionID: sessionID, SourceMessageIDs: []string{}, Records: []app.ProposedMemoryRecord{}, Provider: "local", Model: "no-save", CreatedAt: time.Now().UTC()}
+}
+
+func isPlanningRejection(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ")
+	for _, token := range strings.Fields(replacer.Replace(normalized)) {
+		switch token {
+		case "no", "n", "reject", "rejected", "cancel", "нет", "не", "отклоняю", "отмена":
+			return true
+		}
+	}
+	return false
 }
 
 // Preflight runs local hard gates without loading provider/profile/memory.

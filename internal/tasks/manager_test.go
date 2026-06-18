@@ -122,16 +122,11 @@ func TestDoneStageUsesExpectedNoneNoStatusDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = mgr.Pause()
-	if err != nil {
-		t.Fatal(err)
+	if _, err = mgr.Pause(); err == nil || app.AsError(err).Code != "task_done" {
+		t.Fatalf("done pause should return task_done, got %v", err)
 	}
-	if state.Stage != app.StageDone || state.Status != app.TaskStatusActive {
-		t.Fatalf("done pause reopened task: %+v", state)
-	}
-	state, err = mgr.Resume()
-	if err != nil {
-		t.Fatal(err)
+	if _, err = mgr.Resume(); err == nil || app.AsError(err).Code != "task_done" {
+		t.Fatalf("done resume should return task_done, got %v", err)
 	}
 	after, err := os.ReadFile(path)
 	if err != nil {
@@ -168,6 +163,42 @@ func TestTaskLostUpdateGuard(t *testing.T) {
 	}
 	if current.CurrentStep != "newer step" {
 		t.Fatalf("lost update guard failed: %+v", current)
+	}
+}
+
+func TestTaskLostUpdateGuardDetectsSameStatDigestChange(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	state, err := mgr.Start("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := mgr.currentSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := mgr.currentPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := bytes.ReplaceAll(body, []byte("test"), []byte("evil"))
+	if len(changed) != len(body) || bytes.Equal(changed, body) {
+		t.Fatal("test fixture did not preserve size while changing content")
+	}
+	if err := os.WriteFile(path, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, snapshot.MTime, snapshot.MTime); err != nil {
+		t.Fatal(err)
+	}
+	state.CurrentStep = "stale step"
+	err = mgr.saveBothIfUnchanged(state, &snapshot)
+	if err == nil || !strings.Contains(err.Error(), "task_lost_update") {
+		t.Fatalf("want task_lost_update for same stat digest change, got %v", err)
 	}
 }
 

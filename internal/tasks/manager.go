@@ -1,6 +1,8 @@
 package tasks
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,6 +22,7 @@ type currentSnapshot struct {
 	State app.TaskState
 	MTime time.Time
 	Size  int64
+	Hash  [sha256.Size]byte
 }
 
 func NewManager(storageDir string) *Manager { return &Manager{StorageDir: storageDir} }
@@ -64,6 +67,7 @@ func (m *Manager) Start(title string) (app.TaskState, error) {
 		Objective:          strings.TrimSpace(title),
 		AcceptanceCriteria: []string{},
 		Plan:               []string{},
+		CompletedSteps:     []string{},
 		Decisions:          []string{},
 		OpenQuestions:      []string{},
 		UpdatedAt:          now,
@@ -108,7 +112,19 @@ func (m *Manager) currentSnapshot() (currentSnapshot, error) {
 	if err := ValidateState(state); err != nil {
 		return currentSnapshot{}, err
 	}
-	return currentSnapshot{State: state, MTime: after.ModTime(), Size: after.Size()}, nil
+	stateHash, err := hashTaskState(state)
+	if err != nil {
+		return currentSnapshot{}, app.NewError(app.CategoryStorage, "task_hash", err.Error(), err)
+	}
+	return currentSnapshot{State: state, MTime: after.ModTime(), Size: after.Size(), Hash: stateHash}, nil
+}
+
+func hashTaskState(state app.TaskState) ([sha256.Size]byte, error) {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return [sha256.Size]byte{}, err
+	}
+	return sha256.Sum256(data), nil
 }
 
 func (m *Manager) Move(next app.TaskStage) (app.TaskState, error) {
@@ -162,6 +178,10 @@ func (m *Manager) MoveWithPlanningOutput(summary string, criteria, plan, openQue
 	state.OpenQuestions = trimNonEmpty(openQuestions)
 	state.Stage = next
 	state.ExpectedAction = defaultExpectedAction(next)
+	if len(state.Plan) > 0 {
+		state.CurrentStep = state.Plan[0]
+	}
+	state.PendingPlanning = nil
 	state.UpdatedAt = now
 	state.HistoryLog = append(state.HistoryLog, fmt.Sprintf("%s: %s -> %s", now.Format(time.RFC3339), app.StagePlanning, next))
 	return state, m.saveBothIfUnchanged(state, &snapshot)
@@ -230,6 +250,111 @@ func (m *Manager) SetPlanningOutput(summary string, criteria, plan, openQuestion
 	})
 }
 
+func (m *Manager) SavePendingPlanningProposal(summary string, criteria, plan, openQuestions []string) (app.TaskState, error) {
+	if validation.HasSecret(summary) || hasSecretIn(criteria) || hasSecretIn(plan) || hasSecretIn(openQuestions) {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StagePlanning {
+			return app.NewError(app.CategoryValidation, "invalid_stage", "planning proposal requires planning stage", nil)
+		}
+		now := time.Now().UTC()
+		state.PendingPlanning = &app.PlanningProposalState{
+			ID:                 app.NewID("plan"),
+			Summary:            strings.TrimSpace(summary),
+			AcceptanceCriteria: trimNonEmpty(criteria),
+			Plan:               trimNonEmpty(plan),
+			OpenQuestions:      trimNonEmpty(openQuestions),
+			CreatedAt:          now,
+		}
+		state.ExpectedAction = app.ExpectedUserConfirmation
+		state.CurrentStep = "awaiting planning confirmation"
+		return nil
+	})
+}
+
+func (m *Manager) ApprovePendingPlanningProposal() (app.TaskState, error) {
+	snapshot, err := m.currentSnapshot()
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	state := snapshot.State
+	if state.PendingPlanning == nil {
+		return state, app.NewError(app.CategoryValidation, "missing_pending_planning", "no pending planning proposal", nil)
+	}
+	if state.Status == app.TaskStatusPaused {
+		return state, app.NewError(app.CategoryValidation, "task_paused", "resume task before approving planning", nil)
+	}
+	if state.Stage != app.StagePlanning || !IsAllowed(state.Stage, app.StageExecution) {
+		return state, app.NewError(app.CategoryValidation, "forbidden_transition", "forbidden task stage transition", nil)
+	}
+	now := time.Now().UTC()
+	pending := state.PendingPlanning
+	state.Objective = pending.Summary
+	state.AcceptanceCriteria = append([]string(nil), pending.AcceptanceCriteria...)
+	state.Plan = append([]string(nil), pending.Plan...)
+	state.OpenQuestions = append([]string(nil), pending.OpenQuestions...)
+	state.Stage = app.StageExecution
+	state.ExpectedAction = defaultExpectedAction(app.StageExecution)
+	if len(state.Plan) > 0 {
+		state.CurrentStep = state.Plan[0]
+	}
+	state.PendingPlanning = nil
+	state.UpdatedAt = now
+	state.HistoryLog = append(state.HistoryLog, fmt.Sprintf("%s: %s -> %s", now.Format(time.RFC3339), app.StagePlanning, app.StageExecution))
+	return state, m.saveBothIfUnchanged(state, &snapshot)
+}
+
+func (m *Manager) RejectPendingPlanningProposal() (app.TaskState, error) {
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.PendingPlanning == nil {
+			return app.NewError(app.CategoryValidation, "missing_pending_planning", "no pending planning proposal", nil)
+		}
+		state.PendingPlanning = nil
+		state.ExpectedAction = app.ExpectedUserInput
+		state.CurrentStep = ""
+		return nil
+	})
+}
+
+func (m *Manager) SetExecutionProgress(currentStep, nextStep string, completed []string) (app.TaskState, error) {
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StageExecution {
+			return nil
+		}
+		for _, step := range trimNonEmpty(completed) {
+			if !containsString(state.CompletedSteps, step) {
+				state.CompletedSteps = append(state.CompletedSteps, step)
+			}
+		}
+		if strings.TrimSpace(nextStep) != "" {
+			state.CurrentStep = strings.TrimSpace(nextStep)
+		} else if strings.TrimSpace(currentStep) != "" {
+			state.CurrentStep = strings.TrimSpace(currentStep)
+		}
+		return nil
+	})
+}
+
+func (m *Manager) SetLastSessionID(sessionID string) (app.TaskState, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "missing_session", "session id is required", nil)
+	}
+	return m.mutateActive(func(state *app.TaskState) error {
+		state.LastSessionID = strings.TrimSpace(sessionID)
+		return nil
+	})
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
 func hasSecretIn(items []string) bool {
 	for _, item := range items {
 		if validation.HasSecret(item) {
@@ -273,7 +398,7 @@ func (m *Manager) Pause() (app.TaskState, error) {
 	}
 	state := snapshot.State
 	if state.Stage == app.StageDone {
-		return state, nil
+		return state, app.NewError(app.CategoryValidation, "task_done", "done task is terminal and cannot be paused", nil)
 	}
 	if state.Status == app.TaskStatusPaused {
 		return state, nil
@@ -292,7 +417,7 @@ func (m *Manager) Resume() (app.TaskState, error) {
 	}
 	state := snapshot.State
 	if state.Stage == app.StageDone {
-		return state, nil
+		return state, app.NewError(app.CategoryValidation, "task_done", "done task is terminal and cannot be resumed", nil)
 	}
 	if state.Status != app.TaskStatusPaused {
 		return state, app.NewError(app.CategoryValidation, "task_not_paused", "current task is not paused", nil)
@@ -376,6 +501,17 @@ func (m *Manager) ensureCurrentUnchanged(expected currentSnapshot) error {
 		return app.NewError(app.CategoryStorage, "task_stat", err.Error(), err)
 	}
 	if !info.ModTime().Equal(expected.MTime) || info.Size() != expected.Size {
+		return app.NewError(app.CategoryStorage, "task_lost_update", "current task changed during update", nil)
+	}
+	var current app.TaskState
+	if err := storage.ReadJSON(currentPath, &current); err != nil {
+		return app.NewError(app.CategoryStorage, "task_read", err.Error(), err)
+	}
+	currentHash, err := hashTaskState(current)
+	if err != nil {
+		return app.NewError(app.CategoryStorage, "task_hash", err.Error(), err)
+	}
+	if currentHash != expected.Hash {
 		return app.NewError(app.CategoryStorage, "task_lost_update", "current task changed during update", nil)
 	}
 	return nil

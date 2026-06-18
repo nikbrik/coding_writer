@@ -2,8 +2,6 @@ package memory
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -78,9 +76,7 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 		}
 		path, err = shortPath(m.StorageDir, input.SessionID)
 		if err == nil {
-			if dir, err := sessionDir(m.StorageDir, input.SessionID); err == nil {
-				_ = os.WriteFile(filepath.Join(dir, ".last_activity"), []byte{}, 0o600)
-			}
+			_ = touchSessionActivity(m.StorageDir, input.SessionID)
 		}
 	case app.LayerWork:
 		if input.TaskID == "" {
@@ -123,16 +119,14 @@ func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, profileID, t
 	if err != nil {
 		return app.MemoryRecord{}, app.MemoryRecord{}, err
 	}
-	if dir, err := sessionDir(m.StorageDir, sessionID); err == nil {
-		_ = os.WriteFile(filepath.Join(dir, ".last_activity"), []byte{}, 0o600)
-	}
+	_ = touchSessionActivity(m.StorageDir, sessionID)
 	now := time.Now().UTC()
 	userRecord := app.MemoryRecord{
 		ID:        app.NewID("mem"),
 		Layer:     app.LayerShort,
-		Kind:      "message_user",
+		Kind:      "history_user",
 		Content:   strings.TrimSpace(userContent),
-		Source:    "chat",
+		Source:    "transcript",
 		ProfileID: profileID,
 		TaskID:    taskID,
 		SessionID: sessionID,
@@ -141,23 +135,21 @@ func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, profileID, t
 	assistantRecord := app.MemoryRecord{
 		ID:        app.NewID("mem"),
 		Layer:     app.LayerShort,
-		Kind:      "message_assistant",
+		Kind:      "history_assistant",
 		Content:   strings.TrimSpace(assistantContent),
-		Source:    "chat",
+		Source:    "transcript",
 		ProfileID: profileID,
 		TaskID:    taskID,
 		SessionID: sessionID,
 		CreatedAt: now,
 	}
-	if err := storage.UpdateJSONL[app.MemoryRecord](path, func(records []app.MemoryRecord) ([]app.MemoryRecord, error) {
-		return append(records, userRecord, assistantRecord), nil
-	}); err != nil {
+	if err := storage.AppendJSONLMany(path, []any{userRecord, assistantRecord}); err != nil {
 		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryStorage, "memory_write", err.Error(), err)
 	}
 	return userRecord, assistantRecord, nil
 }
 
-func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, taskID string) ([]app.MemoryRecord, error) {
+func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, taskID string, profileIDs ...string) ([]app.MemoryRecord, error) {
 	switch layer {
 	case app.LayerShort:
 		if sessionID == "" {
@@ -193,6 +185,9 @@ func (m *Manager) List(ctx context.Context, layer app.MemoryLayer, sessionID, ta
 				return nil, err
 			}
 			all = append(all, records...)
+		}
+		if len(profileIDs) > 0 && strings.TrimSpace(profileIDs[0]) != "" {
+			return filterLongForProfile(all, profileIDs[0]), nil
 		}
 		return all, nil
 	default:
@@ -288,7 +283,7 @@ func latestWithinBudget(records []app.MemoryRecord, maxCount, maxBytes int) []ap
 				break
 			}
 		}
-		if !found && first.Kind == "message_user" && resultBytes+len(first.Content) <= maxBytes {
+		if !found && (first.Kind == "message_user" || first.Kind == "history_user") && resultBytes+len(first.Content) <= maxBytes {
 			result = append([]app.MemoryRecord{first}, result...)
 		}
 	}
@@ -321,11 +316,11 @@ func (m *Manager) LatestExchange(ctx context.Context, sessionID string) (app.Mem
 	}
 	var user, assistant app.MemoryRecord
 	for i := len(records) - 1; i >= 0; i-- {
-		if assistant.ID == "" && records[i].Kind == "message_assistant" {
+		if assistant.ID == "" && (records[i].Kind == "message_assistant" || records[i].Kind == "history_assistant") {
 			assistant = records[i]
 			continue
 		}
-		if assistant.ID != "" && records[i].Kind == "message_user" {
+		if assistant.ID != "" && (records[i].Kind == "message_user" || records[i].Kind == "history_user") {
 			user = records[i]
 			break
 		}

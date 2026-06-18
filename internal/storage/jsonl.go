@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -24,6 +23,13 @@ func lockFor(path string) *sync.Mutex {
 }
 
 func AppendJSONL(path string, value any) error {
+	return AppendJSONLMany(path, []any{value})
+}
+
+func AppendJSONLMany(path string, values []any) error {
+	if len(values) == 0 {
+		return nil
+	}
 	if err := withJSONLLock(path, true, func() error {
 		_, statErr := os.Stat(path)
 		created := errors.Is(statErr, os.ErrNotExist)
@@ -33,8 +39,10 @@ func AppendJSONL(path string, value any) error {
 		}
 		defer f.Close()
 		enc := json.NewEncoder(f)
-		if err := enc.Encode(value); err != nil {
-			return errStorage("encode", path, err)
+		for _, value := range values {
+			if err := enc.Encode(value); err != nil {
+				return errStorage("encode", path, err)
+			}
 		}
 		if err := f.Chmod(FileMode); err != nil {
 			return errStorage("chmod", path, err)
@@ -219,41 +227,4 @@ func TruncateJSONL(path string) error {
 		return errStorage("sync", path, err)
 	}
 	return nil
-}
-
-func acquireFileLock(path string) (func(), error) {
-	lockPath := path + ".lock"
-	if err := RejectSymlinkTarget(lockPath); err != nil {
-		return nil, err
-	}
-	f, err := openFileNoFollow(lockPath, os.O_CREATE|os.O_RDWR, FileMode)
-	if err != nil {
-		return nil, err
-	}
-	if err := f.Chmod(FileMode); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	deadline := time.Now().Add(fileLockTimeout)
-	for {
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
-			break
-		} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
-			_ = f.Close()
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			_ = f.Close()
-			return nil, errStorage("lock_timeout", lockPath, errors.New("file lock timeout"))
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, nil
-}
-
-func openFileNoFollow(path string, flag int, perm os.FileMode) (*os.File, error) {
-	return os.OpenFile(path, flag|syscall.O_NOFOLLOW, perm)
 }

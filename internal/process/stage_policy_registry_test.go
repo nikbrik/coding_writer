@@ -1,6 +1,7 @@
 package process
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nikbrik/coding_writer/internal/app"
@@ -72,6 +73,18 @@ func TestStagePolicyRegistryPolicyForReturnsCopy(t *testing.T) {
 	}
 	if fresh.AllowedActions[0] == ActionExecutePlanStep {
 		t.Fatal("policy slices should not be externally mutable")
+	}
+}
+
+func TestExecutionSchemaIncludesProgressFields(t *testing.T) {
+	policy, err := NewStagePolicyRegistry().PolicyFor(app.StageExecution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"current_step", "completed_steps", "next_step"} {
+		if !strings.Contains(policy.OutputSchema, field) {
+			t.Fatalf("execution schema missing %s:\n%s", field, policy.OutputSchema)
+		}
 	}
 }
 

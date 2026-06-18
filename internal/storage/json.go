@@ -15,6 +15,9 @@ const (
 )
 
 func EnsureDir(path string) error {
+	if err := requireSecureStoragePlatform(path); err != nil {
+		return err
+	}
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
@@ -31,6 +34,9 @@ func EnsureDir(path string) error {
 }
 
 func AtomicWriteJSON(path string, value any) error {
+	if err := requireSecureStoragePlatform(path); err != nil {
+		return err
+	}
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
@@ -73,13 +79,16 @@ func AtomicWriteJSON(path string, value any) error {
 }
 
 func ReadJSON(path string, value any) error {
+	if err := requireSecureStoragePlatform(path); err != nil {
+		return err
+	}
 	if err := EnsureNoSymlinkParents(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
 	if err := RejectSymlinkTarget(path); err != nil {
 		return errStorage("unsafe_path", path, err)
 	}
-	f, err := os.Open(path)
+	f, err := openFileNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return errStorage("open", path, err)
 	}
@@ -90,6 +99,40 @@ func ReadJSON(path string, value any) error {
 	}
 	if dec.Decode(&struct{}{}) != io.EOF {
 		return errStorage("broken_json", path, errors.New("trailing data"))
+	}
+	return nil
+}
+
+func TouchFile(path string, perm os.FileMode) error {
+	if err := requireSecureStoragePlatform(path); err != nil {
+		return err
+	}
+	if err := EnsureNoSymlinkParents(path); err != nil {
+		return errStorage("unsafe_path", path, err)
+	}
+	if err := RejectSymlinkTarget(path); err != nil {
+		return errStorage("unsafe_path", path, err)
+	}
+	if err := EnsureDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	f, err := openFileNoFollow(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return errStorage("open", path, err)
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return errStorage("chmod", path, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return errStorage("sync", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return errStorage("close", path, err)
+	}
+	if err := syncDir(filepath.Dir(path)); err != nil {
+		return errStorage("sync_dir", filepath.Dir(path), err)
 	}
 	return nil
 }

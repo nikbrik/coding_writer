@@ -15,6 +15,9 @@ type PlanningOutput struct {
 type ExecutionOutput struct {
 	Stage            string   `json:"stage"`
 	Summary          string   `json:"summary"`
+	CurrentStep      string   `json:"current_step,omitempty"`
+	CompletedSteps   []string `json:"completed_steps,omitempty"`
+	NextStep         string   `json:"next_step,omitempty"`
 	ChangedArtifacts []string `json:"changed_artifacts"`
 	Verification     []string `json:"verification"`
 	Blockers         []string `json:"blockers"`

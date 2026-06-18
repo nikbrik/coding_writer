@@ -1,6 +1,22 @@
 package process
 
-import "strings"
+import (
+	"crypto/sha256"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
+const trustedEvidencePrefix = "app:evidence:v1:"
+
+func NewTrustedEvidence(source string, exitCode int, output string) string {
+	source = strings.NewReplacer(";", "_", "=", "_", "\n", "_", "\r", "_").Replace(strings.TrimSpace(source))
+	if source == "" {
+		source = "tool"
+	}
+	digest := sha256.Sum256([]byte(output))
+	return fmt.Sprintf("%ssource=%s;exit=%d;sha256=%x", trustedEvidencePrefix, source, exitCode, digest)
+}
 
 func containsImplementationClaim(text string) bool {
 	lower := strings.ToLower(text)
@@ -35,11 +51,36 @@ func hasTrustedToolEvidenceText(text string) bool {
 
 func hasTrustedEvidence(evidence []string) bool {
 	for _, item := range evidence {
-		if strings.TrimSpace(item) != "" {
+		if isStructuredTrustedEvidence(item) {
 			return true
 		}
 	}
 	return false
+}
+
+func isStructuredTrustedEvidence(item string) bool {
+	item = strings.TrimSpace(item)
+	if !strings.HasPrefix(item, trustedEvidencePrefix) {
+		return false
+	}
+	fields := map[string]string{}
+	for _, part := range strings.Split(strings.TrimPrefix(item, trustedEvidencePrefix), ";") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			return false
+		}
+		fields[key] = value
+	}
+	if strings.TrimSpace(fields["source"]) == "" || len(fields["sha256"]) != 64 {
+		return false
+	}
+	for _, r := range fields["sha256"] {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	exit, err := strconv.Atoi(fields["exit"])
+	return err == nil && exit == 0
 }
 
 func containsSideEffectClaim(text string) bool {

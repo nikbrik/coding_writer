@@ -37,6 +37,14 @@ func proposalPath(root, sessionID string) (string, error) {
 	return filepath.Join(dir, "memory_proposals.jsonl"), nil
 }
 
+func touchSessionActivity(root, sessionID string) error {
+	dir, err := sessionDir(root, sessionID)
+	if err != nil {
+		return err
+	}
+	return storage.TouchFile(filepath.Join(dir, ".last_activity"), storage.FileMode)
+}
+
 func workPath(root, taskID string) (string, error) {
 	if err := storage.ValidateID(taskID); err != nil {
 		return "", app.NewError(app.CategoryValidation, "unsafe_task_id", "unsafe task id", err)

@@ -3,11 +3,13 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -96,13 +98,7 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 		return nil, app.NewError(app.CategoryStorage, "storage_dir", err.Error(), err)
 	}
 	cfgMgr := app.NewConfigManager(storageDir)
-	if err := cfgMgr.EnsureStorageTree(); err != nil {
-		return nil, err
-	}
 	profMgr := profiles.NewManager(storageDir, cfgMgr)
-	if err := profMgr.EnsureDefaults(); err != nil {
-		return nil, err
-	}
 	cfg, err := cfgMgr.LoadEffective(app.ConfigOptions{StorageDir: storageDir, ActiveModel: opts.Model, MemoryModel: opts.MemoryModel, ActiveProfileID: opts.Profile, OpenRouterBaseURL: opts.OpenRouterBaseURL, TrustOpenRouterBaseURL: opts.TrustOpenRouterBaseURL})
 	if err != nil {
 		return nil, err
@@ -111,9 +107,6 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 		cfg.ActiveProfileID = "student"
 	}
 	if opts.Profile != "" {
-		if _, err := profMgr.Get(opts.Profile); err != nil {
-			return nil, err
-		}
 		cfg.ActiveProfileID = opts.Profile
 	}
 	if opts.Model != "" {
@@ -139,7 +132,32 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 		Tasks:      tasks.NewManager(storageDir),
 		Memory:     memMgr,
 		Proposals:  memory.NewProposalStore(storageDir, memMgr),
+		Quiet:      opts.Quiet,
 	}, nil
+}
+
+func (rt *runtime) activeProfile() (app.UserProfile, error) {
+	id := strings.TrimSpace(rt.Config.ActiveProfileID)
+	if id == "" {
+		id = "student"
+	}
+	return rt.profileByID(id)
+}
+
+func (rt *runtime) profileByID(id string) (app.UserProfile, error) {
+	profile, err := rt.Profiles.Get(id)
+	if err == nil {
+		return profile, nil
+	}
+	appErr := app.AsError(err)
+	if appErr.Category == app.CategoryValidation && appErr.Code == "unknown_profile" {
+		for _, candidate := range profiles.DefaultProfiles(time.Now().UTC()) {
+			if candidate.ID == id {
+				return candidate, nil
+			}
+		}
+	}
+	return app.UserProfile{}, err
 }
 
 func (rt *runtime) ensureProvider() providers.LLMProvider {
@@ -181,6 +199,7 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	}
 	rt.Process.Tasks = rt.Tasks
 	rt.Process.Profiles = rt.Profiles
+	rt.Process.ActiveProfileID = rt.Config.ActiveProfileID
 	rt.Process.Memory = rt.Memory
 	rt.Process.Proposals = rt.Proposals
 	rt.Process.Model = rt.Config.ActiveModel
@@ -231,6 +250,9 @@ func initCommand(opts *globalOptions) *cobra.Command {
 			if err := rt.ConfigMgr.Save(rt.Config); err != nil {
 				return err
 			}
+			if err := rt.Profiles.EnsureDefaults(); err != nil {
+				return err
+			}
 			profilesList, err := rt.Profiles.List()
 			if err != nil {
 				return err
@@ -242,10 +264,9 @@ func initCommand(opts *globalOptions) *cobra.Command {
 }
 
 type chatOptions struct {
-	Once            bool
-	Input           string
-	RenderPrompt    bool
-	TrustedEvidence []string
+	Once         bool
+	Input        string
+	RenderPrompt bool
 }
 
 func chatCommand(opts *globalOptions) *cobra.Command {
@@ -273,7 +294,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, chatOpts.TrustedEvidence, opts.JSON && !chatOpts.RenderPrompt)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, !chatOpts.RenderPrompt)
 				if err != nil {
 					return err
 				}
@@ -284,8 +305,10 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					result.RenderedPrompt = ""
 					result.Messages = nil
 				}
-				for _, warning := range result.Warnings {
-					_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
+				if !rt.Quiet {
+					for _, warning := range result.Warnings {
+						_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
+					}
 				}
 				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
 			}
@@ -295,7 +318,6 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
 	cmd.Flags().StringVar(&chatOpts.Input, "input", "", "input text for --once")
 	cmd.Flags().BoolVar(&chatOpts.RenderPrompt, "render-prompt", false, "render prompt without provider call")
-	cmd.Flags().StringArrayVar(&chatOpts.TrustedEvidence, "trusted-evidence", nil, "trusted application evidence for validation; repeatable")
 	return cmd
 }
 
@@ -312,7 +334,7 @@ type chatResult struct {
 	Warnings         []string                  `json:"warnings,omitempty"`
 }
 
-func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, trustedEvidence []string, requireMemoryProposal bool) (chatResult, error) {
+func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool) (chatResult, error) {
 	if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -328,7 +350,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, TrustedEvidence: trustedEvidence, RequireMemoryProposal: requireMemoryProposal})
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel, RenderedPromptID: app.NewID("prompt")}
 	if procResult != nil {
 		result.Answer = procResult.Answer
@@ -363,7 +385,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 			done, err := handleSlash(ctx, out, diag, rt, sessionID, line)
 			if err != nil {
 				failed = true
-				_, _ = fmt.Fprintln(diag, err.Error())
+				printError(diag, err, false)
 			}
 			if done {
 				return nil
@@ -372,19 +394,21 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		}
 		if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: line}); err != nil {
 			failed = true
-			_, _ = fmt.Fprintln(diag, err.Error())
+			printError(diag, err, false)
 			continue
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
-		result, err := runChatExchange(ctx, rt, sessionID, line, false, nil, false)
+		result, err := runChatExchange(ctx, rt, sessionID, line, false, true)
 		if err != nil {
 			failed = true
-			_, _ = fmt.Fprintln(diag, err.Error())
+			printError(diag, err, false)
 			continue
 		}
-		for _, warning := range result.Warnings {
-			_, _ = fmt.Fprintln(diag, warning)
+		if !rt.Quiet {
+			for _, warning := range result.Warnings {
+				_, _ = fmt.Fprintln(diag, warning)
+			}
 		}
 		_, _ = fmt.Fprintln(out, safeTerminalText(result.Answer))
 		if result.Proposal != nil {
@@ -393,7 +417,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		if result.Transition != nil {
 			_, _ = fmt.Fprintf(out, "transition: %s -> %s\n", result.Transition.From, result.Transition.To)
 		}
-		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil {
+		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil && !rt.Quiet {
 			_, _ = fmt.Fprintln(diag, "prompt audit skipped: "+app.AsError(err).Code)
 		}
 	}
@@ -458,14 +482,14 @@ func profileShowCommand(opts *globalOptions) *cobra.Command {
 		}
 		var profile app.UserProfile
 		if len(args) == 0 {
-			profile, err = rt.Profiles.Active()
+			profile, err = rt.activeProfile()
 		} else {
-			profile, err = rt.Profiles.Get(args[0])
+			profile, err = rt.profileByID(args[0])
 		}
 		if err != nil {
 			return err
 		}
-		return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "profile": profile}, fmt.Sprintf("profile: %s\n", profile.ID))
+		return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "profile": profile}, profileText(profile, rt.Config.ActiveProfileID))
 	}}
 }
 
@@ -473,6 +497,9 @@ func profileSetCommand(opts *globalOptions) *cobra.Command {
 	return &cobra.Command{Use: "set <id>", Short: "Set active profile", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		rt, err := newRuntime(cmd.Context(), opts)
 		if err != nil {
+			return err
+		}
+		if err := rt.Profiles.EnsureDefaults(); err != nil {
 			return err
 		}
 		profile, err := rt.Profiles.SetActive(args[0])
@@ -567,6 +594,7 @@ func memoryProposalsCommand(opts *globalOptions) *cobra.Command {
 
 func memoryListCommand(opts *globalOptions) *cobra.Command {
 	var sessionFlag, taskFlag string
+	var allProfiles bool
 	cmd := &cobra.Command{
 		Use:   "list <short|work|long>",
 		Short: "List memory layer",
@@ -596,7 +624,15 @@ func memoryListCommand(opts *globalOptions) *cobra.Command {
 					taskID = taskState.ID
 				}
 			}
-			records, err := rt.Memory.List(cmd.Context(), layer, sessionID, taskID)
+			profileID := ""
+			if layer == app.LayerLong && !allProfiles {
+				profile, err := rt.activeProfile()
+				if err != nil {
+					return err
+				}
+				profileID = profile.ID
+			}
+			records, err := rt.Memory.List(cmd.Context(), layer, sessionID, taskID, profileID)
 			if err != nil {
 				return err
 			}
@@ -605,6 +641,7 @@ func memoryListCommand(opts *globalOptions) *cobra.Command {
 	}
 	cmd.Flags().StringVar(&sessionFlag, "session", "", "session id for short layer")
 	cmd.Flags().StringVar(&taskFlag, "task", "", "task id for work layer")
+	cmd.Flags().BoolVar(&allProfiles, "all-profiles", false, "include all profile-scoped long memory")
 	return cmd
 }
 
@@ -626,7 +663,7 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			profile, err := rt.Profiles.Active()
+			profile, err := rt.activeProfile()
 			if err != nil {
 				return err
 			}
@@ -639,12 +676,12 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 				taskPtr = &taskState
 			}
 			rt.ensureProvider()
+			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 			if rt.Config.MemoryModel != "" {
 				if err := validateModelID(cmd.Context(), rt.ensureProvider(), rt.Config.MemoryModel); err != nil {
 					return err
 				}
 			}
-			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 			bundle, _ := rt.Memory.SelectForPrompt(cmd.Context(), sessionID, taskID(taskPtr), profile.ID)
 			if err := process.NewAuditStore(rt.StorageDir).Save(process.ProcessAuditEvent{SessionID: sessionID, TaskID: taskID(taskPtr), Stage: stageOf(taskPtr), Decision: "memory_proposal_provider_call", Reason: "memory_classifier", Model: rt.Config.MemoryModel, CreatedAt: time.Now().UTC()}); err != nil {
 				return err
@@ -687,7 +724,7 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 			if taskState.Status == app.TaskStatusPaused {
 				return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
 			}
-			profile, err := rt.Profiles.Active()
+			profile, err := rt.activeProfile()
 			if err != nil {
 				return err
 			}
@@ -886,8 +923,8 @@ func privacyCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			summary := map[string]any{"ok": true, "api_key": "OPENROUTER_API_KEY env-only; never persisted", "provider_data": []string{"rendered prompt", "latest exchange", "classifier payload"}, "storage_dir": storageDir, "raw_transcripts": "not required in P0"}
-			return writeOutput(cmd.OutOrStdout(), opts.JSON, summary, "OPENROUTER_API_KEY env-only; prompts sent to provider; memory/profile/task stored local.\n")
+			summary := map[string]any{"ok": true, "api_key": "OPENROUTER_API_KEY env-only; never persisted", "provider_data": []string{"rendered prompt", "latest exchange", "classifier payload"}, "storage_dir": storageDir, "prompt_audit": "ASSISTANT_PROMPT_AUDIT stores metadata/hash only; ASSISTANT_RAW_PROMPT_AUDIT stores raw prompts", "raw_transcripts": "not required in P0", "purge": "assistant privacy purge --audit --yes removes prompts.jsonl and audit files"}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, summary, "OPENROUTER_API_KEY env-only; prompts sent to provider; memory/profile/task stored local. ASSISTANT_PROMPT_AUDIT stores metadata/hash only; ASSISTANT_RAW_PROMPT_AUDIT stores raw prompts. Purge with: assistant privacy purge --audit --yes\n")
 		},
 	}
 	cmd.AddCommand(privacyPurgeCommand(opts))
@@ -1047,11 +1084,11 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		_, _ = fmt.Fprintln(out, "OPENROUTER_API_KEY env-only; memory/profile/task stored local.")
 	case "/profile":
 		if len(parts) == 1 {
-			profile, err := rt.Profiles.Active()
+			profile, err := rt.activeProfile()
 			if err != nil {
 				return false, err
 			}
-			_, _ = fmt.Fprintf(out, "active profile: %s\n", profile.ID)
+			_, _ = fmt.Fprint(out, profileText(profile, rt.Config.ActiveProfileID))
 			return false, nil
 		}
 		if parts[1] == "create" {
@@ -1110,6 +1147,9 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 			_, _ = fmt.Fprintf(out, "created profile: %s\n", id)
 			return false, nil
 		}
+		if err := rt.Profiles.EnsureDefaults(); err != nil {
+			return false, err
+		}
 		profile, err := rt.Profiles.SetActive(parts[1])
 		if err != nil {
 			return false, err
@@ -1121,6 +1161,8 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 			return false, nil
 		}
 		model := parts[1]
+		rt.ensureProvider()
+		ensureProviderDisclosure(diag, rt)
 		if err := validateModelID(ctx, rt.ensureProvider(), model); err != nil {
 			return false, err
 		}
@@ -1143,7 +1185,7 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		if layer == app.LayerWork && taskState.Status == app.TaskStatusPaused {
 			return false, app.NewError(app.CategoryValidation, "task_paused", "resume task before mutating working memory", nil)
 		}
-		profile, err := rt.Profiles.Active()
+		profile, err := rt.activeProfile()
 		if err != nil {
 			return false, err
 		}
@@ -1255,7 +1297,15 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 	switch parts[1] {
 	case "short", "work", "long":
 		taskState, _ := rt.Tasks.Current()
-		records, err := rt.Memory.List(ctx, app.MemoryLayer(parts[1]), sessionID, taskState.ID)
+		profileID := ""
+		if parts[1] == "long" {
+			profile, err := rt.activeProfile()
+			if err != nil {
+				return err
+			}
+			profileID = profile.ID
+		}
+		records, err := rt.Memory.List(ctx, app.MemoryLayer(parts[1]), sessionID, taskState.ID, profileID)
 		if err != nil {
 			return err
 		}
@@ -1265,7 +1315,7 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		if err != nil {
 			return err
 		}
-		profile, err := rt.Profiles.Active()
+		profile, err := rt.activeProfile()
 		if err != nil {
 			return err
 		}
@@ -1278,12 +1328,12 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 			taskPtr = &taskState
 		}
 		rt.ensureProvider()
+		ensureProviderDisclosure(diag, rt)
 		if rt.Config.MemoryModel != "" {
 			if err := validateModelID(ctx, rt.ensureProvider(), rt.Config.MemoryModel); err != nil {
 				return err
 			}
 		}
-		ensureProviderDisclosure(diag, rt)
 		bundle, _ := rt.Memory.SelectForPrompt(ctx, sessionID, taskID(taskPtr), profile.ID)
 		if err := process.NewAuditStore(rt.StorageDir).Save(process.ProcessAuditEvent{SessionID: sessionID, TaskID: taskID(taskPtr), Stage: stageOf(taskPtr), Decision: "memory_proposal_provider_call", Reason: "memory_classifier", Model: rt.Config.MemoryModel, CreatedAt: time.Now().UTC()}); err != nil {
 			return err
@@ -1307,7 +1357,7 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		if taskState.Status == app.TaskStatusPaused {
 			return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
 		}
-		profile, err := rt.Profiles.Active()
+		profile, err := rt.activeProfile()
 		if err != nil {
 			return err
 		}
@@ -1319,7 +1369,9 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 			}
 			return err
 		}
-		applyOpts.ProposalID = "latest"
+		if applyOpts.ProposalID == "" {
+			applyOpts.ProposalID = "latest"
+		}
 		applyOpts.SessionID = sessionID
 		applyOpts.TaskID = taskState.ID
 		applyOpts.ProfileID = profile.ID
@@ -1371,6 +1423,12 @@ func parseMemoryApplyArgs(parts []string) (memory.ApplyOptions, error) {
 			}
 			opts.Edits[id] = edit
 			i += 2
+		case "--proposal":
+			if i+1 >= len(parts) {
+				return opts, app.NewError(app.CategoryCLI, "missing_proposal", "--proposal requires a proposal id", nil)
+			}
+			opts.ProposalID = parts[i+1]
+			i += 2
 		default:
 			return opts, app.NewError(app.CategoryCLI, "unknown_apply_option", "unknown /memory apply option: "+parts[i], nil)
 		}
@@ -1416,6 +1474,12 @@ func parseMemoryApplyArgsRaw(rawLine string) (memory.ApplyOptions, error) {
 				return opts, err
 			}
 			opts.Edits[id] = edit
+			i += 2
+		case "--proposal":
+			if i+1 >= len(tokens) {
+				return opts, app.NewError(app.CategoryCLI, "missing_proposal", "--proposal requires a proposal id", nil)
+			}
+			opts.ProposalID = tokens[i+1]
 			i += 2
 		default:
 			return opts, app.NewError(app.CategoryCLI, "unknown_apply_option", "unknown /memory apply option: "+tokens[i], nil)
@@ -1488,7 +1552,17 @@ func recordRenderedPrompt(storageDir, sessionID, promptID string, messages []app
 		return err
 	}
 	path := filepath.Join(dir, "prompts.jsonl")
-	record := map[string]any{"id": promptID, "session_id": sessionID, "rendered_prompt": rendered, "messages": messages, "created_at": time.Now().UTC()}
+	digest := sha256.Sum256([]byte(rendered))
+	roles := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		roles = append(roles, string(msg.Role))
+	}
+	record := map[string]any{"id": promptID, "session_id": sessionID, "rendered_prompt_sha256": fmt.Sprintf("%x", digest), "message_count": len(messages), "roles": roles, "raw": false, "created_at": time.Now().UTC()}
+	if os.Getenv("ASSISTANT_RAW_PROMPT_AUDIT") == "1" {
+		record["raw"] = true
+		record["rendered_prompt"] = rendered
+		record["messages"] = messages
+	}
 	return storage.AppendJSONL(path, record)
 }
 
@@ -1604,7 +1678,10 @@ func printError(w io.Writer, err error, asJSON bool) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": appErr})
 		return
 	}
-	_, _ = fmt.Fprintf(w, "%s: %s\n", appErr.Code, appErr.Message)
+	_, _ = fmt.Fprintf(w, "%s: %s\n", appErr.Code, safeTerminalText(appErr.Message))
+	if appErr.Hint != "" {
+		_, _ = fmt.Fprintf(w, "hint: %s\n", safeTerminalText(appErr.Hint))
+	}
 }
 
 func textChatResult(result chatResult) string {
@@ -1630,9 +1707,64 @@ func profileListText(items []app.UserProfile, active string) string {
 		}
 		b.WriteString(mark)
 		b.WriteString(profile.ID)
+		if profile.DisplayName != "" {
+			b.WriteString(" ")
+			b.WriteString(safeTerminalText(profile.DisplayName))
+		}
+		if len(profile.Style) > 0 {
+			b.WriteString(" style=")
+			b.WriteString(safeTerminalText(formatStringMap(profile.Style)))
+		}
+		if len(profile.ResponseFormat) > 0 {
+			b.WriteString(" format=")
+			b.WriteString(safeTerminalText(formatStringMap(profile.ResponseFormat)))
+		}
+		if len(profile.Constraints) > 0 {
+			b.WriteString(" constraints=")
+			b.WriteString(safeTerminalText(strings.Join(profile.Constraints, "; ")))
+		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func profileText(profile app.UserProfile, active string) string {
+	var b strings.Builder
+	if profile.ID == active {
+		b.WriteString("active ")
+	}
+	b.WriteString("profile: ")
+	b.WriteString(profile.ID)
+	b.WriteByte('\n')
+	b.WriteString("display_name: ")
+	b.WriteString(safeTerminalText(profile.DisplayName))
+	b.WriteByte('\n')
+	b.WriteString("style: ")
+	b.WriteString(safeTerminalText(formatStringMap(profile.Style)))
+	b.WriteByte('\n')
+	b.WriteString("response_format: ")
+	b.WriteString(safeTerminalText(formatStringMap(profile.ResponseFormat)))
+	b.WriteByte('\n')
+	b.WriteString("constraints: ")
+	b.WriteString(safeTerminalText(strings.Join(profile.Constraints, "; ")))
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func formatStringMap(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"="+values[key])
+	}
+	return strings.Join(parts, ",")
 }
 
 func memoryListHeader(layer app.MemoryLayer, sessionID, taskID string) string {
@@ -1658,6 +1790,10 @@ func memoryText(records []app.MemoryRecord) string {
 		b.WriteString(string(record.Layer))
 		b.WriteString("] ")
 		b.WriteString(record.Kind)
+		if record.Source != "" {
+			b.WriteString(" source=")
+			b.WriteString(record.Source)
+		}
 		b.WriteString(": ")
 		b.WriteString(safeTerminalText(record.Content))
 		b.WriteByte('\n')
@@ -1691,6 +1827,9 @@ func proposalText(proposal app.MemoryProposal) string {
 		b.WriteByte('\n')
 	}
 	b.WriteString("Next: assistant memory apply --proposal ")
+	b.WriteString(proposal.ID)
+	b.WriteString(" --accept all | --reject <record_id> | --edit <record_id>:layer=<layer>,content=<text>\n")
+	b.WriteString("REPL: /memory apply --proposal ")
 	b.WriteString(proposal.ID)
 	b.WriteString(" --accept all | --reject <record_id> | --edit <record_id>:layer=<layer>,content=<text>\n")
 	return b.String()

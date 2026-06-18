@@ -22,10 +22,10 @@ Claude read `CLAUDE.md` on every session start. If file big, cost big. Caveman m
 
 ```
 CLAUDE.md          ← compressed (Claude reads this — fewer tokens every session)
-CLAUDE.original.md ← human-readable backup (you edit this)
+backup dir copy    ← human-readable .original.md backup
 ```
 
-Original never lost. You can read and edit `.original.md`. Run skill again to re-compress after edits.
+Original never lost. Backup is stored outside the source tree under the user data backup directory. Run skill again to re-compress after edits.
 
 ## Benchmarks
 
@@ -87,6 +87,8 @@ caveman-compress/
 /caveman-compress <filepath>
 ```
 
+The underlying CLI supports `--dry-run`, `--local-only`, and `--yes`. Model transfer requires explicit confirmation after provider/path/byte disclosure unless `--yes` is passed.
+
 Examples:
 ```
 /caveman-compress CLAUDE.md
@@ -110,6 +112,10 @@ Examples:
         ↓
 detect file type        (no tokens)
         ↓
+scan content + disclose provider/path/bytes
+        ↓
+require explicit transfer confirmation
+        ↓
 Claude compresses       (tokens — one call)
         ↓
 validate output         (no tokens)
@@ -121,7 +127,7 @@ if errors: Claude fixes cherry-picked issues only   (tokens — targeted fix)
 retry up to 2 times
         ↓
 write compressed → CLAUDE.md
-write original   → CLAUDE.original.md
+write original   → user data backup dir/*.original.md
 ```
 
 Only two things use tokens: initial compression + targeted fix if validation fails. Everything else is local Python.

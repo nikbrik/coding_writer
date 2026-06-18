@@ -51,6 +51,13 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	if !strings.Contains(rendered, "Selected action is answer_question") {
 		t.Fatalf("missing answer_question stage guidance:\n%s", rendered)
 	}
+	for _, msg := range messages {
+		if strings.Contains(msg.Content, `id="profile.active"`) || strings.Contains(msg.Content, `id="task.current"`) || strings.Contains(msg.Content, `id="memory.`) {
+			if msg.Role != app.RoleUser {
+				t.Fatalf("untrusted context must use user role, got %s for %q", msg.Role, msg.Content)
+			}
+		}
+	}
 }
 
 func TestPromptBuilderNilFactoryUsesDefault(t *testing.T) {

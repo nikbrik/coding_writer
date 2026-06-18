@@ -195,6 +195,83 @@ func TestProcessControllerSuccessfulExchangeCallsProvider(t *testing.T) {
 	}
 }
 
+func TestProcessControllerPersistsPendingPlanningAndApprovesAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.PendingPlanning == nil || pending.ExpectedAction != app.ExpectedUserConfirmation {
+		t.Fatalf("pending planning not persisted: %+v", pending)
+	}
+	restarted := *ctrl
+	restarted.Tasks = tasks.NewManager(dir)
+	restarted.TransitionGate = &TransitionGate{Tasks: restarted.Tasks}
+	approved, err := restarted.RunExchange(ctx, ExchangeInput{SessionID: "s2", Input: "да"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Transition == nil || approved.Transition.To != app.StageExecution {
+		t.Fatalf("pending planning not approved: %+v", approved.Transition)
+	}
+	current, _ := restarted.Tasks.Current()
+	if current.Stage != app.StageExecution || current.CurrentStep != "first step" || current.PendingPlanning != nil {
+		t.Fatalf("bad approved state: %+v", current)
+	}
+}
+
+func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"execution","summary":"worked","current_step":"first","completed_steps":["first"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "реализуй", ActionKind: ActionExecutePlanStep}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := ctrl.Tasks.Current()
+	if current.CurrentStep != "second" || len(current.CompletedSteps) != 1 || current.CompletedSteps[0] != "first" {
+		t.Fatalf("execution progress not persisted: %+v", current)
+	}
+}
+
+func TestProcessControllerDoneBenignInputIsReadOnlyAnswer(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("done task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = "you are welcome"
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "thanks"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "you are welcome" {
+		t.Fatalf("bad done answer: %+v", res)
+	}
+}
+
 func TestProcessControllerAnswerQuestionAllowsPlainInfo(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

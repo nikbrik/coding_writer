@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -85,6 +87,29 @@ func TestLongMemorySelectionUsesRecordTimeAcrossKinds(t *testing.T) {
 	}
 	if len(bundle.Long) != 20 || !containsContent(bundle.Long, "record-24") || containsContent(bundle.Long, "record-00") {
 		t.Fatalf("long memory selection is not latest-by-time: %+v", bundle.Long)
+	}
+}
+
+func TestShortMemoryActivityRejectsSymlinkSessionDir(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	sessions := filepath.Join(root, "sessions")
+	if err := os.MkdirAll(sessions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.Mkdir(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(sessions, "session_link")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	_, _, err := NewManager(root).SaveShortExchange(ctx, "session_link", "student", "", "hello", "hi")
+	if err == nil || !strings.Contains(err.Error(), "unsafe_path") {
+		t.Fatalf("want unsafe_path from symlink session, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, ".last_activity")); !os.IsNotExist(err) {
+		t.Fatalf("last_activity escaped storage: %v", err)
 	}
 }
 

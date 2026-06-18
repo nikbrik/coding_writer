@@ -40,6 +40,10 @@ func TestAtomicWriteJSONRejectsSymlinkTargetAndBrokenJSONTyped(t *testing.T) {
 	if err := AtomicWriteJSON(link, map[string]bool{"ok": true}); err == nil {
 		t.Fatal("symlink target write accepted")
 	}
+	var linked map[string]any
+	if err := ReadJSON(link, &linked); err == nil {
+		t.Fatal("symlink target read accepted")
+	}
 	broken := filepath.Join(root, "broken.json")
 	if err := os.WriteFile(broken, []byte(`{bad json`), FileMode); err != nil {
 		t.Fatal(err)

@@ -63,9 +63,20 @@ func TestResolveActionKindValidationVerifyQuestionVerifiesCriteria(t *testing.T)
 }
 
 func TestResolveActionKindDoneSummaryIntent(t *testing.T) {
-	got := ResolveActionKind("summarize completed task", app.StageDone, app.ExpectedNone)
-	if got != ActionSummarizeDone {
-		t.Fatalf("want summarize_done, got %s", got)
+	for _, input := range []string{"summarize completed task", "what changed?", "status update?"} {
+		got := ResolveActionKind(input, app.StageDone, app.ExpectedNone)
+		if got != ActionSummarizeDone {
+			t.Fatalf("%q: want summarize_done, got %s", input, got)
+		}
+	}
+}
+
+func TestResolveActionKindDoneBenignQuestionsAreReadOnly(t *testing.T) {
+	for _, input := range []string{"can you update me?", "what changes were made?", "what change was made?"} {
+		got := ResolveActionKind(input, app.StageDone, app.ExpectedNone)
+		if got != ActionAnswerQuestion {
+			t.Fatalf("%q: want answer_question, got %s", input, got)
+		}
 	}
 }
 

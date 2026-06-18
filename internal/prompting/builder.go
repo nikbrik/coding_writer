@@ -63,7 +63,7 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 	}
 
 	messages = append(messages,
-		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: profileBlock, CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: profileBlock, CreatedAt: now},
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: invariants(), CreatedAt: now},
 	)
 
@@ -72,12 +72,12 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 		if err != nil {
 			return nil, err
 		}
-		messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: taskBlock, CreatedAt: now})
+		messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: taskBlock, CreatedAt: now})
 	}
 	messages = append(messages,
-		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.working", "working_memory", input.Memory.Work), CreatedAt: now},
-		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.long", "long_memory", input.Memory.Long), CreatedAt: now},
-		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: renderMemoryBlock("memory.short", "short_history", input.Memory.Short), CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderMemoryBlock("memory.working", "working_memory", input.Memory.Work), CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderMemoryBlock("memory.long", "long_memory", input.Memory.Long), CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderMemoryBlock("memory.short", "short_history_and_accepted_short_memory", input.Memory.Short), CreatedAt: now},
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: `<context_block id="query.current" type="user_query" source="user" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.Query) + "\n</context_block>", CreatedAt: now},
 	)
 	return messages, nil

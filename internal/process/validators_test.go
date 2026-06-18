@@ -203,7 +203,7 @@ func TestValidationReadyForDoneRequiresTrustedEvidence(t *testing.T) {
 	if len(errs) == 0 {
 		t.Fatal("expected missing trusted evidence rejection")
 	}
-	errs = validateValidation(&ValidationOutput{PassedChecks: []string{"tests passed"}, Verdict: "ready_for_done"}, "go test ./... passed")
+	errs = validateValidation(&ValidationOutput{PassedChecks: []string{"tests passed"}, Verdict: "ready_for_done"}, NewTrustedEvidence("go test ./...", 0, "ok"))
 	if len(errs) != 0 {
 		t.Fatalf("trusted evidence should satisfy ready_for_done: %v", errs)
 	}

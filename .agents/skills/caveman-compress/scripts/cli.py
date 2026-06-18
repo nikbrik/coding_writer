@@ -26,15 +26,30 @@ from .detect import detect_file_type, should_compress
 
 
 def print_usage():
-    print("Usage: caveman <filepath>")
+    print("Usage: caveman [--yes] [--dry-run] [--local-only] <filepath>")
 
 
 def main():
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    yes = False
+    dry_run = False
+    local_only = False
+    filtered = []
+    for arg in args:
+        if arg == "--yes":
+            yes = True
+        elif arg == "--dry-run":
+            dry_run = True
+        elif arg == "--local-only":
+            local_only = True
+        else:
+            filtered.append(arg)
+
+    if len(filtered) != 1:
         print_usage()
         sys.exit(1)
 
-    filepath = Path(sys.argv[1])
+    filepath = Path(filtered[0])
 
     # Check file exists
     if not filepath.exists():
@@ -60,13 +75,15 @@ def main():
     print("Starting caveman compression...\n")
 
     try:
-        success = compress_file(filepath)
+        success = compress_file(filepath, yes=yes, dry_run=dry_run, local_only=local_only)
 
         if success:
-            print("\nCompression completed successfully")
+            mode = "Dry run" if dry_run else "Local-only check" if local_only else "Compression"
+            print(f"\n{mode} completed successfully")
             backup_path = backup_dir_for(filepath) / (filepath.stem + ".original.md")
-            print(f"Compressed: {filepath}")
-            print(f"Original:   {backup_path}")
+            if not dry_run and not local_only:
+                print(f"Compressed: {filepath}")
+                print(f"Original:   {backup_path}")
             sys.exit(0)
         else:
             print("\n❌ Compression failed after retries")

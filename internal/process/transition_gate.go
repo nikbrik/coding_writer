@@ -57,7 +57,7 @@ func (g *TransitionGate) Apply(state app.TaskState, parsed ParsedResponse, opts 
 	if err != nil {
 		return result, err
 	}
-	if current.ID != state.ID || current.Stage != state.Stage || current.Status != state.Status {
+	if !sameTaskForTransition(current, state) {
 		return result, app.NewError(app.CategoryStorage, "task_changed_before_transition", "task changed before transition could be applied", nil)
 	}
 	if state.Stage == app.StagePlanning && next == app.StageExecution && parsed.Planning != nil {
@@ -80,6 +80,44 @@ func (g *TransitionGate) Apply(state app.TaskState, parsed ParsedResponse, opts 
 	result.Reason = reason
 	result.State = moved
 	return result, nil
+}
+
+func sameTaskForTransition(current, expected app.TaskState) bool {
+	return current.ID == expected.ID &&
+		current.Stage == expected.Stage &&
+		current.Status == expected.Status &&
+		current.CurrentStep == expected.CurrentStep &&
+		current.ExpectedAction == expected.ExpectedAction &&
+		current.Objective == expected.Objective &&
+		current.ValidationStatus == expected.ValidationStatus &&
+		current.LastSessionID == expected.LastSessionID &&
+		current.UpdatedAt.Equal(expected.UpdatedAt) &&
+		sameStrings(current.AcceptanceCriteria, expected.AcceptanceCriteria) &&
+		sameStrings(current.Plan, expected.Plan) &&
+		sameStrings(current.Decisions, expected.Decisions) &&
+		sameStrings(current.OpenQuestions, expected.OpenQuestions) &&
+		sameStrings(current.HistoryLog, expected.HistoryLog) &&
+		sameStrings(current.CompletedSteps, expected.CompletedSteps) &&
+		samePendingPlanning(current.PendingPlanning, expected.PendingPlanning)
+}
+
+func samePendingPlanning(a, b *app.PlanningProposalState) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.ID == b.ID && a.Summary == b.Summary && a.CreatedAt.Equal(b.CreatedAt) && sameStrings(a.AcceptanceCriteria, b.AcceptanceCriteria) && sameStrings(a.Plan, b.Plan) && sameStrings(a.OpenQuestions, b.OpenQuestions)
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (g *TransitionGate) nextStage(state app.TaskState, parsed ParsedResponse, opts TransitionOptions) (app.TaskStage, string, bool, error) {

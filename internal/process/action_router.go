@@ -50,16 +50,19 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		}
 		return ActionReviewOutput
 	case app.StageDone:
-		if containsAny(normalized, []string{"summary", "summarize", "итог", "резюме", "final summary", "what was done"}) {
+		if containsAny(normalized, []string{"summary", "summarize", "итог", "резюме", "final summary", "what was done", "status", "what changed", "что изменилось"}) {
 			return ActionSummarizeDone
 		}
-		if containsAny(normalized, []string{"реализуй", "implement", "execute", "edit", "change", "fix", "доделай", "add", "update", "write", "create", "delete", "remove", "make", "build", "создай", "добавь", "измени", "обнови", "удали", "исправь"}) {
+		if isInformationalQuestion(normalized) {
+			return ActionAnswerQuestion
+		}
+		if containsDoneMutationIntent(normalized) {
 			return ActionExecutePlanStep
 		}
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}
-		return ActionExecutePlanStep
+		return ActionAnswerQuestion
 	default:
 		return ActionAnswerQuestion
 	}
@@ -76,15 +79,48 @@ func looksLikeClarification(normalized string) bool {
 	return containsAny(normalized, []string{"?", "что", "как", "почему", "какой", "какие", "объясни", "расскажи", "what", "how", "why", "which", "explain"})
 }
 
+func isInformationalQuestion(normalized string) bool {
+	tokens := words(normalized)
+	if len(tokens) == 0 {
+		return false
+	}
+	switch tokens[0] {
+	case "what", "how", "why", "which", "что", "как", "почему", "какой", "какие":
+		return true
+	}
+	return false
+}
+
 func isConfirmation(normalized string) bool {
-	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ")
-	for _, token := range strings.Fields(replacer.Replace(normalized)) {
+	for _, token := range words(normalized) {
 		switch token {
 		case "yes", "y", "approve", "approved", "confirm", "confirmed", "да", "ок", "подтверждаю", "согласен":
 			return true
 		}
 	}
 	return false
+}
+
+func containsDoneMutationIntent(normalized string) bool {
+	if strings.Contains(normalized, "continue work") {
+		return true
+	}
+	tokens := words(normalized)
+	for i, token := range tokens {
+		if token == "update" && i+1 < len(tokens) && tokens[i+1] == "me" {
+			continue
+		}
+		switch token {
+		case "реализуй", "implement", "execute", "edit", "change", "fix", "доделай", "add", "update", "write", "create", "delete", "remove", "make", "build", "refactor", "rename", "modify", "создай", "добавь", "измени", "обнови", "удали", "исправь":
+			return true
+		}
+	}
+	return false
+}
+
+func words(s string) []string {
+	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ", "(", " ", ")", " ", "[", " ", "]", " ")
+	return strings.Fields(replacer.Replace(s))
 }
 
 func containsAny(s string, needles []string) bool {

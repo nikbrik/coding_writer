@@ -103,6 +103,9 @@ func executionSchemaText() string {
 	return `{
   "stage": "execution",
   "summary": "string, required",
+  "current_step": "string, current step just worked on",
+  "completed_steps": ["string"],
+  "next_step": "string, next persisted current_step if any",
   "changed_artifacts": ["string"],
   "verification": ["string; use 'not run' unless trusted tool evidence exists"],
   "blockers": ["string"],

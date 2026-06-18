@@ -97,11 +97,11 @@ func (m *Manager) Get(id string) (app.UserProfile, error) {
 
 func (m *Manager) List() ([]app.UserProfile, error) {
 	dir := filepath.Join(m.StorageDir, "profiles")
-	if err := storage.EnsureDir(dir); err != nil {
-		return nil, app.NewError(app.CategoryStorage, "profiles_dir", err.Error(), err)
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return DefaultProfiles(time.Now().UTC()), nil
+		}
 		return nil, app.NewError(app.CategoryStorage, "profiles_list", err.Error(), err)
 	}
 	var out []app.UserProfile

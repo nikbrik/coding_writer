@@ -65,6 +65,17 @@ SENSITIVE_NAME_TOKENS = (
     "apikey", "accesskey", "token", "privatekey",
 )
 
+CONTENT_SECRET_PATTERNS = (
+    ("openrouter_api_key", re.compile(r"(?i)OPENROUTER_API_KEY\s*=\s*[^\s]+")),
+    ("bearer_token", re.compile(r"(?i)Bearer\s+[A-Za-z0-9._~+/=-]{12,}")),
+    ("sk_token", re.compile(r"\bsk-[A-Za-z0-9_-]{12,}\b")),
+    ("password", re.compile(r"(?i)\b(password|passwd|token|secret|api[_-]?key)\s*[:=]\s*[^\s]+")),
+    ("aws_access_key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("gcp_service_account", re.compile(r'"type"\s*:\s*"service_account"')),
+    ("email", re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")),
+    ("phone", re.compile(r"(?<!\d)(?:\+?\d[\d .()\-]{8,}\d)(?!\d)")),
+)
+
 
 def backup_dir_for(filepath: Path) -> Path:
     """Resolve the out-of-tree backup directory for a given source file.
@@ -101,6 +112,41 @@ def is_sensitive_path(filepath: Path) -> bool:
     # Normalize separators so "api-key" and "api_key" both match "apikey".
     lower = re.sub(r"[_\-\s.]", "", name.lower())
     return any(tok in lower for tok in SENSITIVE_NAME_TOKENS)
+
+
+def detect_sensitive_content(text: str) -> List[str]:
+    findings = []
+    seen = set()
+    for name, pattern in CONTENT_SECRET_PATTERNS:
+        if pattern.search(text) and name not in seen:
+            findings.append(name)
+            seen.add(name)
+    return findings
+
+
+def provider_label() -> str:
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return "Anthropic SDK"
+    return "claude CLI"
+
+
+def print_data_boundary(filepath: Path, byte_count: int, backup_path: Path) -> None:
+    print("Third-party boundary disclosure:")
+    print(f"  provider: {provider_label()}")
+    print(f"  model: {os.environ.get('CAVEMAN_MODEL', 'claude-sonnet-4-5')}")
+    print(f"  source_path: {filepath}")
+    print(f"  source_bytes: {byte_count}")
+    print(f"  backup_path: {backup_path}")
+    print("  network: true")
+
+
+def confirm_data_boundary(yes: bool) -> bool:
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    answer = input("Type YES to send this file body to the model: ").strip()
+    return answer == "YES"
 
 
 def strip_llm_wrapper(text: str) -> str:
@@ -219,7 +265,7 @@ Return ONLY the fixed compressed file. No explanation.
 # ---------- Core Logic ----------
 
 
-def compress_file(filepath: Path) -> bool:
+def compress_file(filepath: Path, *, yes: bool = False, dry_run: bool = False, local_only: bool = False) -> bool:
     # Resolve and validate path
     filepath = filepath.resolve()
     MAX_FILE_SIZE = 500_000  # 500KB
@@ -258,6 +304,13 @@ def compress_file(filepath: Path) -> bool:
         print("❌ Refusing to compress: file is empty or whitespace-only.")
         return False
 
+    sensitive_content = detect_sensitive_content(original_text)
+    if sensitive_content:
+        raise ValueError(
+            "Refusing to compress: content looks sensitive "
+            f"({', '.join(sensitive_content)}). Compression would send file contents to a third-party model."
+        )
+
     # Check if backup already exists to prevent accidental overwriting
     if backup_path.exists():
         print(f"⚠️ Backup file already exists: {backup_path}")
@@ -274,6 +327,17 @@ def compress_file(filepath: Path) -> bool:
 
     if not body.strip():
         print("❌ Refusing to compress: body is empty after frontmatter removal.")
+        return False
+
+    print_data_boundary(filepath, len(body.encode("utf-8", errors="replace")), backup_path)
+    if dry_run:
+        print("Dry run: content scan and disclosure completed; no model call and no writes.")
+        return True
+    if local_only:
+        print("Local-only mode: refusing model call and leaving file unchanged.")
+        return True
+    if not confirm_data_boundary(yes):
+        print("❌ Compression aborted: explicit third-party transfer confirmation missing.")
         return False
 
     # Step 1: Compress (body only, frontmatter excluded)

@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/memory"
+	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/providers"
 )
 
@@ -373,7 +375,7 @@ func TestMemoryApplyCLIRequiresExplicitAction(t *testing.T) {
 	}
 }
 
-func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
+func TestClassifierFailureFailsClosed(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
 	if err != nil {
@@ -381,12 +383,9 @@ func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, nil, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Answer == "" || len(result.Warnings) == 0 || result.Proposal != nil {
-		t.Fatalf("classifier failure did not return answer with warning: %+v", result)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, true)
+	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
+		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
 	}
 }
 
@@ -398,13 +397,13 @@ func TestChatOnceJSONFailsWhenClassifierFails(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail_json", "hello", false, nil, true)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail_json", "hello", false, true)
 	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
 		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
 	}
 }
 
-func TestRunChatExchangePassesTrustedEvidenceToValidation(t *testing.T) {
+func TestRunChatExchangeRejectsRawTrustedEvidence(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
 	if err != nil {
@@ -422,12 +421,22 @@ func TestRunChatExchangePassesTrustedEvidenceToValidation(t *testing.T) {
 	if _, err := rt.Tasks.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
-	result, err := runChatExchange(context.Background(), rt, "session_validation_done", "проверь", false, []string{"go test ./... passed"}, false)
+	pc := rt.attachProviderToProcess()
+	_, err = pc.RunExchange(context.Background(), process.ExchangeInput{SessionID: "session_validation_done", Input: "проверь", TrustedEvidence: []string{"go test ./... passed"}, RequireMemoryProposal: true})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("raw trusted evidence should not pass validation: %v", err)
+	}
+
+	fake = providers.NewFakeProvider()
+	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tests passed"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+	rt.Provider = fake
+	pc = rt.attachProviderToProcess()
+	result, err := pc.RunExchange(context.Background(), process.ExchangeInput{SessionID: "session_validation_done_2", Input: "проверь", TrustedEvidence: []string{process.NewTrustedEvidence("go test ./...", 0, "ok")}, RequireMemoryProposal: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Transition == nil || result.Transition.To != app.StageDone {
-		t.Fatalf("trusted evidence was not passed to transition gate: %+v", result.Transition)
+		t.Fatalf("structured trusted evidence was not passed to transition gate: %+v", result.Transition)
 	}
 }
 
@@ -472,6 +481,105 @@ func TestProfilesCreateSetShowCommands(t *testing.T) {
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "profiles", "show"})
 	if err := cmd.Execute(); err != nil || !strings.Contains(out.String(), `"id": "custom"`) {
 		t.Fatalf("show active profile failed: err=%v out=%s", err, out.String())
+	}
+}
+
+func TestProfileFlagAffectsRenderedPromptWithoutPersisting(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--profile", "senior", "--json", "chat", "--once", "--render-prompt", "--input", "Объясни memory layers"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "Profile: senior") || !strings.Contains(out.String(), "prefer_tradeoffs") {
+		t.Fatalf("senior profile override missing from prompt: %s", out.String())
+	}
+	cfg, err := app.NewConfigManager(storageDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ActiveProfileID != "" {
+		t.Fatalf("profile flag persisted unexpectedly: %+v", cfg)
+	}
+}
+
+func TestTextProfilesShowIncludesPreferences(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", t.TempDir(), "profiles", "show", "student"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "style:") || !strings.Contains(text, "response_format:") || !strings.Contains(text, "constraints:") {
+		t.Fatalf("profile details missing from text output: %s", text)
+	}
+}
+
+func TestMemoryListLongFiltersActiveProfileByDefault(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	mem := memory.NewManager(storageDir)
+	if _, err := mem.Save(context.Background(), memory.SaveInput{Layer: app.LayerLong, Kind: "preference", Content: "student only", ProfileID: "student"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mem.Save(context.Background(), memory.SaveInput{Layer: app.LayerLong, Kind: "preference", Content: "senior only", ProfileID: "senior"}); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--profile", "student", "memory", "list", "long"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "student only") || strings.Contains(out.String(), "senior only") {
+		t.Fatalf("profile filter failed: %s", out.String())
+	}
+	cmd = newRootCommand(&globalOptions{})
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--profile", "student", "memory", "list", "long", "--all-profiles"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "student only") || !strings.Contains(out.String(), "senior only") {
+		t.Fatalf("all profile listing failed: %s", out.String())
+	}
+}
+
+func TestMemoryApplyRawParsesProposalID(t *testing.T) {
+	opts, err := parseMemoryApplyArgsRaw("/memory apply --proposal proposal_1 --accept all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.ProposalID != "proposal_1" || !opts.AcceptAll {
+		t.Fatalf("bad parse: %+v", opts)
+	}
+}
+
+func TestInitMissingModelDoesNotCreateStorage(t *testing.T) {
+	storageDir := filepath.Join(t.TempDir(), "missing")
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "init"})
+	if err := cmd.Execute(); err == nil || app.AsError(err).Code != "missing_model" {
+		t.Fatalf("want missing_model, got %v", err)
+	}
+	if _, err := os.Stat(storageDir); !os.IsNotExist(err) {
+		t.Fatalf("storage created before validation: %v", err)
+	}
+}
+
+func TestPrintErrorTextIncludesHint(t *testing.T) {
+	var out bytes.Buffer
+	printError(&out, app.ErrorWithHint(app.CategoryCLI, "bad", "bad input", "do this", nil), false)
+	if !strings.Contains(out.String(), "hint: do this") {
+		t.Fatalf("hint missing: %s", out.String())
 	}
 }
 
@@ -546,6 +654,77 @@ func TestInitDisclosesProviderBeforeModelLookup(t *testing.T) {
 	}
 }
 
+func TestMemoryProposeDisclosesProviderBeforeModelLookup(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	storageDir := t.TempDir()
+	mem := memory.NewManager(storageDir)
+	if _, _, err := mem.SaveShortExchange(context.Background(), "session_disclose", "student", "", "hello", "hi"); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "openai/gpt-4.1-mini", "memory", "propose"})
+	if err := cmd.Execute(); err == nil || app.AsError(err).Code != "missing_api_key" {
+		t.Fatalf("want missing_api_key after disclosure, got %v", err)
+	}
+	if !strings.Contains(stderr.String(), "Provider disclosure:") {
+		t.Fatalf("provider disclosure missing: %q", stderr.String())
+	}
+}
+
+func TestSlashModelDisclosesProviderBeforeLookup(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "openai/gpt-4.1-mini"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Provider = providers.NewOpenRouterProvider(rt.Config.OpenRouterBaseURL)
+	var out, diag bytes.Buffer
+	if _, err := handleSlash(context.Background(), &out, &diag, rt, "session_test", "/model openai/gpt-4.1-mini"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diag.String(), "Provider disclosure:") {
+		t.Fatalf("provider disclosure missing: %q", diag.String())
+	}
+}
+
+func TestPromptAuditMetadataOnlyUnlessRawOptIn(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	t.Setenv("ASSISTANT_PROMPT_AUDIT", "1")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "chat", "--once", "--input", "hello"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	matches, err := filepath.Glob(filepath.Join(storageDir, "sessions", "*", "prompts.jsonl"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("prompt audit missing matches=%v err=%v", matches, err)
+	}
+	body, err := os.ReadFile(matches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "rendered_prompt_sha256") || strings.Contains(text, `"rendered_prompt":`) || strings.Contains(text, `"messages":`) {
+		t.Fatalf("metadata audit leaked raw prompt/messages: %s", text)
+	}
+}
+
+func TestQuietSuppressesNonessentialWarnings(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Quiet: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rt.Quiet {
+		t.Fatal("quiet flag not propagated into runtime")
+	}
+}
+
 func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
@@ -553,7 +732,7 @@ func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, nil, false)
+	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, false)
 	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret_blocked, got %v", err)
 	}

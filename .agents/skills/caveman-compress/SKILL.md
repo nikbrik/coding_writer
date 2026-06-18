@@ -3,7 +3,7 @@ name: caveman-compress
 description: >
   Compress natural language memory files (CLAUDE.md, todos, preferences) into caveman format
   to save input tokens. Preserves all technical substance, code, URLs, and structure.
-  Compressed version overwrites the original file. Human-readable backup saved as FILE.original.md.
+  Compressed version overwrites the original file. Human-readable backup saved outside the source tree.
   Trigger: /caveman-compress FILEPATH or "compress memory file"
 ---
 
@@ -11,7 +11,7 @@ description: >
 
 ## Purpose
 
-Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`.
+Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup is saved under the user data backup directory.
 
 ## Trigger
 
@@ -27,7 +27,9 @@ python3 -m scripts <absolute_filepath>
 
 3. The CLI will:
 - detect file type (no tokens)
-- call Claude to compress
+- scan content for secret/PII patterns
+- disclose provider/path/byte transfer boundary and require explicit confirmation
+- call Claude to compress only after confirmation
 - validate output (no tokens)
 - if errors: cherry-pick fix with Claude (targeted fixes only, no recompression)
 - retry up to 2 times
@@ -107,5 +109,6 @@ Compressed:
 - NEVER modify: .py, .js, .ts, .json, .yaml, .yml, .toml, .env, .lock, .css, .html, .xml, .sql, .sh
 - If file has mixed content (prose + code), compress ONLY the prose sections
 - If unsure whether something is code or prose, leave it unchanged
-- Original file is backed up as FILE.original.md before overwriting
+- Original file is backed up outside the source tree before overwriting
 - Never compress FILE.original.md (skip it)
+- Use dry-run/local-only paths when user wants scan/disclosure without model transfer

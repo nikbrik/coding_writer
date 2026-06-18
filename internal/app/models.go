@@ -127,22 +127,34 @@ const (
 )
 
 type TaskState struct {
-	ID                 string         `json:"id"`
-	Title              string         `json:"title"`
-	Stage              TaskStage      `json:"stage"`
-	CurrentStep        string         `json:"current_step"`
-	ExpectedAction     ExpectedAction `json:"expected_action"`
-	Status             TaskStatus     `json:"status"`
-	Objective          string         `json:"objective"`
-	AcceptanceCriteria []string       `json:"acceptance_criteria"`
-	Plan               []string       `json:"plan"`
-	Decisions          []string       `json:"decisions"`
-	OpenQuestions      []string       `json:"open_questions"`
-	ValidationStatus   string         `json:"validation_status,omitempty"`
-	HistoryLog         []string       `json:"history_log,omitempty"`
-	PausedAt           *time.Time     `json:"paused_at,omitempty"`
-	ResumedAt          *time.Time     `json:"resumed_at,omitempty"`
-	UpdatedAt          time.Time      `json:"updated_at"`
+	ID                 string                 `json:"id"`
+	Title              string                 `json:"title"`
+	Stage              TaskStage              `json:"stage"`
+	CurrentStep        string                 `json:"current_step"`
+	CompletedSteps     []string               `json:"completed_steps,omitempty"`
+	ExpectedAction     ExpectedAction         `json:"expected_action"`
+	Status             TaskStatus             `json:"status"`
+	Objective          string                 `json:"objective"`
+	AcceptanceCriteria []string               `json:"acceptance_criteria"`
+	Plan               []string               `json:"plan"`
+	Decisions          []string               `json:"decisions"`
+	OpenQuestions      []string               `json:"open_questions"`
+	PendingPlanning    *PlanningProposalState `json:"pending_planning,omitempty"`
+	LastSessionID      string                 `json:"last_session_id,omitempty"`
+	ValidationStatus   string                 `json:"validation_status,omitempty"`
+	HistoryLog         []string               `json:"history_log,omitempty"`
+	PausedAt           *time.Time             `json:"paused_at,omitempty"`
+	ResumedAt          *time.Time             `json:"resumed_at,omitempty"`
+	UpdatedAt          time.Time              `json:"updated_at"`
+}
+
+type PlanningProposalState struct {
+	ID                 string    `json:"id"`
+	Summary            string    `json:"summary"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	Plan               []string  `json:"plan"`
+	OpenQuestions      []string  `json:"open_questions"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type AppConfig struct {
