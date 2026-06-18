@@ -13,7 +13,7 @@ Thumbs.db
 # Local caches / build output
 .assistant/
 .cache/
-.kilo/plans/
+.kilo/plans/*
 .idea/
 .vscode/
 tmp/
