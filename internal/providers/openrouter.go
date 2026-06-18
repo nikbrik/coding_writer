@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ const (
 	maxModelsResponseSize    = 10 * 1024 * 1024
 	maxCompletionResonseSize = 50 * 1024 * 1024
 	maxRetryAfterDelay       = 5 * time.Second
+	defaultOpenRouterTimeout = 120 * time.Second
 )
 
 type OpenRouterProvider struct {
@@ -30,7 +32,7 @@ func NewOpenRouterProvider(baseURL string) *OpenRouterProvider {
 	if baseURL == "" {
 		baseURL = app.DefaultOpenRouterBaseURL
 	}
-	return &OpenRouterProvider{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: 45 * time.Second}}
+	return &OpenRouterProvider{BaseURL: strings.TrimRight(baseURL, "/"), Client: &http.Client{Timeout: defaultOpenRouterTimeout}}
 }
 
 func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]string, error) {
@@ -170,6 +172,9 @@ func (p *OpenRouterProvider) completeOnce(ctx context.Context, key, model string
 		} `json:"choices"`
 	}
 	if err := json.NewDecoder(io.LimitReader(httpRes.Body, maxCompletionResonseSize)).Decode(&parsed); err != nil {
+		if transportErr := providerTransportError(err); transportErr.Code != "network" {
+			return CompletionResponse{}, false, 0, transportErr
+		}
 		return CompletionResponse{}, false, 0, app.NewError(app.CategoryProvider, "malformed_response", err.Error(), err)
 	}
 	if len(parsed.Choices) == 0 {
@@ -199,7 +204,10 @@ func parseRetryAfter(value string) time.Duration {
 }
 
 func providerTransportError(err error) *app.Error {
-	if os.IsTimeout(err) {
+	if errors.Is(err, context.Canceled) {
+		return app.NewError(app.CategoryProvider, "canceled", "OpenRouter request canceled", err)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) {
 		return app.NewError(app.CategoryProvider, "timeout", "OpenRouter request timed out", err)
 	}
 	return app.NewError(app.CategoryProvider, "network", err.Error(), err)
@@ -209,7 +217,7 @@ func (p *OpenRouterProvider) client() *http.Client {
 	if p.Client != nil {
 		return p.Client
 	}
-	return &http.Client{Timeout: 45 * time.Second}
+	return &http.Client{Timeout: defaultOpenRouterTimeout}
 }
 
 func toOpenRouterMessages(messages []app.ChatMessage) []map[string]string {

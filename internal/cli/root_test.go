@@ -940,6 +940,24 @@ func TestProviderDisclosurePrintedOnceForOpenRouter(t *testing.T) {
 	}
 }
 
+func TestSemanticValidationEnabledDefaultsAndOverrides(t *testing.T) {
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "")
+	if semanticValidationEnabled(providers.NewFakeProvider()) {
+		t.Fatal("fake provider should not enable semantic validation by default")
+	}
+	if !semanticValidationEnabled(providers.NewOpenRouterProvider(app.DefaultOpenRouterBaseURL)) {
+		t.Fatal("openrouter provider should enable semantic validation by default")
+	}
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "off")
+	if semanticValidationEnabled(providers.NewOpenRouterProvider(app.DefaultOpenRouterBaseURL)) {
+		t.Fatal("off override should disable semantic validation")
+	}
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "on")
+	if !semanticValidationEnabled(providers.NewFakeProvider()) {
+		t.Fatal("on override should enable semantic validation")
+	}
+}
+
 func TestInitDisclosesProviderBeforeModelLookup(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "")
 	t.Setenv("OPENROUTER_API_KEY", "")

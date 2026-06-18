@@ -7,6 +7,24 @@ func validateValidation(out *ValidationOutput, trustedEvidence ...string) []stri
 	if out == nil {
 		return []string{"missing validation output"}
 	}
+	errs := validateValidationStructural(out, trustedEvidence...)
+	if out.Verdict == "needs_execution_fixes" && !hasActionableFinding(out.Findings) {
+		errs = append(errs, "needs_execution_fixes requires actionable findings")
+	}
+	if out.Verdict == "blocked_missing_evidence" && !hasNonEmpty(out.MissingEvidence) {
+		errs = append(errs, "blocked_missing_evidence requires missing evidence")
+	}
+	raw := joinValidationFields(out)
+	if containsImplementationClaim(raw) || strings.Contains(strings.ToLower(raw), "added feature") || strings.Contains(strings.ToLower(raw), "new feature") {
+		errs = append(errs, "validation output must not implement fixes or add features")
+	}
+	return errs
+}
+
+func validateValidationStructural(out *ValidationOutput, trustedEvidence ...string) []string {
+	if out == nil {
+		return []string{"missing validation output"}
+	}
 	var errs []string
 	if strings.TrimSpace(out.Verdict) == "" {
 		errs = append(errs, "validation output missing required verdict")
@@ -43,16 +61,6 @@ func validateValidation(out *ValidationOutput, trustedEvidence ...string) []stri
 		if !hasTrustedEvidence(trustedEvidence) {
 			errs = append(errs, "ready_for_done requires trusted application evidence")
 		}
-	}
-	if out.Verdict == "needs_execution_fixes" && !hasActionableFinding(out.Findings) {
-		errs = append(errs, "needs_execution_fixes requires actionable findings")
-	}
-	if out.Verdict == "blocked_missing_evidence" && !hasNonEmpty(out.MissingEvidence) {
-		errs = append(errs, "blocked_missing_evidence requires missing evidence")
-	}
-	raw := joinValidationFields(out)
-	if containsImplementationClaim(raw) || strings.Contains(strings.ToLower(raw), "added feature") || strings.Contains(strings.ToLower(raw), "new feature") {
-		errs = append(errs, "validation output must not implement fixes or add features")
 	}
 	return errs
 }

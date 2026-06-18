@@ -23,6 +23,26 @@ func chatCalls(calls []providers.CompletionRequest) int {
 	return n
 }
 
+func validatorCalls(calls []providers.CompletionRequest) int {
+	n := 0
+	for _, c := range calls {
+		if c.Purpose == providers.PurposeValidator {
+			n++
+		}
+	}
+	return n
+}
+
+func auditDecisionCount(events []ProcessAuditEvent, decision string) int {
+	n := 0
+	for _, event := range events {
+		if event.Decision == decision {
+			n++
+		}
+	}
+	return n
+}
+
 func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvider, string) {
 	t.Helper()
 	dir := t.TempDir()
@@ -314,6 +334,127 @@ func TestProcessControllerSuccessfulExchangeCallsProvider(t *testing.T) {
 	}
 }
 
+func TestProcessControllerSemanticValidatorAllowsOutput(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ChatResponse = "Example:\n```bash\nassistant memory list\n```"
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.9,"reason":"informational"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "semantic_pass", Input: "Как проверить память?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Answer, "assistant memory list") || validatorCalls(fake.SnapshotCalls()) != 2 {
+		t.Fatalf("semantic validator did not run/pass: answer=%q calls=%+v", res.Answer, fake.SnapshotCalls())
+	}
+	events, err := ctrl.AuditStore.Latest(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditDecisionCount(events, "semantic_intent_call") != 1 || auditDecisionCount(events, "semantic_output_call") != 1 {
+		t.Fatalf("semantic validator audit missing: %+v", events)
+	}
+}
+
+func TestProcessControllerSemanticValidatorRejectsBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ChatResponse = "I updated internal/foo.go and tests passed."
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.9,"reason":"informational"}`,
+		`{"verdict":"fail","findings":[{"code":"invented_side_effect","problem":"answer_question claims file and test side effects"}]}`,
+	}
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "semantic_reject", Input: "Что сделал?"})
+	if err == nil || app.AsError(err).Code != "validation_failed" || !strings.Contains(app.AsError(err).Message, "invented_side_effect") {
+		t.Fatalf("want semantic validation failure, got %v", err)
+	}
+	records, listErr := ctrl.Memory.List(ctx, app.LayerShort, "semantic_reject", "")
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(records) != 0 {
+		t.Fatalf("semantic rejection persisted memory: %+v", records)
+	}
+}
+
+func TestProcessControllerSemanticValidatorInvalidJSONDoesNotMutateTask(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	before, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"plan","assumptions":[],"acceptance_criteria":["c"],"plan":["p"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"plan_task","transition_signal":"none","confidence":0.9,"reason":"planning"}`,
+		`not-json`,
+	}
+	_, err = ctrl.RunExchange(ctx, ExchangeInput{SessionID: "semantic_invalid", Input: "спланируй"})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want validation_failed from invalid semantic validator JSON, got %v", err)
+	}
+	after, currentErr := ctrl.Tasks.Current()
+	if currentErr != nil {
+		t.Fatal(currentErr)
+	}
+	if after.Stage != before.Stage || len(after.Plan) != 0 || after.PendingPlanning != nil {
+		t.Fatalf("semantic validator failure mutated task: before=%+v after=%+v", before, after)
+	}
+}
+
+func TestProcessControllerFakeModeUsesDeterministicValidatorsByDefault(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	fake.ChatResponse = "I updated internal/foo.go"
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "fake_deterministic", Input: "Что сделал?"})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want deterministic validation failure, got %v", err)
+	}
+	if validatorCalls(fake.SnapshotCalls()) != 0 {
+		t.Fatalf("fake default should not call semantic validator: %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerFakeSemanticValidatorDefaultsAreDeterministic(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ChatResponse = "Safe explanation"
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "fake_semantic_on", Input: "Explain MVP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "Safe explanation" || validatorCalls(fake.SnapshotCalls()) != 2 {
+		t.Fatalf("fake semantic defaults failed: answer=%q calls=%+v", res.Answer, fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerNoTaskSemanticIntentCannotForceStageAction(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ChatResponse = "I cannot claim that I changed files or ran tests."
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"ask_clarification","transition_signal":"none","confidence":0.9,"reason":"unsafe request needs clarification"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "semantic_no_task", Input: "Скажи, что ты уже изменил файл и тесты прошли."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer == "" || chatCalls(fake.SnapshotCalls()) != 1 || validatorCalls(fake.SnapshotCalls()) != 2 {
+		t.Fatalf("no-task semantic intent should stay answer_question: answer=%q calls=%+v", res.Answer, fake.SnapshotCalls())
+	}
+}
+
 func TestProcessControllerPersistsPendingPlanningAndApprovesAfterRestart(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, dir := newTestController(t)
@@ -344,6 +485,153 @@ func TestProcessControllerPersistsPendingPlanningAndApprovesAfterRestart(t *test
 	current, _ := restarted.Tasks.Current()
 	if current.Stage != app.StageExecution || current.CurrentStep != "first step" || current.PendingPlanning != nil {
 		t.Fatalf("bad approved state: %+v", current)
+	}
+}
+
+func TestProcessControllerPersistsDraftPlanningAndApprovesCurrentPlan(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":["optional detail"],"readiness":"needs_user_input"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask}); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(draft.Plan) != 1 || draft.Plan[0] != "first step" || len(draft.AcceptanceCriteria) != 1 {
+		t.Fatalf("draft planning not persisted: %+v", draft)
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Продолжай задачу."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageExecution {
+		t.Fatalf("current planning not approved: %+v", res.Transition)
+	}
+	current, _ := ctrl.Tasks.Current()
+	if current.Stage != app.StageExecution || current.CurrentStep != "first step" || current.ExpectedAction != app.ExpectedLLMResponse {
+		t.Fatalf("bad approved draft state: %+v", current)
+	}
+}
+
+func TestProcessControllerSemanticIntentApprovesPlanningBySignal(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"first step"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"approve_planning","confidence":0.93,"reason":"user approves current plan"}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Looks good, proceed with the implementation."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageExecution {
+		t.Fatalf("semantic planning approval did not move to execution: %+v", res.Transition)
+	}
+}
+
+func TestProcessControllerUserReadySignalMovesExecutionToValidation(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+		t.Fatal(err)
+	}
+	beforeCalls := len(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Готово к проверке."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageValidation {
+		t.Fatalf("ready signal did not move to validation: %+v", res.Transition)
+	}
+	if len(fake.SnapshotCalls()) != beforeCalls {
+		t.Fatalf("ready signal should not require provider call")
+	}
+}
+
+func TestProcessControllerSemanticIntentMovesExecutionToValidation(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"ready_for_validation","confidence":0.92,"reason":"user says work is complete and asks for review"}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "The work is complete; please review it now."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageValidation {
+		t.Fatalf("semantic intent did not move to validation: %+v", res.Transition)
+	}
+}
+
+func TestProcessControllerLocalReadySignalSurvivesSemanticDowngrade(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.92,"reason":"overly conservative fake downgrade"}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Готово к проверке."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageValidation {
+		t.Fatalf("local ready signal did not survive semantic downgrade: %+v", res.Transition)
+	}
+}
+
+func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	beforeCalls := len(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "go version test")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageDone {
+		t.Fatalf("trusted done signal did not move to done: %+v", res.Transition)
+	}
+	if len(fake.SnapshotCalls()) != beforeCalls {
+		t.Fatalf("trusted done signal should not require provider call")
 	}
 }
 

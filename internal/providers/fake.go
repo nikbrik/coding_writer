@@ -17,9 +17,12 @@ type FakeProvider struct {
 	ChatResponses       []string
 	ClassifierResponse  string
 	ClassifierResponses []string
+	ValidatorResponse   string
+	ValidatorResponses  []string
 	Err                 error
 	chatCallIdx         int
 	classifierCallIdx   int
+	validatorCallIdx    int
 }
 
 func NewFakeProvider() *FakeProvider {
@@ -60,6 +63,24 @@ func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (Com
 		}
 		if content == "" {
 			content = defaultClassifierJSON(joinMessages(sanitized.Messages))
+		}
+		return newAssistantMessage(content, req.Model, "fake"), nil
+	}
+	if req.Purpose == PurposeValidator {
+		var content string
+		if len(p.ValidatorResponses) > 0 {
+			p.mu.Lock()
+			if p.validatorCallIdx < len(p.ValidatorResponses) {
+				content = p.ValidatorResponses[p.validatorCallIdx]
+				p.validatorCallIdx++
+			}
+			p.mu.Unlock()
+		}
+		if content == "" {
+			content = p.ValidatorResponse
+		}
+		if content == "" {
+			content = defaultValidatorJSON(joinMessages(sanitized.Messages))
 		}
 		return newAssistantMessage(content, req.Model, "fake"), nil
 	}
@@ -168,4 +189,26 @@ func defaultClassifierJSON(prompt string) string {
 		return `{"records":[]}`
 	}
 	return `{"records":[{"layer":"short","kind":"context","content":"В текущем диалоге планируем модуль памяти.","reason":"Текущий session context.","confidence":0.82},{"layer":"work","kind":"requirement","content":"CLI должен поддерживать выбор модели OpenRouter.","reason":"Требование текущей задачи.","confidence":0.91},{"layer":"long","kind":"preference","content":"Пользователь предпочитает короткие ответы на русском.","reason":"Стабильное предпочтение пользователя.","confidence":0.88},{"layer":"ignore","kind":"smalltalk","content":"Низкоценный шум диалога.","reason":"Не влияет на будущие ответы.","confidence":0.4}]}`
+}
+
+func defaultValidatorJSON(prompt string) string {
+	lower := strings.ToLower(prompt)
+	if strings.Contains(lower, "out-of-band intent referee") {
+		action := "answer_question"
+		for _, candidate := range []string{"answer_question", "plan_task", "ask_clarification", "execute_plan_step", "summarize_execution", "review_output", "verify_criteria", "summarize_done", "propose_transition"} {
+			if strings.Contains(prompt, `"deterministic":"`+candidate+`"`) {
+				action = candidate
+				break
+			}
+		}
+		signal := "none"
+		if strings.Contains(lower, "ready for validation") || strings.Contains(lower, "ready to validate") || strings.Contains(lower, "готово к проверке") {
+			signal = "ready_for_validation"
+		}
+		if strings.Contains(lower, "verify and finish") || strings.Contains(lower, "verify and complete") || strings.Contains(lower, "проверь и заверши") {
+			signal = "ready_for_done"
+		}
+		return `{"action_kind":"` + action + `","transition_signal":"` + signal + `","confidence":0.8,"reason":"fake deterministic intent"}`
+	}
+	return `{"verdict":"pass","findings":[]}`
 }

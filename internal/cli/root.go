@@ -267,8 +267,18 @@ func (rt *runtime) preflightProcess(ctx context.Context, input process.ExchangeI
 
 func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 	pc := rt.ensureProcessController()
-	pc.Provider = rt.ensureProvider()
+	provider := rt.ensureProvider()
+	pc.Provider = provider
 	pc.Classifier = rt.ensureClassifier()
+	if semanticValidationEnabled(provider) {
+		model := rt.Config.MemoryModel
+		if model == "" {
+			model = rt.Config.ActiveModel
+		}
+		pc.SemanticValidator = process.NewSemanticValidator(provider, model)
+	} else {
+		pc.SemanticValidator = nil
+	}
 	return pc
 }
 
@@ -277,6 +287,17 @@ func chooseProvider(cfg app.AppConfig) providers.LLMProvider {
 		return providers.NewFakeProvider()
 	}
 	return providers.NewOpenRouterProvider(cfg.OpenRouterBaseURL)
+}
+
+func semanticValidationEnabled(provider providers.LLMProvider) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ASSISTANT_LLM_VALIDATION"))) {
+	case "0", "false", "off", "no":
+		return false
+	case "1", "true", "on", "yes", "always":
+		return true
+	}
+	_, fake := provider.(*providers.FakeProvider)
+	return !fake
 }
 
 func initCommand(opts *globalOptions) *cobra.Command {
@@ -354,7 +375,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, !chatOpts.RenderPrompt, chatOpts.Verify)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, false, chatOpts.Verify)
 				if err != nil {
 					return err
 				}
@@ -1781,7 +1802,7 @@ func providerDisclosureText(host string) string {
 	if host == "" {
 		host = app.DefaultOpenRouterBaseURL
 	}
-	return fmt.Sprintf("Provider disclosure: rendered prompt, active profile, task state, selected memory, latest exchange, and classifier payload may be sent to %s. OPENROUTER_API_KEY is read from env and never persisted.\n", host)
+	return fmt.Sprintf("Provider disclosure: rendered prompt, active profile, task state, selected memory, latest exchange, classifier payload, and semantic validation payload may be sent to %s. OPENROUTER_API_KEY is read from env and never persisted.\n", host)
 }
 
 func validateModelSyntax(model string) error {

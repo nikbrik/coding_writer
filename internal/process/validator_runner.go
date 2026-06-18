@@ -29,6 +29,28 @@ func RunValidators(resp ParsedResponse) []string {
 	return filterEmpty(errs)
 }
 
+// RunStructuralValidators checks only objective schema and hard local gates.
+// Semantic claims are handled by SemanticValidator in real-provider mode.
+func RunStructuralValidators(resp ParsedResponse) []string {
+	var errs []string
+	errs = append(errs, commonChecks(resp)...)
+	if resp.ActionKind == ActionAnswerQuestion {
+		return filterEmpty(errs)
+	}
+	switch resp.Stage {
+	case app.StagePlanning:
+		errs = append(errs, validatePlanningStructural(resp.Planning)...)
+	case app.StageExecution:
+		errs = append(errs, validateExecutionStructural(resp.Execution, resp.TrustedEvidence...)...)
+	case app.StageValidation:
+		errs = append(errs, validateValidationStructural(resp.Validation, resp.TrustedEvidence...)...)
+	case app.StageDone:
+		errs = append(errs, validateDoneStructural(resp.Done)...)
+	}
+	errs = append(errs, validateActionKind(resp)...)
+	return filterEmpty(errs)
+}
+
 func validateAnswerQuestion(raw string) []string {
 	var errs []string
 	lower := strings.ToLower(raw)

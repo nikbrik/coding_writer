@@ -129,6 +129,20 @@ func TestAnswerQuestionRejectsImplementationClaim(t *testing.T) {
 	}
 }
 
+func TestAnswerQuestionAllowsExplanatoryCodeFence(t *testing.T) {
+	errs := validateAnswerQuestion("Example:\n```bash\nassistant memory list\n```")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected answer_question rejection: %v", errs)
+	}
+}
+
+func TestAnswerQuestionAllowsExplanatoryGoExample(t *testing.T) {
+	errs := validateAnswerQuestion("Go MVP is a minimal product implemented in Go. Example:\n```go\npackage main\nfunc main() {}\n```\nRun it locally with `go run main.go`.")
+	if len(errs) != 0 {
+		t.Fatalf("unexpected answer_question rejection: %v", errs)
+	}
+}
+
 func TestAnswerQuestionRejectsTransitionSignals(t *testing.T) {
 	errs := validateAnswerQuestion(`{"next_signal":"ready_for_validation"}`)
 	if len(errs) == 0 {

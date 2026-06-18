@@ -22,12 +22,13 @@ func containsImplementationClaim(text string) bool {
 	lower := strings.ToLower(text)
 	for _, needle := range []string{
 		"implemented", "implementation completed", "changed file", "changed code", "fixed ", "fix applied", "patched", "wrote code", "updated file", "created file", "deleted file", "modified file", "diff --git", "+++ b/", "--- a/", "@@",
+		"```go", "```diff", "```patch",
 	} {
 		if strings.Contains(lower, needle) {
 			return true
 		}
 	}
-	return strings.Contains(lower, "```")
+	return false
 }
 
 func containsTestPassClaim(text string) bool {
@@ -84,13 +85,10 @@ func isStructuredTrustedEvidence(item string) bool {
 }
 
 func containsSideEffectClaim(text string) bool {
-	if containsImplementationClaim(text) {
-		return true
-	}
 	lower := strings.ToLower(text)
 	for _, needle := range []string{
 		"i edited", "i changed", "i updated", "i created", "i deleted", "i wrote", "i saved", "i persisted", "i committed", "i ran", "i executed",
-		"file edited", "file changed", "file updated", "memory saved", "state changed", "stage changed", "transitioned to", "applied patch", "ran tests", "tests passed", "all tests passed",
+		"updated file", "changed file", "created file", "deleted file", "modified file", "file edited", "file changed", "file updated", "memory saved", "state changed", "stage changed", "transitioned to", "applied patch", "ran tests", "tests passed", "all tests passed",
 		"я изменил", "я обновил", "я создал", "я удалил", "я сохранил", "запустил тест", "тесты прошли", "перевёл задачу", "сменил stage",
 	} {
 		if strings.Contains(lower, needle) {

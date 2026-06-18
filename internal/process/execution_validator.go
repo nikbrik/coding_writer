@@ -7,10 +7,7 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 	if out == nil {
 		return []string{"missing execution output"}
 	}
-	var errs []string
-	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
-		errs = append(errs, "execution output missing required summary/next_signal")
-	}
+	errs := validateExecutionStructural(out, trustedEvidence...)
 	progressClaims := []string{out.CurrentStep, out.NextStep}
 	progressClaims = append(progressClaims, out.CompletedSteps...)
 	combinedParts := append([]string{out.Summary}, progressClaims...)
@@ -38,6 +35,17 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 		if claimsRun && !isExplicitNotRun(v) && !hasTrustedEvidence(trustedEvidence) {
 			errs = append(errs, "verification claim requires tool evidence")
 		}
+	}
+	return errs
+}
+
+func validateExecutionStructural(out *ExecutionOutput, trustedEvidence ...string) []string {
+	if out == nil {
+		return []string{"missing execution output"}
+	}
+	var errs []string
+	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
+		errs = append(errs, "execution output missing required summary/next_signal")
 	}
 	switch out.NextSignal {
 	case "continue_execution", "planning_required", "ready_for_validation":

@@ -43,6 +43,25 @@ func TestOpenRouterTimeoutErrorTyped(t *testing.T) {
 	}
 }
 
+func TestOpenRouterBodyReadTimeoutErrorTyped(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(50 * time.Millisecond)
+		_, _ = w.Write([]byte(`{"id":"late"}`))
+	}))
+	defer server.Close()
+	provider := NewOpenRouterProvider(server.URL)
+	provider.Client = &http.Client{Timeout: 5 * time.Millisecond}
+	_, err := provider.Complete(context.Background(), CompletionRequest{Purpose: PurposeChat, Model: "fake/model", Messages: []app.ChatMessage{{Role: app.RoleUser, Content: "hi"}}})
+	if err == nil || !strings.Contains(err.Error(), "timeout") {
+		t.Fatalf("want timeout error, got %v", err)
+	}
+}
+
 func TestOpenRouterAuthErrorTyped(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-key")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

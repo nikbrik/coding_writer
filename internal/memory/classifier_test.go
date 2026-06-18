@@ -46,6 +46,17 @@ func TestClassifierSupportsIgnoreAndBlocksSecrets(t *testing.T) {
 	}
 }
 
+func TestClassifierCoercesUnknownKindToOther(t *testing.T) {
+	classifier := NewClassifier(&providers.FakeProvider{ClassifierResponse: `{"records":[{"layer":"short","kind":"knowledge","content":"Go MVP uses Cobra","reason":"assistant explained it","confidence":0.8}]}`})
+	proposal, err := classifier.Propose(context.Background(), ClassificationInput{Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(proposal.Records) != 1 || proposal.Records[0].Kind != "other" {
+		t.Fatalf("unknown kind not coerced: %+v", proposal.Records)
+	}
+}
+
 func TestClassifierStampsTrustedGenerationProfile(t *testing.T) {
 	classifier := NewClassifier(&providers.FakeProvider{ClassifierResponse: `{"records":[{"layer":"long","kind":"preference","content":"Prefers terse answers","reason":"Stable preference","confidence":0.9},{"layer":"short","kind":"context","content":"Current topic is memory","reason":"Session context","confidence":0.8}]}`})
 	proposal, err := classifier.Propose(context.Background(), ClassificationInput{Model: "fake/model", Profile: app.UserProfile{ID: "senior"}})
@@ -57,6 +68,25 @@ func TestClassifierStampsTrustedGenerationProfile(t *testing.T) {
 	}
 	if proposal.Records[1].ProfileID != "" || proposal.Records[1].Scope != "" {
 		t.Fatalf("short record should not get profile scope: %+v", proposal.Records[1])
+	}
+}
+
+func TestClassifierReroutesCurrentTaskRequirementToWork(t *testing.T) {
+	classifier := NewClassifier(&providers.FakeProvider{ClassifierResponse: `{"records":[{"layer":"long","kind":"preference","content":"CLI должен поддерживать выбор модели OpenRouter","reason":"User stated this task requirement","confidence":0.9},{"layer":"long","kind":"preference","content":"Предпочитает короткие ответы на русском","reason":"Stable preference","confidence":0.9}]}`})
+	proposal, err := classifier.Propose(context.Background(), ClassificationInput{
+		Model:       "fake/model",
+		UserMessage: "Текущая задача: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: коротко на русском.",
+		Task:        &app.TaskState{ID: "task_1", Title: "task"},
+		Profile:     app.UserProfile{ID: "student"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Records[0].Layer != app.ProposedLayerWork || proposal.Records[0].Kind != "requirement" {
+		t.Fatalf("task requirement not rerouted to work: %+v", proposal.Records[0])
+	}
+	if proposal.Records[1].Layer != app.ProposedLayerLong || proposal.Records[1].ProfileID != "student" {
+		t.Fatalf("stable preference should remain long/profile scoped: %+v", proposal.Records[1])
 	}
 }
 

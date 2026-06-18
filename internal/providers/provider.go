@@ -12,6 +12,7 @@ type CompletionPurpose string
 const (
 	PurposeChat       CompletionPurpose = "chat"
 	PurposeClassifier CompletionPurpose = "classifier"
+	PurposeValidator  CompletionPurpose = "validator"
 )
 
 type CompletionRequest struct {

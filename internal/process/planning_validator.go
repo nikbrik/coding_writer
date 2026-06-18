@@ -7,13 +7,21 @@ func validatePlanning(out *PlanningOutput, raw string) []string {
 	if out == nil {
 		return []string{"missing planning output"}
 	}
-	var errs []string
-	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.Readiness) == "" {
-		errs = append(errs, "planning output missing required summary/readiness")
-	}
+	errs := validatePlanningStructural(out)
 	combined := raw + " " + strings.Join(out.Assumptions, " ") + " " + strings.Join(out.AcceptanceCriteria, " ") + " " + strings.Join(out.Plan, " ") + " " + out.Summary
 	if containsImplementationClaim(combined) || containsTestPassClaim(combined) {
 		errs = append(errs, "planning output must not claim implementation")
+	}
+	return errs
+}
+
+func validatePlanningStructural(out *PlanningOutput) []string {
+	if out == nil {
+		return []string{"missing planning output"}
+	}
+	var errs []string
+	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.Readiness) == "" {
+		errs = append(errs, "planning output missing required summary/readiness")
 	}
 	switch out.Readiness {
 	case "needs_user_input", "ready_for_execution_proposal":

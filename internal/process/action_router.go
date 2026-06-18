@@ -40,6 +40,9 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if isPlanningIntent(normalized) {
 			return ActionPlanTask
 		}
+		if containsAny(normalized, []string{"продолжай", "continue", "выполняй", "execute next", "next step"}) {
+			return ActionExecutePlanStep
+		}
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}
@@ -117,7 +120,7 @@ func containsDoneMutationIntent(normalized string) bool {
 			continue
 		}
 		switch token {
-		case "реализуй", "implement", "execute", "edit", "change", "fix", "доделай", "add", "update", "write", "create", "delete", "remove", "make", "build", "refactor", "rename", "modify", "создай", "добавь", "измени", "обнови", "удали", "исправь":
+		case "реализуй", "implement", "execute", "edit", "change", "fix", "доделай", "доработай", "add", "update", "write", "create", "delete", "remove", "make", "build", "refactor", "rename", "modify", "создай", "добавь", "измени", "обнови", "удали", "исправь":
 			return true
 		}
 	}

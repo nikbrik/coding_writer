@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 )
@@ -91,5 +92,55 @@ func TestManagerConflictReturnsInvariantIDAndEvidence(t *testing.T) {
 	}
 	if err := Error(violations); err == nil || !strings.Contains(app.AsError(err).Message, "custom.stack") || !strings.Contains(app.AsError(err).Message, "only custom evidence") || len(app.AsError(err).Violations) != 1 {
 		t.Fatalf("bad invariant error: %v", err)
+	}
+}
+
+func TestDefaultSecurityInvariantAllowsBareSecretPlaceholder(t *testing.T) {
+	m := NewManager(t.TempDir())
+	if err := m.EnsureDefaults(); err != nil {
+		t.Fatal(err)
+	}
+	violations, err := m.CheckOutput(context.Background(), "Do not print placeholders such as sk-.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("bare placeholder should not violate invariant: %+v", violations)
+	}
+	violations, err = m.CheckOutput(context.Background(), "OPENROUTER_API_KEY=sk-secretsecretsecret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) == 0 {
+		t.Fatal("real secret-like value should still be blocked")
+	}
+}
+
+func TestRenderDoesNotExposeForbiddenTerms(t *testing.T) {
+	rendered := Render([]app.Invariant{{
+		ID:             "custom.stack",
+		Scope:          "project",
+		Kind:           "architecture",
+		Content:        "Use Go",
+		Severity:       "block",
+		ForbiddenTerms: []string{"rewrite mvp in python"},
+		Source:         "user",
+	}})
+	if !strings.Contains(rendered, "custom.stack") || !strings.Contains(rendered, "Use Go") {
+		t.Fatalf("missing invariant content: %s", rendered)
+	}
+	if strings.Contains(rendered, "rewrite mvp in python") || strings.Contains(rendered, "forbidden_terms") {
+		t.Fatalf("rendered prompt exposes matcher terms: %s", rendered)
+	}
+}
+
+func TestDefaultInvariantContentAvoidsOwnForbiddenTerms(t *testing.T) {
+	for _, inv := range DefaultProjectInvariants(time.Now().UTC()) {
+		content := normalize(inv.Content)
+		for _, term := range inv.ForbiddenTerms {
+			if strings.Contains(content, normalize(term)) {
+				t.Fatalf("invariant %s content contains forbidden term %q", inv.ID, term)
+			}
+		}
 	}
 }

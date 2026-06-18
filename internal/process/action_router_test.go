@@ -27,6 +27,13 @@ func TestResolveActionKindExecutionDefaultExecutesStep(t *testing.T) {
 	}
 }
 
+func TestResolveActionKindExecutionContinueWithNoReexplainExecutesStep(t *testing.T) {
+	got := ResolveActionKind("Продолжай задачу. Не проси заново объяснить контекст.", app.StageExecution, app.ExpectedLLMResponse)
+	if got != ActionExecutePlanStep {
+		t.Fatalf("want execute_plan_step, got %s", got)
+	}
+}
+
 func TestResolveActionKindExecutionPlanningIntentPlansTask(t *testing.T) {
 	got := ResolveActionKind("спланируй модуль памяти", app.StageExecution, app.ExpectedLLMResponse)
 	if got != ActionPlanTask {
@@ -95,7 +102,7 @@ func TestResolveActionKindDoneBenignQuestionsAreReadOnly(t *testing.T) {
 }
 
 func TestResolveActionKindDoneMutationIntentIsForbiddenAction(t *testing.T) {
-	for _, input := range []string{"реализуй ещё", "add another file", "update docs", "создай новый модуль", "refactor module", "rename file", "modify config", "continue work", "can you implement X?"} {
+	for _, input := range []string{"реализуй ещё", "доработай done task", "add another file", "update docs", "создай новый модуль", "refactor module", "rename file", "modify config", "continue work", "can you implement X?"} {
 		got := ResolveActionKind(input, app.StageDone, app.ExpectedNone)
 		if got != ActionExecutePlanStep {
 			t.Fatalf("%q: want execute_plan_step for done mutation gate, got %s", input, got)
