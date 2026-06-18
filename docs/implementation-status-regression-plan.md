@@ -1,14 +1,16 @@
-# Подробный план реализации CLI ассистента с memory layers, персонализацией и task FSM
+# Implementation Status And Regression Plan
 
-Источник плана: `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, `day11.md`, `day12.md`, `day13.md`, `day14.md`.
+Назначение: historical implementation status, regression checklist и обзор уже закрытого Day11-14 контракта.
+
+Этот файл не является source of truth для продукта или архитектуры. При конфликте приоритет имеют `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, acceptance tests и актуальные task notes/goal-файлы, если они есть. `day11.md`, `day12.md`, `day13.md`, `day14.md` остаются исходными учебными критериями приёмки.
 
 Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer.
 
-Текущее состояние кода на 2026-06-18: базовый MVP и deterministic process-control loop уже реализованы. Этот документ теперь совмещает исходный implementation plan, фактический status snapshot и regression checklist. Новые изменения должны сохранять текущий контракт, а не начинать проект с нуля.
+Текущее состояние кода на 2026-06-18: базовый MVP, deterministic process-control loop и Day14 invariant layer реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
 
-## 1. Итоговая цель проекта
+## 1. Текущее Поведение Проекта
 
-Нужно реализовать минимальный stateful CLI code assistant на Go, который:
+Репозиторий содержит минимальный stateful CLI code assistant на Go, который:
 
 - работает через терминальный CLI;
 - вызывает OpenRouter для основного ответа;
@@ -26,7 +28,7 @@
 - имеет отдельный invariant layer, который хранится вне диалога, рендерится в prompt и deterministic блокирует конфликты;
 - имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13/14.
 
-## 2. Жёсткий acceptance contract
+## 2. Regression Acceptance Contract
 
 ### 2.1. Day 11: memory layers
 
@@ -80,11 +82,11 @@
 - custom invariants are bounded privileged local policy data; content may be provider-visible and is rendered with source/provenance labels;
 - tests используют fake provider/deterministic checks, не live OpenRouter.
 
-## 3. Канонический контракт реализации
+## 3. Канонический Runtime Contract
 
 ### 3.1. Task state
 
-Реализовать так:
+Текущий контракт:
 
 ```text
 stage: planning | execution | validation | done
@@ -166,7 +168,7 @@ ignore: proposal/audit only, never physical memory layer
 - LLM может предложить process signal, но task transition применяет только приложение;
 - PromptBuilder не пишет файлы и не вызывает provider.
 
-## 4. Текущая стартовая точка репозитория
+## 4. Текущая Структурная Точка
 
 Репозиторий уже содержит working Go implementation:
 
@@ -176,7 +178,7 @@ ignore: proposal/audit only, never physical memory layer
 - acceptance tests in `tests/day_acceptance_test.go` and `tests/process_acceptance_test.go`;
 - `.assistant/` используется как repo-local demo/test storage opt-in and must stay gitignored.
 
-Следовательно, дальнейшая работа начинается не с bootstrap, а с поддержания и расширения существующего CLI assistant.
+Следовательно, дальнейшая работа начинается не с bootstrap, а с поддержки и расширения существующего CLI assistant.
 
 ## 5. Целевой стек
 
@@ -620,7 +622,7 @@ Parsing rules:
 - local inspection commands не вызывают OpenRouter;
 - commands mutate storage только через соответствующий manager.
 
-## 10. Реализация по фазам
+## 10. Historical Phase Checklist
 
 Status on 2026-06-18:
 
@@ -637,7 +639,7 @@ Status on 2026-06-18:
 | Acceptance tests for Day 11/12/13 and process control | Implemented |
 | Day 14 invariant storage, prompt rendering, input/output conflict refusal, CLI inspection | Implemented |
 
-The detailed phase list below is kept as a regression checklist. Items phrased as "implement" are historical tasks unless a current gap is explicitly noted.
+The detailed phase list below is a historical regression checklist. Items phrased as "implement" / "реализовать" describe completed historical work unless a current gap is explicitly noted.
 
 ### Фаза 0. Contract freeze и bootstrap hygiene
 
