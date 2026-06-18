@@ -189,6 +189,7 @@ func TestInitPersistsValidatedModel(t *testing.T) {
 
 func TestInitRequiresModel(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	t.Setenv("ASSISTANT_MODEL", "")
 	cmd := newRootCommand(&globalOptions{})
 	cmd.SetArgs([]string{"--storage-dir", t.TempDir(), "init"})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "missing_model") {
