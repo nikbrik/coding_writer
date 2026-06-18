@@ -49,6 +49,11 @@ func (c *Classifier) Propose(ctx context.Context, input ClassificationInput) (ap
 		Content:   classifierInputText(input),
 		CreatedAt: time.Now().UTC(),
 	}}
+	for _, msg := range messages {
+		if validation.HasSecret(msg.Content) {
+			return app.MemoryProposal{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like classifier payload cannot be sent to provider", nil)
+		}
+	}
 	var lastErr error
 	for attempt := 0; attempt < 2; attempt++ {
 		temp := 0.0
@@ -131,6 +136,11 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 		if kind == "" {
 			kind = "other"
 		}
+		content := strings.TrimSpace(item.Content)
+		reason := strings.TrimSpace(item.Reason)
+		if content == "" || reason == "" {
+			return proposal, app.NewError(app.CategoryClassifier, "missing_required", "classifier record requires non-empty content and reason", nil)
+		}
 		if !allowedClassifierKinds[kind] {
 			return proposal, app.NewError(app.CategoryClassifier, "unknown_kind", "classifier returned unknown memory kind", nil)
 		}
@@ -138,8 +148,8 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 			ID:         app.NewID("pmem"),
 			Layer:      layer,
 			Kind:       kind,
-			Content:    strings.TrimSpace(item.Content),
-			Reason:     strings.TrimSpace(item.Reason),
+			Content:    content,
+			Reason:     reason,
 			Confidence: confidence,
 			Status:     app.ProposalPending,
 		}
@@ -179,7 +189,7 @@ func classifierInputText(input ClassificationInput) string {
 		`<context_block id="classifier.assistant" type="classifier_input" source="latest_exchange" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.AssistantMessage) + "\n</context_block>"
 	existing := existingMemoryDigest(input.ExistingShort, input.ExistingWork, input.ExistingLong)
 	if existing != "" {
-		result += "\n" + `<context_block id="classifier.existing" type="existing_memory" source="storage" trust="untrusted">` + "\n" + existing + "\n</context_block>"
+		result += "\n" + `<context_block id="classifier.existing" type="existing_memory" source="storage" trust="untrusted">` + "\n" + validation.EscapeUntrusted(existing) + "\n</context_block>"
 	}
 	return result
 }

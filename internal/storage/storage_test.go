@@ -65,6 +65,21 @@ func TestEnsureDirRejectsSymlinkDirectory(t *testing.T) {
 	}
 }
 
+func TestEnsureDirRejectsSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.Mkdir(realDir, DirMode); err != nil {
+		t.Fatal(err)
+	}
+	linkDir := filepath.Join(root, "link-parent")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if err := EnsureDir(filepath.Join(linkDir, "child")); err == nil {
+		t.Fatal("symlink parent accepted")
+	}
+}
+
 func TestConcurrentJSONLAppend(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "records.jsonl")
 	const count = 20

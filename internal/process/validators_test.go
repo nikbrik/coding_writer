@@ -59,6 +59,27 @@ func TestExecutionRejectsWeakToolSubstring(t *testing.T) {
 	}
 }
 
+func TestExecutionRejectsInventedTrustedToolEvidence(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", Verification: []string{"trusted tool evidence: tests passed"}, NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected invented tool evidence rejection")
+	}
+}
+
+func TestExecutionRejectsImplementationClaimWithoutTrustedEvidence(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "updated file internal/foo.go", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected implementation claim rejection")
+	}
+}
+
+func TestAnswerQuestionRejectsImplementationClaim(t *testing.T) {
+	errs := validateAnswerQuestion("updated file internal/foo.go")
+	if len(errs) == 0 {
+		t.Fatal("expected answer_question implementation claim rejection")
+	}
+}
+
 func TestExecutionRejectsPassedAndNotRunMix(t *testing.T) {
 	errs := validateExecution(&ExecutionOutput{Summary: "s", Verification: []string{"tests passed; not run"}, NextSignal: "continue_execution"})
 	if len(errs) == 0 {
@@ -163,6 +184,17 @@ func TestValidationReadyForDoneRequiresPassedChecks(t *testing.T) {
 	errs := validateValidation(&ValidationOutput{Findings: []ValidationFinding{}, Verdict: "ready_for_done"})
 	if len(errs) == 0 {
 		t.Fatal("expected evidence requirement")
+	}
+}
+
+func TestValidationReadyForDoneRequiresTrustedEvidence(t *testing.T) {
+	errs := validateValidation(&ValidationOutput{PassedChecks: []string{"tests passed"}, Verdict: "ready_for_done"})
+	if len(errs) == 0 {
+		t.Fatal("expected missing trusted evidence rejection")
+	}
+	errs = validateValidation(&ValidationOutput{PassedChecks: []string{"tests passed"}, Verdict: "ready_for_done"}, "go test ./... passed")
+	if len(errs) != 0 {
+		t.Fatalf("trusted evidence should satisfy ready_for_done: %v", errs)
 	}
 }
 

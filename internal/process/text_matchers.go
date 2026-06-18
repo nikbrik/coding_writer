@@ -30,11 +30,33 @@ func isExplicitNotRun(text string) bool {
 }
 
 func hasTrustedToolEvidenceText(text string) bool {
-	lower := strings.ToLower(text)
-	if strings.Contains(lower, "no tool evidence") || strings.Contains(lower, "without tool evidence") || strings.Contains(lower, "missing tool evidence") {
-		return false
+	return false
+}
+
+func hasTrustedEvidence(evidence []string) bool {
+	for _, item := range evidence {
+		if strings.TrimSpace(item) != "" {
+			return true
+		}
 	}
-	return strings.Contains(lower, "tool evidence:") || strings.Contains(lower, "trusted tool evidence:")
+	return false
+}
+
+func containsSideEffectClaim(text string) bool {
+	if containsImplementationClaim(text) {
+		return true
+	}
+	lower := strings.ToLower(text)
+	for _, needle := range []string{
+		"i edited", "i changed", "i updated", "i created", "i deleted", "i wrote", "i saved", "i persisted", "i committed", "i ran", "i executed",
+		"file edited", "file changed", "file updated", "memory saved", "state changed", "stage changed", "transitioned to", "applied patch", "ran tests", "tests passed", "all tests passed",
+		"я изменил", "я обновил", "я создал", "я удалил", "я сохранил", "запустил тест", "тесты прошли", "перевёл задачу", "сменил stage",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsMutationCommand(text string) bool {

@@ -3,7 +3,7 @@ package process
 import "strings"
 
 // validateValidation validates validation stage structured output.
-func validateValidation(out *ValidationOutput) []string {
+func validateValidation(out *ValidationOutput, trustedEvidence ...string) []string {
 	if out == nil {
 		return []string{"missing validation output"}
 	}
@@ -39,6 +39,9 @@ func validateValidation(out *ValidationOutput) []string {
 		}
 		if !hasNonEmpty(out.PassedChecks) {
 			errs = append(errs, "ready_for_done requires validation evidence")
+		}
+		if !hasTrustedEvidence(trustedEvidence) {
+			errs = append(errs, "ready_for_done requires trusted application evidence")
 		}
 	}
 	if out.Verdict == "needs_execution_fixes" && !hasActionableFinding(out.Findings) {

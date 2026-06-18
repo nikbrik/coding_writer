@@ -10,9 +10,12 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var fileLocks sync.Map
+
+const fileLockTimeout = 5 * time.Second
 
 func lockFor(path string) *sync.Mutex {
 	abs, _ := filepath.Abs(path)
@@ -22,6 +25,8 @@ func lockFor(path string) *sync.Mutex {
 
 func AppendJSONL(path string, value any) error {
 	if err := withJSONLLock(path, true, func() error {
+		_, statErr := os.Stat(path)
+		created := errors.Is(statErr, os.ErrNotExist)
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, FileMode)
 		if err != nil {
 			return errStorage("append", path, err)
@@ -36,6 +41,11 @@ func AppendJSONL(path string, value any) error {
 		}
 		if err := f.Sync(); err != nil {
 			return errStorage("sync", path, err)
+		}
+		if created {
+			if err := syncDir(filepath.Dir(path)); err != nil {
+				return errStorage("sync_dir", filepath.Dir(path), err)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -84,6 +94,10 @@ func WithFileLock(path string, createDir bool, fn func() error) error {
 	defer lock.Unlock()
 	unlock, err := acquireFileLock(path)
 	if err != nil {
+		var storageErr *Error
+		if errors.As(err, &storageErr) {
+			return err
+		}
 		return errStorage("lock", path, err)
 	}
 	defer unlock()
@@ -220,9 +234,19 @@ func acquireFileLock(path string) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		_ = f.Close()
-		return nil, err
+	deadline := time.Now().Add(fileLockTimeout)
+	for {
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+			break
+		} else if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
+			_ = f.Close()
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			_ = f.Close()
+			return nil, errStorage("lock_timeout", lockPath, errors.New("file lock timeout"))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	return func() {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)

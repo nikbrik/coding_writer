@@ -83,7 +83,7 @@ func TestProcessPausedTaskDoesNotCallProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctrl := newProcessAcceptanceController(rt)
-	_, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_paused", Input: "продолжай"})
+	_, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_paused", Input: "продолжай задачу"})
 	if err == nil || app.AsError(err).Code != "task_paused" {
 		t.Fatalf("want task_paused, got %v", err)
 	}
@@ -119,7 +119,7 @@ func TestProcessSuccessfulValidationTransitionsToDone(t *testing.T) {
 	_ = state
 	rt.provider.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
 	ctrl := newProcessAcceptanceController(rt)
-	res, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_done", Input: "проверь", ActionKind: process.ActionReviewOutput})
+	res, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_done", Input: "проверь", ActionKind: process.ActionReviewOutput, TrustedEvidence: []string{"go test ./... passed"}})
 	if err != nil {
 		t.Fatal(err)
 	}

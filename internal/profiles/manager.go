@@ -84,10 +84,13 @@ func (m *Manager) Get(id string) (app.UserProfile, error) {
 	}
 	var profile app.UserProfile
 	if err := storage.ReadJSON(path, &profile); err != nil {
-		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "open") {
+		if errors.Is(err, os.ErrNotExist) {
 			return profile, app.NewError(app.CategoryValidation, "unknown_profile", "unknown profile", err)
 		}
 		return profile, app.NewError(app.CategoryStorage, "profile_read", err.Error(), err)
+	}
+	if err := Validate(profile); err != nil {
+		return profile, err
 	}
 	return profile, nil
 }

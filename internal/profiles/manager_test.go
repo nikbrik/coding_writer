@@ -1,6 +1,8 @@
 package profiles
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +69,20 @@ func TestProfileRejectsSecrets(t *testing.T) {
 	profile.Constraints = append(profile.Constraints, "OPENROUTER_API_KEY=sk-secret123456789")
 	if err := Validate(profile); err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret blocked, got %v", err)
+	}
+}
+
+func TestLoadedProfileIsValidated(t *testing.T) {
+	dir := t.TempDir()
+	cfgMgr := app.NewConfigManager(dir)
+	if err := cfgMgr.EnsureStorageTree(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "profiles", "bad.json"), []byte(`{"id":"bad","display_name":"Bad"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(dir, cfgMgr)
+	if _, err := mgr.Get("bad"); err == nil || !strings.Contains(err.Error(), "invalid_profile") {
+		t.Fatalf("want invalid_profile, got %v", err)
 	}
 }

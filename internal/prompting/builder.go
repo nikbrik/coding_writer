@@ -45,7 +45,6 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 		{ID: app.NewID("msg"), Role: app.RoleSystem, Content: b.PromptFactory.BaseSystemPrompt(), CreatedAt: now},
 		{ID: app.NewID("msg"), Role: app.RoleSystem, Content: securityPolicy(), CreatedAt: now},
 		{ID: app.NewID("msg"), Role: app.RoleSystem, Content: b.PromptFactory.ProcessContractPrompt(), CreatedAt: now},
-		{ID: app.NewID("msg"), Role: app.RoleSystem, Content: invariants(), CreatedAt: now},
 	}
 
 	if stage != "" {
@@ -63,7 +62,10 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 		)
 	}
 
-	messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: profileBlock, CreatedAt: now})
+	messages = append(messages,
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: profileBlock, CreatedAt: now},
+		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: invariants(), CreatedAt: now},
+	)
 
 	if input.Task != nil {
 		taskBlock, err := tasks.Render(*input.Task)

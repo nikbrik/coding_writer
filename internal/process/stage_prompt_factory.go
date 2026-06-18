@@ -48,8 +48,7 @@ func (f *StagePromptFactory) StagePrompt(stage app.TaskStage, action ActionKind)
 	fmt.Fprintf(&b, "Current stage: %s.\n", stage)
 	if action == ActionAnswerQuestion {
 		fmt.Fprintf(&b, "Role context: %s.\n", policy.Role)
-		b.WriteString(stageRoleBody(stage))
-		b.WriteString("\nForbidden actions remain forbidden: ")
+		b.WriteString("Use the current stage only as context for a read-only informational answer. Do not continue or mutate the task.\nForbidden actions remain forbidden: ")
 		for i, a := range policy.ForbiddenActions {
 			if i > 0 {
 				b.WriteString(", ")

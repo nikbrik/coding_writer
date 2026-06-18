@@ -167,3 +167,18 @@ func TestTaskRejectsSecretContent(t *testing.T) {
 		t.Fatalf("want secret blocked on step, got %v", err)
 	}
 }
+
+func TestCurrentRejectsInvalidPersistedState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tasks")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "current.json"), []byte(`{"id":"task_bad","title":"bad","stage":"done","status":"active","expected_action":"llm_response","updated_at":"2026-01-01T00:00:00Z"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := NewManager(dir).Current()
+	if err == nil || !strings.Contains(err.Error(), "invalid_task_state") {
+		t.Fatalf("want invalid_task_state, got %v", err)
+	}
+}

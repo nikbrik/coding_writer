@@ -111,7 +111,7 @@ func TestProcessControllerAuditsHardGateError(t *testing.T) {
 	if _, err := ctrl.Tasks.Pause(); err != nil {
 		t.Fatal(err)
 	}
-	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "paused_audit", Input: "hello"})
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "paused_audit", Input: "продолжай задачу"})
 	if err == nil || app.AsError(err).Code != "task_paused" {
 		t.Fatalf("want task_paused, got %v", err)
 	}

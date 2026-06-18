@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -219,6 +220,17 @@ func initCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if rt.Config.ActiveModel == "" {
+				return app.ErrorWithHint(app.CategoryProvider, "missing_model", "active model is required", "run assistant init --model <provider/model>", nil)
+			}
+			provider := rt.ensureProvider()
+			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
+			if err := validateModelID(cmd.Context(), provider, rt.Config.ActiveModel); err != nil {
+				return err
+			}
+			if err := rt.ConfigMgr.Save(rt.Config); err != nil {
+				return err
+			}
 			profilesList, err := rt.Profiles.List()
 			if err != nil {
 				return err
@@ -230,9 +242,10 @@ func initCommand(opts *globalOptions) *cobra.Command {
 }
 
 type chatOptions struct {
-	Once         bool
-	Input        string
-	RenderPrompt bool
+	Once            bool
+	Input           string
+	RenderPrompt    bool
+	TrustedEvidence []string
 }
 
 func chatCommand(opts *globalOptions) *cobra.Command {
@@ -260,7 +273,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, chatOpts.TrustedEvidence)
 				if err != nil {
 					return err
 				}
@@ -278,6 +291,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
 	cmd.Flags().StringVar(&chatOpts.Input, "input", "", "input text for --once")
 	cmd.Flags().BoolVar(&chatOpts.RenderPrompt, "render-prompt", false, "render prompt without provider call")
+	cmd.Flags().StringArrayVar(&chatOpts.TrustedEvidence, "trusted-evidence", nil, "trusted application evidence for validation; repeatable")
 	return cmd
 }
 
@@ -293,7 +307,7 @@ type chatResult struct {
 	Warnings       []string                  `json:"warnings,omitempty"`
 }
 
-func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool) (chatResult, error) {
+func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, trustedEvidence []string) (chatResult, error) {
 	if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -309,7 +323,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly})
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, TrustedEvidence: trustedEvidence})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel}
 	if procResult != nil {
 		result.Answer = procResult.Answer
@@ -358,7 +372,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
-		result, err := runChatExchange(ctx, rt, sessionID, line, false)
+		result, err := runChatExchange(ctx, rt, sessionID, line, false, nil)
 		if err != nil {
 			failed = true
 			_, _ = fmt.Fprintln(diag, err.Error())
@@ -590,6 +604,7 @@ func memoryListCommand(opts *globalOptions) *cobra.Command {
 }
 
 func memoryProposeCommand(opts *globalOptions) *cobra.Command {
+	var latest bool
 	cmd := &cobra.Command{
 		Use:   "propose",
 		Short: "Propose memory from latest exchange",
@@ -639,6 +654,7 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "proposal": proposal, "session_id": sessionID}, proposalText(proposal))
 		},
 	}
+	cmd.Flags().BoolVar(&latest, "latest", true, "use latest user/assistant exchange")
 	return cmd
 }
 
@@ -943,7 +959,7 @@ func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int
 			return nil
 		}
 		name := entry.Name()
-		shouldRemove := (purgeAudit && name == "memory_proposals.jsonl") || (purgeTranscripts && name == "transcript.md")
+		shouldRemove := (purgeAudit && (name == "memory_proposals.jsonl" || name == "prompts.jsonl")) || (purgeTranscripts && name == "transcript.md")
 		if !shouldRemove {
 			return nil
 		}
@@ -958,6 +974,14 @@ func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int
 			return removed, nil
 		}
 		return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+	}
+	if purgeAudit {
+		path := filepath.Join(storageDir, "process_audit.jsonl")
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return removed, app.NewError(app.CategoryStorage, "privacy_purge", err.Error(), err)
+		} else if err == nil {
+			removed++
+		}
 	}
 	return removed, nil
 }
@@ -1423,6 +1447,9 @@ func stageOf(task *app.TaskState) app.TaskStage {
 }
 
 func recordRenderedPrompt(storageDir, sessionID string, messages []app.ChatMessage, rendered string) error {
+	if os.Getenv("ASSISTANT_PROMPT_AUDIT") != "1" && os.Getenv("ASSISTANT_RAW_PROMPT_AUDIT") != "1" {
+		return nil
+	}
 	if sessionID == "" {
 		return nil
 	}
@@ -1467,9 +1494,6 @@ func validateModelSyntax(model string) error {
 func validateModelID(ctx context.Context, provider providers.LLMProvider, model string) error {
 	if err := validateModelSyntax(model); err != nil {
 		return err
-	}
-	if _, ok := provider.(*providers.OpenRouterProvider); ok {
-		return nil
 	}
 	models, err := provider.ListModels(ctx)
 	if err != nil {
@@ -1620,6 +1644,8 @@ func proposalText(proposal app.MemoryProposal) string {
 	b.WriteString(proposal.ID)
 	b.WriteByte('\n')
 	for _, record := range proposal.Records {
+		b.WriteString(record.ID)
+		b.WriteString(" ")
 		b.WriteString("[")
 		b.WriteString(string(record.Layer))
 		b.WriteString("] ")
@@ -1676,7 +1702,7 @@ func processAuditText(events []process.ProcessAuditEvent) string {
 func safeTerminalText(text string) string {
 	var b strings.Builder
 	for _, r := range text {
-		if r == '\n' || r == '\t' || r >= 0x20 && r != 0x7f {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) && !unicode.Is(unicode.Bidi_Control, r) && !unicode.Is(unicode.Cf, r) {
 			b.WriteRune(r)
 			continue
 		}
@@ -1686,5 +1712,13 @@ func safeTerminalText(text string) string {
 }
 
 func taskText(state app.TaskState) string {
-	return fmt.Sprintf("task=%s title=%s objective=%s stage=%s current_step=%s expected_action=%s status=%s plan=%v acceptance_criteria=%v decisions=%v open_questions=%v allowed=%v\n", state.ID, safeTerminalText(state.Title), safeTerminalText(state.Objective), state.Stage, safeTerminalText(state.CurrentStep), state.ExpectedAction, state.Status, state.Plan, state.AcceptanceCriteria, state.Decisions, state.OpenQuestions, tasks.AllowedNext(state.Stage))
+	return fmt.Sprintf("task=%s title=%s objective=%s stage=%s current_step=%s expected_action=%s status=%s plan=%v acceptance_criteria=%v decisions=%v open_questions=%v allowed=%v\n", state.ID, safeTerminalText(state.Title), safeTerminalText(state.Objective), state.Stage, safeTerminalText(state.CurrentStep), state.ExpectedAction, state.Status, safeStringSlice(state.Plan), safeStringSlice(state.AcceptanceCriteria), safeStringSlice(state.Decisions), safeStringSlice(state.OpenQuestions), tasks.AllowedNext(state.Stage))
+}
+
+func safeStringSlice(items []string) []string {
+	out := make([]string, len(items))
+	for i, item := range items {
+		out[i] = safeTerminalText(item)
+	}
+	return out
 }

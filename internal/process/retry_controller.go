@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
 // RetryController decides whether a validation failure is fixable and how many
@@ -23,8 +24,10 @@ func (r *RetryController) ShouldRetry(err error) bool {
 	}
 	appErr := app.AsError(err)
 	switch appErr.Code {
-	case "invalid_json", "missing_stage", "stage_mismatch":
+	case "invalid_json", "missing_stage":
 		return true
+	case "stage_mismatch":
+		return false
 	}
 	// Hard gates and security blocks must not retry.
 	if appErr.Category == app.CategoryValidation {
@@ -44,7 +47,7 @@ func (r *RetryController) CorrectionPrompt(validatorErrors []string) string {
 	b.WriteString("<trusted_validator_errors>\n")
 	for _, e := range validatorErrors {
 		b.WriteString("- ")
-		b.WriteString(e)
+		b.WriteString(validation.EscapeUntrusted(e))
 		b.WriteString("\n")
 	}
 	b.WriteString("</trusted_validator_errors>\n")

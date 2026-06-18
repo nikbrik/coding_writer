@@ -11,19 +11,29 @@ import (
 
 // ParsedResponse holds a structured candidate without mutating task state.
 type ParsedResponse struct {
-	Stage      app.TaskStage
-	ActionKind ActionKind
-	Raw        string
-	Planning   *PlanningOutput
-	Execution  *ExecutionOutput
-	Validation *ValidationOutput
-	Done       *DoneOutput
+	Stage           app.TaskStage
+	ActionKind      ActionKind
+	Raw             string
+	TrustedEvidence []string
+	Planning        *PlanningOutput
+	Execution       *ExecutionOutput
+	Validation      *ValidationOutput
+	Done            *DoneOutput
 }
 
 // Parse converts raw provider output into a structured candidate.
 func Parse(stage app.TaskStage, action ActionKind, raw string) (ParsedResponse, error) {
 	raw = strings.TrimSpace(raw)
 	if action == ActionAnswerQuestion {
+		cleaned := stripMarkdownFences(raw)
+		if looksLikeJSON(cleaned) {
+			var stageField struct {
+				Stage string `json:"stage"`
+			}
+			if err := json.Unmarshal([]byte(cleaned), &stageField); err == nil && stageField.Stage != "" && app.TaskStage(stageField.Stage) != stage {
+				return ParsedResponse{}, app.ErrorWithHint(app.CategoryValidation, "stage_mismatch", "response stage does not match current stage", "expected "+string(stage)+", got "+stageField.Stage, nil)
+			}
+		}
 		return ParsedResponse{Stage: stage, ActionKind: action, Raw: raw}, nil
 	}
 

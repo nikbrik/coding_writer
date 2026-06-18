@@ -12,7 +12,7 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		return ActionAnswerQuestion
 	}
 	normalized := strings.ToLower(strings.TrimSpace(input))
-	if expectedAction == app.ExpectedUserConfirmation && containsAny(normalized, []string{"yes", "да", "approve", "confirm", "подтверждаю"}) {
+	if expectedAction == app.ExpectedUserConfirmation && isConfirmation(normalized) {
 		if stage == app.StagePlanning || stage == app.StageExecution || stage == app.StageValidation {
 			return ActionProposeTransition
 		}
@@ -26,7 +26,7 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}
-		if containsAny(normalized, []string{"готов", "ready", "execute", "реализуй", "implement", "proceed"}) {
+		if containsAny(normalized, []string{"готов", "ready", "execute", "реализуй", "implement", "proceed", "продолжай", "continue"}) {
 			return ActionProposeTransition
 		}
 		if containsAny(normalized, []string{"уточни", "clarify", "ask clarification", "open question"}) {
@@ -73,7 +73,18 @@ func isPlanningIntent(normalized string) bool {
 }
 
 func looksLikeClarification(normalized string) bool {
-	return containsAny(normalized, []string{"?", "что", "как", "почему", "какой", "какие", "what", "how", "why", "which", "explain"})
+	return containsAny(normalized, []string{"?", "что", "как", "почему", "какой", "какие", "объясни", "расскажи", "what", "how", "why", "which", "explain"})
+}
+
+func isConfirmation(normalized string) bool {
+	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ")
+	for _, token := range strings.Fields(replacer.Replace(normalized)) {
+		switch token {
+		case "yes", "y", "approve", "approved", "confirm", "confirmed", "да", "ок", "подтверждаю", "согласен":
+			return true
+		}
+	}
+	return false
 }
 
 func containsAny(s string, needles []string) bool {

@@ -271,6 +271,10 @@ func latestWithinBudget(records []app.MemoryRecord, maxCount, maxBytes int) []ap
 	result := records[start:]
 	if len(records) > 0 && start > 0 {
 		first := records[0]
+		resultBytes := 0
+		for _, r := range result {
+			resultBytes += len(r.Content)
+		}
 		found := false
 		for _, r := range result {
 			if r.ID == first.ID {
@@ -278,7 +282,7 @@ func latestWithinBudget(records []app.MemoryRecord, maxCount, maxBytes int) []ap
 				break
 			}
 		}
-		if !found && first.Kind == "message_user" {
+		if !found && first.Kind == "message_user" && resultBytes+len(first.Content) <= maxBytes {
 			result = append([]app.MemoryRecord{first}, result...)
 		}
 	}

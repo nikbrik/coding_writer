@@ -67,7 +67,6 @@ func EnsureNoSymlinkParents(path string) error {
 		parts[0] = string(filepath.Separator)
 	}
 	current := ""
-	resolvedAbs := abs
 	for _, part := range parts {
 		if part == "" {
 			continue
@@ -85,26 +84,22 @@ func EnsureNoSymlinkParents(path string) error {
 			return err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(current)
-			if err != nil {
-				return err
-			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(current), target)
-			}
-			target = filepath.Clean(target)
-			if resolvedAbs == current {
-				resolvedAbs = target
-			} else if strings.HasPrefix(resolvedAbs, current+string(filepath.Separator)) {
-				resolvedAbs = target + resolvedAbs[len(current):]
-			}
-			if resolvedAbs == target || strings.HasPrefix(resolvedAbs, target+string(filepath.Separator)) {
+			if isAllowedSystemSymlink(current) {
 				continue
 			}
 			return errors.New("symlink parent rejected")
 		}
 	}
 	return nil
+}
+
+func isAllowedSystemSymlink(path string) bool {
+	switch path {
+	case string(filepath.Separator) + "var", string(filepath.Separator) + "tmp", string(filepath.Separator) + "etc":
+		return true
+	default:
+		return false
+	}
 }
 
 func RejectSymlinkTarget(path string) error {

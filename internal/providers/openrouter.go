@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	maxModelsResponseSize   = 10 * 1024 * 1024
+	maxModelsResponseSize    = 10 * 1024 * 1024
 	maxCompletionResonseSize = 50 * 1024 * 1024
+	maxRetryAfterDelay       = 5 * time.Second
 )
 
 type OpenRouterProvider struct {
@@ -107,6 +108,9 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 		backoff := time.Duration(attempt+1) * 100 * time.Millisecond
 		if retryAfter > 0 {
 			backoff = retryAfter
+		}
+		if backoff > maxRetryAfterDelay {
+			backoff = maxRetryAfterDelay
 		}
 		timer := time.NewTimer(backoff)
 		select {

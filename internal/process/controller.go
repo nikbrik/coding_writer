@@ -37,6 +37,7 @@ type ExchangeInput struct {
 	RenderOnly             bool
 	ActionKind             ActionKind
 	AutoApproveTransitions bool
+	TrustedEvidence        []string
 }
 
 // RunExchange executes the gated process loop.
@@ -161,6 +162,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 
 		parsed, parseErr = Parse(stage, action, lastRaw)
 		if parseErr == nil {
+			parsed.TrustedEvidence = append([]string(nil), input.TrustedEvidence...)
 			validatorErrors = RunValidators(parsed)
 			if len(validatorErrors) == 0 || !shouldRetryValidatorErrors(validatorErrors) || attempt >= maxRetries {
 				break
@@ -169,10 +171,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 			}
 			attempt++
-			messages = append(messages,
-				app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: rejectedOutputPrompt(lastRaw), CreatedAt: time.Now().UTC()},
-				app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt(validatorErrors), CreatedAt: time.Now().UTC()},
-			)
+			messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt(validatorErrors), CreatedAt: time.Now().UTC()})
 			continue
 		}
 		if !c.RetryController.ShouldRetry(parseErr) || attempt >= maxRetries {
@@ -182,10 +181,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 		}
 		attempt++
-		messages = append(messages,
-			app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: rejectedOutputPrompt(lastRaw), CreatedAt: time.Now().UTC()},
-			app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt([]string{app.AsError(parseErr).Message}), CreatedAt: time.Now().UTC()},
-		)
+		messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleSystem, Content: c.RetryController.CorrectionPrompt([]string{app.AsError(parseErr).Message}), CreatedAt: time.Now().UTC()})
 	}
 
 	if parseErr != nil {
@@ -213,6 +209,12 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	result.Answer = lastRaw
 	result.Messages = messages
 	result.RenderedPrompt = renderMessages(messages)
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionAnswerQuestion {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
+			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
+		return result, nil
+	}
 
 	var transitionCandidate *TransitionResult
 	if c.TransitionGate != nil && taskPtr != nil && action != ActionAnswerQuestion {
@@ -276,10 +278,16 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		ExistingLong:       bundle.Long,
 	})
 	if err != nil {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", nil, "", "", memoryModel, auditError(err)); auditErr != nil {
+			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
 		return result, nil
 	}
 	if err := c.Proposals.Save(ctx, proposal); err != nil {
+		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", memoryModel, auditError(err)); auditErr != nil {
+			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
 		return result, nil
 	}
@@ -336,13 +344,16 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		stage = taskPtr.Stage
 	}
 
+	var expected app.ExpectedAction
+	if taskPtr != nil {
+		expected = taskPtr.ExpectedAction
+	}
+	resolvedAction := ResolveActionKind(input.Input, stage, expected)
 	action := input.ActionKind
 	if action == "" {
-		var expected app.ExpectedAction
-		if taskPtr != nil {
-			expected = taskPtr.ExpectedAction
-		}
-		action = ResolveActionKind(input.Input, stage, expected)
+		action = resolvedAction
+	} else if action == ActionAnswerQuestion && resolvedAction != ActionAnswerQuestion {
+		action = resolvedAction
 	}
 	if !action.Valid() {
 		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "invalid_action", "invalid process action", nil)
@@ -352,7 +363,7 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "missing_task", "no active task; start a task before process actions", "use /task start <title> to create a task", nil)
 	}
 
-	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused {
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action != ActionAnswerQuestion {
 		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "task_paused", "task is paused; resume before continuing", nil)
 	}
 

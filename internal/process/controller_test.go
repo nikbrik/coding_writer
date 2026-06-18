@@ -195,7 +195,7 @@ func TestProcessControllerSuccessfulExchangeCallsProvider(t *testing.T) {
 	}
 }
 
-func TestProcessControllerAnswerQuestionSkipsStageValidators(t *testing.T) {
+func TestProcessControllerAnswerQuestionAllowsPlainInfo(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
@@ -208,6 +208,23 @@ func TestProcessControllerAnswerQuestionSkipsStageValidators(t *testing.T) {
 	}
 	if res.Answer != "plain informational answer" {
 		t.Fatalf("unexpected answer: %q", res.Answer)
+	}
+}
+
+func TestProcessControllerAnswerQuestionRejectsSideEffectClaims(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = "I edited files and all tests passed"
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "answer_side_effect", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want validation_failed, got %v", err)
+	}
+	records, _ := ctrl.Memory.List(ctx, app.LayerShort, "answer_side_effect", "")
+	if len(records) != 0 {
+		t.Fatalf("rejected answer should not save short memory: %+v", records)
 	}
 }
 

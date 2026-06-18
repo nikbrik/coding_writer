@@ -12,20 +12,33 @@ func RunValidators(resp ParsedResponse) []string {
 	var errs []string
 	errs = append(errs, commonChecks(resp)...)
 	if resp.ActionKind == ActionAnswerQuestion {
+		errs = append(errs, validateAnswerQuestion(resp.Raw)...)
 		return filterEmpty(errs)
 	}
 	switch resp.Stage {
 	case app.StagePlanning:
 		errs = append(errs, validatePlanning(resp.Planning, resp.Raw)...)
 	case app.StageExecution:
-		errs = append(errs, validateExecution(resp.Execution)...)
+		errs = append(errs, validateExecution(resp.Execution, resp.TrustedEvidence...)...)
 	case app.StageValidation:
-		errs = append(errs, validateValidation(resp.Validation)...)
+		errs = append(errs, validateValidation(resp.Validation, resp.TrustedEvidence...)...)
 	case app.StageDone:
 		errs = append(errs, validateDone(resp.Done, resp.Raw)...)
 	}
 	errs = append(errs, validateActionKind(resp)...)
 	return filterEmpty(errs)
+}
+
+func validateAnswerQuestion(raw string) []string {
+	var errs []string
+	lower := strings.ToLower(raw)
+	if containsSideEffectClaim(raw) || containsTestPassClaim(raw) && !isExplicitNotRun(raw) {
+		errs = append(errs, "answer_question must not claim file, memory, state, command, tool, or test side effects")
+	}
+	if strings.Contains(lower, "ready_for_validation") || strings.Contains(lower, "ready_for_done") || strings.Contains(lower, "stage=done") || strings.Contains(lower, `"stage":"done"`) {
+		errs = append(errs, "answer_question must not propose or claim task transition")
+	}
+	return errs
 }
 
 func validateActionKind(resp ParsedResponse) []string {

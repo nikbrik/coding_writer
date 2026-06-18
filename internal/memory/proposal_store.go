@@ -39,14 +39,17 @@ type ApplyResult struct {
 }
 
 type pendingMemorySave struct {
-	ProposalID string
-	RecordID   string
-	Layer      app.MemoryLayer
-	Kind       string
-	Content    string
-	Scope      string
-	ProfileID  string
-	UserID     string
+	ProposalID     string
+	RecordID       string
+	Layer          app.MemoryLayer
+	Status         app.ProposalRecordStatus
+	AppliedLayer   app.ProposedMemoryLayer
+	Kind           string
+	Content        string
+	AppliedContent string
+	Scope          string
+	ProfileID      string
+	UserID         string
 }
 
 func NewProposalStore(storageDir string, manager *Manager) *ProposalStore {
@@ -103,6 +106,18 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 	if err != nil {
 		return ApplyResult{}, err
 	}
+	var result ApplyResult
+	if err := storage.WithFileLock(path+".apply", true, func() error {
+		var applyErr error
+		result, applyErr = s.applyLocked(ctx, opts, path)
+		return applyErr
+	}); err != nil {
+		return ApplyResult{}, err
+	}
+	return result, nil
+}
+
+func (s *ProposalStore) applyLocked(ctx context.Context, opts ApplyOptions, path string) (ApplyResult, error) {
 	var pending []pendingMemorySave
 	var appliedProposal app.MemoryProposal
 	if err := storage.UpdateJSONL(path, func(proposals []app.MemoryProposal) ([]app.MemoryProposal, error) {
@@ -131,6 +146,7 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 			}
 			appliedLayer := record.Layer
 			appliedContent := record.Content
+			status := app.ProposalAccepted
 			if edit, ok := opts.Edits[record.ID]; ok {
 				if edit.Layer != "" {
 					appliedLayer = edit.Layer
@@ -138,23 +154,24 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 				if strings.TrimSpace(edit.Content) != "" {
 					appliedContent = strings.TrimSpace(edit.Content)
 				}
-				record.Status = app.ProposalEdited
-			} else if accepted {
-				record.Status = app.ProposalAccepted
-			} else {
+				status = app.ProposalEdited
+			} else if !accepted {
 				continue
 			}
 			now := time.Now().UTC()
-			record.AppliedLayer = appliedLayer
-			record.AppliedContent = appliedContent
-			record.AppliedAt = &now
 			if findings := validation.DetectSecrets(appliedContent); len(findings) > 0 {
+				record.AppliedLayer = appliedLayer
 				record.AppliedContent = "[REDACTED_SECRET]"
 				record.Status = app.ProposalBlocked
 				record.BlockReason = "secret detected: " + validation.FindingTypes(findings)
+				record.AppliedAt = &now
 				continue
 			}
-			if appliedLayer == app.ProposedLayerIgnore || record.Status == app.ProposalBlocked || record.Status == app.ProposalRejected {
+			if appliedLayer == app.ProposedLayerIgnore {
+				record.Status = status
+				record.AppliedLayer = appliedLayer
+				record.AppliedContent = appliedContent
+				record.AppliedAt = &now
 				continue
 			}
 			layer, err := physicalLayer(appliedLayer)
@@ -180,7 +197,7 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 				record.Scope = scope
 				record.ProfileID = profileID
 			}
-			pending = append(pending, pendingMemorySave{ProposalID: proposal.ID, RecordID: record.ID, Layer: layer, Kind: record.Kind, Content: appliedContent, Scope: scope, ProfileID: profileID, UserID: record.UserID})
+			pending = append(pending, pendingMemorySave{ProposalID: proposal.ID, RecordID: record.ID, Layer: layer, Status: status, AppliedLayer: appliedLayer, Kind: record.Kind, Content: appliedContent, AppliedContent: appliedContent, Scope: scope, ProfileID: profileID, UserID: record.UserID})
 		}
 		proposals[idx] = proposal
 		appliedProposal = proposal
@@ -194,7 +211,9 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 	}
 	saved := make([]app.MemoryRecord, 0, len(pending))
 	savedByRecord := map[string]string{}
+	pendingByRecord := map[string]pendingMemorySave{}
 	for _, item := range pending {
+		pendingByRecord[item.RecordID] = item
 		if existing, ok, err := s.Memory.FindByProposalRecord(ctx, item.ProposalID, item.RecordID, opts.SessionID, opts.TaskID); err != nil {
 			return ApplyResult{}, err
 		} else if ok {
@@ -220,8 +239,20 @@ func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResu
 				return proposals, app.NewError(app.CategoryValidation, "missing_proposal", "memory proposal not found", nil)
 			}
 			proposal := proposals[idx]
+			now := time.Now().UTC()
 			for i := range proposal.Records {
-				if id := savedByRecord[proposal.Records[i].ID]; id != "" && proposal.Records[i].SavedRecordID == "" {
+				id := savedByRecord[proposal.Records[i].ID]
+				if id == "" {
+					continue
+				}
+				pending := pendingByRecord[proposal.Records[i].ID]
+				proposal.Records[i].Status = pending.Status
+				proposal.Records[i].AppliedLayer = pending.AppliedLayer
+				proposal.Records[i].AppliedContent = pending.AppliedContent
+				proposal.Records[i].AppliedAt = &now
+				proposal.Records[i].Scope = pending.Scope
+				proposal.Records[i].ProfileID = pending.ProfileID
+				if proposal.Records[i].SavedRecordID == "" {
 					proposal.Records[i].SavedRecordID = id
 				}
 			}

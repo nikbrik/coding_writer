@@ -13,8 +13,8 @@ func TestRetryControllerShouldRetryOnlyFixable(t *testing.T) {
 	if !r.ShouldRetry(app.NewError(app.CategoryValidation, "invalid_json", "bad json", nil)) {
 		t.Fatal("invalid_json should retry")
 	}
-	if !r.ShouldRetry(app.NewError(app.CategoryValidation, "stage_mismatch", "bad stage", nil)) {
-		t.Fatal("stage_mismatch should retry")
+	if r.ShouldRetry(app.NewError(app.CategoryValidation, "stage_mismatch", "bad stage", nil)) {
+		t.Fatal("stage_mismatch must not retry")
 	}
 	if r.ShouldRetry(app.NewError(app.CategoryValidation, "task_paused", "paused", nil)) {
 		t.Fatal("task_paused must not retry")

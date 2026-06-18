@@ -3,13 +3,20 @@ package process
 import "strings"
 
 // validateExecution validates execution stage structured output.
-func validateExecution(out *ExecutionOutput) []string {
+func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string {
 	if out == nil {
 		return []string{"missing execution output"}
 	}
 	var errs []string
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
 		errs = append(errs, "execution output missing required summary/next_signal")
+	}
+	combined := strings.Join(append([]string{out.Summary}, append(out.ChangedArtifacts, out.Verification...)...), " ")
+	if containsTestPassClaim(combined) && !hasTrustedEvidence(trustedEvidence) {
+		errs = append(errs, "test/tool claims require trusted application evidence")
+	}
+	if containsSideEffectClaim(combined) && !hasTrustedEvidence(trustedEvidence) {
+		errs = append(errs, "side-effect claims require trusted application evidence")
 	}
 	for _, v := range out.Verification {
 		lower := strings.ToLower(v)
@@ -18,7 +25,7 @@ func validateExecution(out *ExecutionOutput) []string {
 			errs = append(errs, "verification must not mix passed and not-run claims")
 			continue
 		}
-		if claimsRun && !isExplicitNotRun(v) && !hasTrustedToolEvidenceText(v) {
+		if claimsRun && !isExplicitNotRun(v) && !hasTrustedEvidence(trustedEvidence) {
 			errs = append(errs, "verification claim requires tool evidence")
 		}
 	}

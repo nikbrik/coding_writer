@@ -137,7 +137,7 @@ func TestTransitionGateValidationToDone(t *testing.T) {
 	state, _ = mgr.Move(app.StageExecution)
 	state, _ = mgr.Move(app.StageValidation)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageValidation, Validation: &ValidationOutput{
+	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: []string{"go test ./... passed"}, Validation: &ValidationOutput{
 		Findings:     []ValidationFinding{},
 		PassedChecks: []string{"tool evidence available"},
 		Verdict:      "ready_for_done",

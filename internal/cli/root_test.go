@@ -93,6 +93,34 @@ func TestInvalidModelFlagDoesNotMutateConfig(t *testing.T) {
 	}
 }
 
+func TestInitPersistsValidatedModel(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := app.NewConfigManager(storageDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ActiveModel != "fake/model" || cfg.MemoryModel != "fake/model" {
+		t.Fatalf("model not persisted by init: %+v", cfg)
+	}
+}
+
+func TestInitRequiresModel(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"--storage-dir", t.TempDir(), "init"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "missing_model") {
+		t.Fatalf("want missing_model, got %v", err)
+	}
+}
+
 func TestInvalidModelSyntaxRejectedWithoutProviderCall(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	if _, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "badmodel"}); err == nil || !strings.Contains(err.Error(), "invalid_model") {
@@ -100,7 +128,7 @@ func TestInvalidModelSyntaxRejectedWithoutProviderCall(t *testing.T) {
 	}
 }
 
-func TestPausedTaskBlocksNormalChatAndMutations(t *testing.T) {
+func TestPausedTaskAllowsSafeQuestionAndBlocksMutations(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
 	args := [][]string{
@@ -123,14 +151,28 @@ func TestPausedTaskBlocksNormalChatAndMutations(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "Объясни memory layers."})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("safe informational chat should be allowed while paused, got %v output=%s", err, out.String())
+	}
+	mutated, err := filepath.Glob(filepath.Join(storageDir, "sessions", "*", "*.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mutated) != 0 {
+		t.Fatalf("paused informational chat must not write session memory/proposals: %v", mutated)
+	}
+	cmd = newRootCommand(&globalOptions{})
+	out.Reset()
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "продолжай задачу"})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), "task_paused") {
-		t.Fatalf("want task_paused for normal chat while paused, got %v", err)
+		t.Fatalf("want task_paused for task continuation while paused, got %v", err)
 	}
 	cmd = newRootCommand(&globalOptions{})
 	out.Reset()
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "memory", "apply", "--accept", "all"})
-	err := cmd.Execute()
+	err = cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "task_paused") {
 		t.Fatalf("want task_paused for memory apply while paused, got %v output=%s", err, out.String())
 	}
@@ -155,7 +197,7 @@ func TestPausedTaskHardGateBeforeModelValidation(t *testing.T) {
 	cmd := newRootCommand(&globalOptions{})
 	var out bytes.Buffer
 	cmd.SetOut(&out)
-	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "missing/model", "--json", "chat", "--once", "--input", "hello"})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "missing/model", "--json", "chat", "--once", "--input", "продолжай задачу"})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "task_paused") {
 		t.Fatalf("want task_paused before invalid_model, got %v output=%s", err, out.String())
@@ -181,7 +223,7 @@ func TestPausedTaskHardGateBeforeProviderDisclosure(t *testing.T) {
 	var out, stderr bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&stderr)
-	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "openai/gpt-4.1-mini", "chat", "--once", "--input", "hello"})
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "openai/gpt-4.1-mini", "chat", "--once", "--input", "продолжай задачу"})
 	err := cmd.Execute()
 	if err == nil || !strings.Contains(err.Error(), "task_paused") {
 		t.Fatalf("want task_paused, got %v output=%s", err, out.String())
@@ -247,6 +289,13 @@ func TestChatTextShowsProposalRecords(t *testing.T) {
 	if !strings.Contains(out.String(), "Memory proposal:") || !strings.Contains(out.String(), "[work] pending") || !strings.Contains(out.String(), "Next: assistant memory apply") {
 		t.Fatalf("proposal records not visible: %s", out.String())
 	}
+	matches, err := filepath.Glob(filepath.Join(storageDir, "sessions", "*", "prompts.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("raw prompt audit should be opt-in, found: %v", matches)
+	}
 }
 
 func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
@@ -257,12 +306,39 @@ func TestClassifierFailureReturnsAnswerWithWarning(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Answer == "" || len(result.Warnings) == 0 || result.Proposal != nil {
 		t.Fatalf("classifier failure did not return answer with warning: %+v", result)
+	}
+}
+
+func TestRunChatExchangePassesTrustedEvidenceToValidation(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := providers.NewFakeProvider()
+	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tests passed"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+	rt.Provider = fake
+	if _, err := rt.Tasks.Start("validation task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runChatExchange(context.Background(), rt, "session_validation_done", "проверь", false, []string{"go test ./... passed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Transition == nil || result.Transition.To != app.StageDone {
+		t.Fatalf("trusted evidence was not passed to transition gate: %+v", result.Transition)
 	}
 }
 
@@ -340,8 +416,8 @@ func TestParseEditPreservesCommaContent(t *testing.T) {
 }
 
 func TestTextOutputEscapesControlCharacters(t *testing.T) {
-	text := memoryText([]app.MemoryRecord{{Layer: app.LayerShort, Kind: "context", Content: "hello\x1b[31m"}})
-	if strings.ContainsRune(text, rune(0x1b)) || !strings.Contains(text, `\x1b`) {
+	text := memoryText([]app.MemoryRecord{{Layer: app.LayerShort, Kind: "context", Content: "hello\x1b[31m\u200d"}})
+	if strings.ContainsRune(text, rune(0x1b)) || strings.ContainsRune(text, '\u200d') || !strings.Contains(text, `\x1b`) || !strings.Contains(text, `\u200d`) {
 		t.Fatalf("control char not escaped: %q", text)
 	}
 	task := taskText(app.TaskState{ID: "task_test", Title: "bad\x1btitle", Stage: app.StagePlanning, CurrentStep: "step\x1b[31m", ExpectedAction: app.ExpectedUserInput, Status: app.TaskStatusActive})
@@ -365,6 +441,22 @@ func TestProviderDisclosurePrintedOnceForOpenRouter(t *testing.T) {
 	}
 }
 
+func TestInitDisclosesProviderBeforeModelLookup(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "")
+	t.Setenv("OPENROUTER_API_KEY", "")
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", t.TempDir(), "--model", "openai/gpt-4.1-mini", "init"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("init failed: %v output=%s stderr=%s", err, out.String(), stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Provider disclosure:") {
+		t.Fatalf("provider disclosure missing during init: %q", stderr.String())
+	}
+}
+
 func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
@@ -372,7 +464,7 @@ func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false)
+	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, nil)
 	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret_blocked, got %v", err)
 	}
@@ -405,6 +497,7 @@ func TestPrivacyPurgeRemovesAuditAndTranscriptsOnly(t *testing.T) {
 	}
 	files := map[string]string{
 		"memory_proposals.jsonl": "{}\n",
+		"prompts.jsonl":          "{}\n",
 		"transcript.md":          "raw transcript",
 		"short_term.jsonl":       "{}\n",
 	}
@@ -412,6 +505,9 @@ func TestPrivacyPurgeRemovesAuditAndTranscriptsOnly(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(sessionDir, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.WriteFile(filepath.Join(storageDir, "process_audit.jsonl"), []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	cmd := newRootCommand(&globalOptions{})
 	var out bytes.Buffer
@@ -422,6 +518,12 @@ func TestPrivacyPurgeRemovesAuditAndTranscriptsOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir, "memory_proposals.jsonl")); !os.IsNotExist(err) {
 		t.Fatalf("audit not purged: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sessionDir, "prompts.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("prompt audit not purged: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(storageDir, "process_audit.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("process audit not purged: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(sessionDir, "transcript.md")); !os.IsNotExist(err) {
 		t.Fatalf("transcript not purged: %v", err)

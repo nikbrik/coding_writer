@@ -105,6 +105,9 @@ func (m *Manager) currentSnapshot() (currentSnapshot, error) {
 	if !before.ModTime().Equal(after.ModTime()) || before.Size() != after.Size() {
 		return currentSnapshot{}, app.NewError(app.CategoryStorage, "task_changed_during_read", "current task changed during read", nil)
 	}
+	if err := ValidateState(state); err != nil {
+		return currentSnapshot{}, err
+	}
 	return currentSnapshot{State: state, MTime: after.ModTime(), Size: after.Size()}, nil
 }
 
@@ -313,6 +316,13 @@ func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnap
 		}
 		if expected != nil {
 			if err := m.ensureCurrentUnchanged(*expected); err != nil {
+				return err
+			}
+		} else if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone && current.State.ID != state.ID {
+			return app.NewError(app.CategoryValidation, "task_already_exists", "a current task already exists; finish or archive it before starting a new one", nil)
+		} else if err != nil {
+			appErr := app.AsError(err)
+			if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
 				return err
 			}
 		}
