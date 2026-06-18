@@ -158,6 +158,13 @@ PRD, FRD и architecture должны ссылаться на один canonical
 - LLM может предлагать `next_signal`, findings или transition proposal, но применяет transition только application `TransitionGate`.
 - Stage policy and process policy outrank profile, task state JSON, memory, short history, prompt audit data and user text when conflicts occur.
 
+### UX hard gate: no internals as required workflow
+
+- Пользовательский happy path должен быть intent-driven: пользователь формулирует цель, а приложение само создаёт task, выбирает action, ведёт stage machine, обновляет current step и применяет валидные transitions.
+- Нельзя принимать сценарий, где пользователь обязан вручную дергать внутренности: `/task start`, `/task move`, `/task step`, `/task expect`, правки storage/JSON/files, прямые записи в memory/task state.
+- Такие команды могут оставаться только для inspect/recovery/debug/test, но не как обязательный путь выполнения Day acceptance.
+- Acceptance demo must prove agent-driven behavior, not operator-driven FSM manipulation.
+
 ### Day 11 acceptance remains mandatory
 
 - минимум три типа памяти;

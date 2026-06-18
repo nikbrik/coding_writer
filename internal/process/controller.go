@@ -87,6 +87,44 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			return nil, invErr
 		}
 	}
+	var autoTransition *TransitionResult
+	if taskPtr == nil && preflight.AutoStartTitle != "" {
+		if !input.RenderOnly {
+			started, err := c.Tasks.Start(preflight.AutoStartTitle)
+			if err != nil {
+				_ = c.saveAudit(sessionID, nil, "", action, "transition_failed", nil, "", app.StagePlanning, c.Model, auditError(err), auditTransitionReason(preflight.AutoReason))
+				return nil, err
+			}
+			autoTransition = &TransitionResult{Moved: true, From: "", To: started.Stage, Reason: preflight.AutoReason, State: started}
+			_ = c.saveAudit(sessionID, &started, "", action, "transitioned", nil, "", started.Stage, c.Model, auditTransitionReason(preflight.AutoReason))
+			taskPtr = &started
+		} else {
+			virtual := app.TaskState{Title: preflight.AutoStartTitle, Stage: app.StagePlanning, ExpectedAction: app.ExpectedUserInput}
+			taskPtr = &virtual
+		}
+		stage = taskPtr.Stage
+		action = ResolveActionKind(input.Input, stage, taskPtr.ExpectedAction)
+	}
+	if taskPtr != nil && preflight.AutoStage != "" {
+		from := taskPtr.Stage
+		if !input.RenderOnly {
+			moved, err := c.Tasks.Move(preflight.AutoStage)
+			if err != nil {
+				_ = c.saveAudit(sessionID, taskPtr, from, action, "transition_failed", nil, from, preflight.AutoStage, c.Model, auditError(err), auditTransitionReason(preflight.AutoReason))
+				return nil, err
+			}
+			autoTransition = &TransitionResult{Moved: true, From: from, To: moved.Stage, Reason: preflight.AutoReason, State: moved}
+			_ = c.saveAudit(sessionID, taskPtr, from, action, "transitioned", nil, from, moved.Stage, c.Model, auditTransitionReason(preflight.AutoReason))
+			taskPtr = &moved
+		} else {
+			virtual := *taskPtr
+			virtual.Stage = preflight.AutoStage
+			virtual.ExpectedAction = app.ExpectedUserInput
+			taskPtr = &virtual
+		}
+		stage = taskPtr.Stage
+		action = ResolveActionKind(input.Input, stage, taskPtr.ExpectedAction)
+	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.PendingPlanning != nil {
 		if isPlanningRejection(input.Input) {
 			state, err := c.Tasks.RejectPendingPlanningProposal()
@@ -175,6 +213,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		Model:          "",
 		Messages:       messages,
 		RenderedPrompt: rendered,
+		Transition:     autoTransition,
 	}
 
 	if input.RenderOnly {
@@ -491,9 +530,12 @@ func invariantAuditMessages(violations []app.InvariantViolation) []string {
 }
 
 type resolvedProcessState struct {
-	Task   *app.TaskState
-	Stage  app.TaskStage
-	Action ActionKind
+	Task           *app.TaskState
+	Stage          app.TaskStage
+	Action         ActionKind
+	AutoStartTitle string
+	AutoStage      app.TaskStage
+	AutoReason     string
 }
 
 func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedProcessState, error) {
@@ -527,8 +569,21 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 	if !action.Valid() {
 		return resolvedProcessState{}, app.NewError(app.CategoryValidation, "invalid_action", "invalid process action", nil)
 	}
+	autoStartTitle := ""
+	autoStage := app.TaskStage("")
+	autoReason := ""
+	if taskPtr == nil && action == ActionPlanTask {
+		autoStartTitle = taskTitleFromPlanningIntent(input.Input)
+		autoReason = "planning intent started task"
+		stage = app.StagePlanning
+	}
+	if taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionPlanTask {
+		autoStage = app.StagePlanning
+		autoReason = "planning intent requires planning stage"
+		stage = app.StagePlanning
+	}
 
-	if stage == "" && action != ActionAnswerQuestion {
+	if stage == "" && action != ActionAnswerQuestion && autoStartTitle == "" {
 		return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "missing_task", "no active task; start a task before process actions", "use /task start <title> to create a task", nil)
 	}
 
@@ -554,7 +609,20 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 			return resolvedProcessState{}, app.ErrorWithHint(app.CategoryValidation, "forbidden_action", "action is not allowed in current stage", string(action)+" is not allowed in "+string(stage), nil)
 		}
 	}
-	return resolvedProcessState{Task: taskPtr, Stage: stage, Action: action}, nil
+	return resolvedProcessState{Task: taskPtr, Stage: stage, Action: action, AutoStartTitle: autoStartTitle, AutoStage: autoStage, AutoReason: autoReason}, nil
+}
+
+func taskTitleFromPlanningIntent(input string) string {
+	title := strings.TrimSpace(input)
+	if title == "" {
+		return "Task"
+	}
+	const maxTitleRunes = 80
+	runes := []rune(title)
+	if len(runes) > maxTitleRunes {
+		return strings.TrimSpace(string(runes[:maxTitleRunes]))
+	}
+	return title
 }
 
 func isPausedTaskScopedInput(input string) bool {

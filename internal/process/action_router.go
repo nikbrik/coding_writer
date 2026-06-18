@@ -8,10 +8,13 @@ import (
 
 // ResolveActionKind maps user input and current stage to a deterministic ActionKind.
 func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.ExpectedAction) ActionKind {
+	normalized := strings.ToLower(strings.TrimSpace(input))
 	if stage == "" {
+		if isPlanningIntent(normalized) {
+			return ActionPlanTask
+		}
 		return ActionAnswerQuestion
 	}
-	normalized := strings.ToLower(strings.TrimSpace(input))
 	if expectedAction == app.ExpectedUserConfirmation && isConfirmation(normalized) {
 		if stage == app.StagePlanning || stage == app.StageExecution || stage == app.StageValidation {
 			return ActionProposeTransition
@@ -34,6 +37,9 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		}
 		return ActionAnswerQuestion
 	case app.StageExecution:
+		if isPlanningIntent(normalized) {
+			return ActionPlanTask
+		}
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}

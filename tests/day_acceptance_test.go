@@ -134,13 +134,20 @@ func TestDay12ProfilesChangePromptAndResponse(t *testing.T) {
 func TestDay13PauseResumeAfterRestartUsesWorkingMemory(t *testing.T) {
 	ctx := context.Background()
 	rt := newAcceptanceRuntime(t)
-	state, err := rt.tasks.Start("CLI assistant MVP")
+	ctrl := newProcessAcceptanceController(rt)
+	if _, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_plan", Input: "Спланируй задачу: реализовать MemoryManager"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_approve", Input: "Продолжай задачу"}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := rt.tasks.Current()
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, _ = rt.tasks.SetStep("реализовать MemoryManager")
-	state, _ = rt.tasks.SetExpectedAction(app.ExpectedLLMResponse)
-	state, _ = rt.tasks.Move(app.StageExecution)
+	if state.Stage != app.StageExecution || state.CurrentStep != "реализовать MemoryManager" || state.ExpectedAction != app.ExpectedLLMResponse {
+		t.Fatalf("agent flow did not enter execution with current step: %+v", state)
+	}
 	if _, err := rt.memory.Save(ctx, memory.SaveInput{Layer: app.LayerWork, Kind: "requirement", Content: "Acceptance: memory layers must be separate files", Source: "test", TaskID: state.ID}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +175,21 @@ func TestDay13PauseResumeAfterRestartUsesWorkingMemory(t *testing.T) {
 	res, _ := rt.provider.Complete(ctx, providers.CompletionRequest{Purpose: providers.PurposeChat, Model: "fake/model", Messages: messages})
 	if !strings.Contains(res.Message.Content, "продолжаю execution") {
 		t.Fatalf("fake provider did not see resumed execution: %s", res.Message.Content)
+	}
+	ctrl.Tasks = restartedTasks
+	ready, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_ready", Input: "Готово к проверке"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready.Transition == nil || ready.Transition.To != app.StageValidation {
+		t.Fatalf("agent flow did not enter validation: %+v", ready.Transition)
+	}
+	done, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_done", Input: "Проверь и заверши", TrustedEvidence: []string{process.NewTrustedEvidence("go version", 0, "go version test")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done.Transition == nil || done.Transition.To != app.StageDone {
+		t.Fatalf("agent flow did not finish with trusted evidence: %+v", done.Transition)
 	}
 }
 

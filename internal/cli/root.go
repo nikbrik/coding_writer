@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -322,6 +323,7 @@ type chatOptions struct {
 	Once         bool
 	Input        string
 	RenderPrompt bool
+	Verify       string
 }
 
 func chatCommand(opts *globalOptions) *cobra.Command {
@@ -332,6 +334,9 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if opts.JSON && !chatOpts.Once {
 				return app.ErrorWithHint(app.CategoryCLI, "json_repl_unsupported", "chat --json requires --once", "use --once for single-request JSON output", nil)
+			}
+			if strings.TrimSpace(chatOpts.Verify) != "" && !chatOpts.Once {
+				return app.ErrorWithHint(app.CategoryCLI, "verify_requires_once", "chat --verify requires --once", "use chat --once --verify <command> --input <text>", nil)
 			}
 			rt, err := newRuntime(cmd.Context(), opts)
 			if err != nil {
@@ -349,7 +354,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, !chatOpts.RenderPrompt)
+				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, !chatOpts.RenderPrompt, chatOpts.Verify)
 				if err != nil {
 					return err
 				}
@@ -373,6 +378,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
 	cmd.Flags().StringVar(&chatOpts.Input, "input", "", "input text for --once")
 	cmd.Flags().BoolVar(&chatOpts.RenderPrompt, "render-prompt", false, "render prompt without provider call")
+	cmd.Flags().StringVar(&chatOpts.Verify, "verify", "", "run verification command and pass trusted evidence to validation")
 	return cmd
 }
 
@@ -389,7 +395,7 @@ type chatResult struct {
 	Warnings         []string                  `json:"warnings,omitempty"`
 }
 
-func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool) (chatResult, error) {
+func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
 	if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -405,7 +411,11 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal})
+	trustedEvidence, err := runTrustedVerification(ctx, verifyCommand, renderOnly)
+	if err != nil {
+		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
+	}
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal, TrustedEvidence: trustedEvidence})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel, RenderedPromptID: app.NewID("prompt")}
 	if procResult != nil {
 		result.Answer = procResult.Answer
@@ -454,7 +464,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
-		result, err := runChatExchange(ctx, rt, sessionID, line, false, true)
+		result, err := runChatExchange(ctx, rt, sessionID, line, false, true, "")
 		if err != nil {
 			failed = true
 			printError(diag, err, false)
@@ -483,6 +493,27 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		return app.NewError(app.CategoryCLI, "batch_failed", "one or more non-interactive REPL commands failed", nil)
 	}
 	return nil
+}
+
+func runTrustedVerification(ctx context.Context, command string, renderOnly bool) ([]string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" || renderOnly {
+		return nil, nil
+	}
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+	output, err := cmd.CombinedOutput()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			return nil, app.NewError(app.CategoryCLI, "verification_failed", "verification command failed to run", err)
+		}
+	}
+	if exitCode != 0 {
+		return nil, app.NewError(app.CategoryValidation, "verification_failed", "verification command exited non-zero", nil)
+	}
+	return []string{process.NewTrustedEvidence(command, exitCode, string(output))}, nil
 }
 
 func isInteractiveReader(r io.Reader) bool {

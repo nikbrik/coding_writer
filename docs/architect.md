@@ -37,6 +37,14 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - LLM may propose signals, findings or transition readiness, but application code owns state mutation.
 - Deterministic process control must not bypass Day 11 memory proposal confirmation or Day 12 profile attachment.
 
+### UX hard gate: no internals exposed as required flow
+
+- User-facing demo and normal product flows MUST be intent-driven: the user states the goal, and application code creates tasks, picks `ActionKind`, advances stages, persists current step, and applies validated transitions.
+- Required manual control of internal state is forbidden. A feature is not accepted if the happy path requires commands such as `/task start`, `/task move`, `/task step`, `/task expect`, storage edits, raw JSON edits, direct memory file edits, or other implementation-detail manipulation.
+- Internal/debug/admin commands may exist only as optional inspection, recovery, or deterministic test helpers. They MUST NOT be the only way to complete a user-facing scenario.
+- Every Day 11/12/13/14 acceptance scenario MUST have a modern scriptable path using natural user intent plus explicit user confirmations where product semantics require them, for example memory apply or trusted verification evidence.
+- Tests and manual docs MUST fail/reject scenarios that prove only manual FSM manipulation instead of agent-driven behavior.
+
 ### Invariant control
 
 - `InvariantManager` owns `<storage_root>/invariants/project.jsonl`.

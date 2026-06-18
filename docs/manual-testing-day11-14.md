@@ -94,8 +94,6 @@ assistant chat
 Ввести в чате:
 
 ```text
-/task start Day11 memory demo
-/task move execution
 Спланируй модуль памяти. Требование текущей задачи: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: отвечай коротко на русском. Случайная фраза для игнорирования: сегодня на улице облачно.
 /memory propose
 /memory apply --accept all
@@ -108,6 +106,7 @@ assistant chat
 
 Что проговорить или выделить на записи:
 
+- первый обычный запрос сам создает задачу и переводит процесс в `planning`, без ручных `/task start` и `/task move`;
 - `/memory propose` показывает предложения, что сохранить;
 - `/memory apply --accept all` является явным применением памяти;
 - `/memory short` относится к текущему диалогу;
@@ -228,11 +227,9 @@ assistant chat
 Ввести в чате первую часть:
 
 ```text
-/task start Проверка конечного автомата
+Спланируй задачу: реализовать MemoryManager с сохранением состояния после перезапуска.
 /task status
-/task move execution
-/task step реализовать MemoryManager
-/task expect llm_response
+Продолжай задачу.
 /task status
 /task pause
 /task status
@@ -241,10 +238,10 @@ assistant chat
 
 Что должно быть видно перед перезапуском:
 
-- задача создана;
-- stage меняется с `planning` на `execution`;
-- `current_step` равен `реализовать MemoryManager`;
-- `expected_action` равен `llm_response`;
+- обычная фраза сама создает задачу и stage `planning`;
+- `Продолжай задачу` подтверждает готовый план и переводит stage в `execution`;
+- `current_step` берется из плана, без ручного `/task step`;
+- `expected_action` становится `llm_response`, без ручного `/task expect`;
 - после `/task pause` задача имеет paused status, но stage не теряется.
 
 Запустить CLI заново в том же terminal:
@@ -260,22 +257,30 @@ assistant chat
 /task resume
 /task status
 Продолжай задачу. Не проси заново объяснить контекст.
-/task move validation
+Готово к проверке.
 /task pause
 /task status
 /task resume
-/task move done
 /task status
 /exit
+```
+
+Показать завершение с trusted verification evidence вне REPL:
+
+```bash
+assistant chat --once --verify "go version" --input "Проверь и заверши" --json
+assistant task status
 ```
 
 Что проговорить или выделить на записи:
 
 - после нового запуска состояние восстановилось из storage;
 - `/task resume` возвращает задачу в active state;
-- ассистент продолжает задачу без повторного описания;
-- stage проходит `execution -> validation -> done`;
+- ассистент продолжает задачу без повторного описания после restart;
+- `Готово к проверке` переводит stage `execution -> validation`, без ручного `/task move validation`;
 - pause/resume работает не только в `execution`, но и в `validation`;
+- `--verify` запускает проверочную команду и передает trusted evidence, после чего validation gate сам переводит `validation -> done`;
+- ручного `/task move done` в сценарии нет;
 - финальный `/task status` показывает `done` и `expected_action: none`.
 
 Финальная проверка вне REPL:

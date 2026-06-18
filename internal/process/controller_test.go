@@ -347,6 +347,52 @@ func TestProcessControllerPersistsPendingPlanningAndApprovesAfterRestart(t *test
 	}
 }
 
+func TestProcessControllerAutoMovesExecutionPlanningIntent(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй модуль памяти"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || !res.Transition.Moved || res.Transition.From != app.StageExecution || res.Transition.To != app.StagePlanning {
+		t.Fatalf("expected automatic execution->planning transition: %+v", res.Transition)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StagePlanning || current.PendingPlanning == nil {
+		t.Fatalf("planning intent did not leave task in planning with pending proposal: %+v", current)
+	}
+}
+
+func TestProcessControllerAutoStartsPlanningIntent(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй модуль памяти"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || !res.Transition.Moved || res.Transition.From != "" || res.Transition.To != app.StagePlanning {
+		t.Fatalf("expected automatic task start into planning: %+v", res.Transition)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StagePlanning || current.PendingPlanning == nil {
+		t.Fatalf("planning intent did not start planning task with pending proposal: %+v", current)
+	}
+}
+
 func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

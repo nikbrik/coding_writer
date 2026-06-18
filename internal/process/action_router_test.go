@@ -13,10 +13,24 @@ func TestResolveActionKindExecutionQuestionIsAnswerQuestion(t *testing.T) {
 	}
 }
 
+func TestResolveActionKindNoTaskPlanningIntentPlansTask(t *testing.T) {
+	got := ResolveActionKind("спланируй модуль памяти", "", "")
+	if got != ActionPlanTask {
+		t.Fatalf("want plan_task, got %s", got)
+	}
+}
+
 func TestResolveActionKindExecutionDefaultExecutesStep(t *testing.T) {
 	got := ResolveActionKind("реализуй шаг", app.StageExecution, app.ExpectedLLMResponse)
 	if got != ActionExecutePlanStep {
 		t.Fatalf("want execute_plan_step, got %s", got)
+	}
+}
+
+func TestResolveActionKindExecutionPlanningIntentPlansTask(t *testing.T) {
+	got := ResolveActionKind("спланируй модуль памяти", app.StageExecution, app.ExpectedLLMResponse)
+	if got != ActionPlanTask {
+		t.Fatalf("want plan_task, got %s", got)
 	}
 }
 

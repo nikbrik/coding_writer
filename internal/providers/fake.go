@@ -142,10 +142,19 @@ func defaultStructuredChatAnswer(prompt string) string {
 	lower := strings.ToLower(prompt)
 	switch {
 	case strings.Contains(lower, "current stage: planning"):
+		if strings.Contains(lower, "реализовать memorymanager") || strings.Contains(lower, "memorymanager") {
+			return `{"stage":"planning","summary":"реализовать MemoryManager","assumptions":[],"acceptance_criteria":["task state persists across restart"],"plan":["реализовать MemoryManager"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
 		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"needs_user_input"}`
 	case strings.Contains(lower, "current stage: execution"):
+		if strings.Contains(lower, "готово к проверке") || strings.Contains(lower, "ready for validation") {
+			return `{"stage":"execution","summary":"fake execution ready for validation","current_step":"proposed step","completed_steps":["proposed step"],"next_step":"","changed_artifacts":["internal/memory/manager.go"],"verification":["not run"],"blockers":[],"next_signal":"ready_for_validation"}`
+		}
 		return `{"stage":"execution","summary":"fake execution response","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
 	case strings.Contains(lower, "current stage: validation"):
+		if strings.Contains(lower, "проверь и заверши") || strings.Contains(lower, "verify and finish") {
+			return `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+		}
 		return `{"stage":"validation","findings":[],"passed_checks":[],"missing_evidence":["no tool evidence provided"],"residual_risks":[],"verdict":"blocked_missing_evidence"}`
 	case strings.Contains(lower, "current stage: done"):
 		return `{"stage":"done","summary":"fake done response","acceptance_status":[],"validation_evidence":[],"follow_up_task_proposals":[]}`

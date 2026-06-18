@@ -94,11 +94,14 @@ func TestCLIP0DayFlowsUseScriptableCommands(t *testing.T) {
 		return parsed
 	}
 
-	runJSON("task", "start", "CLI assistant MVP")
 	chat := runJSON("chat", "--once", "--input", "Спланируй модуль памяти. Требование: CLI должен поддерживать выбор модели OpenRouter. Я предпочитаю короткие ответы на русском.")
 	proposal, ok := chat["proposal"].(map[string]any)
 	if !ok || proposal["id"] == "" || chat["rendered_prompt"] != nil || chat["rendered_prompt_id"] == nil {
 		t.Fatalf("bad chat/proposal JSON: %+v", chat)
+	}
+	transition, ok := chat["transition"].(map[string]any)
+	if !ok || transition["To"] != "planning" {
+		t.Fatalf("chat did not auto-start Day 11 planning task: %+v", chat)
 	}
 	proposalID := proposal["id"].(string)
 	apply := runJSON("memory", "apply", "--proposal", proposalID, "--accept", "all")
@@ -126,6 +129,52 @@ func TestCLIP0DayFlowsUseScriptableCommands(t *testing.T) {
 	resumed := runJSON("task", "resume")
 	if !strings.Contains(fmt.Sprint(resumed["task"]), "реализовать MemoryManager") || !strings.Contains(fmt.Sprint(resumed["task"]), "llm_response") {
 		t.Fatalf("resume did not preserve Day 13 state: %+v", resumed)
+	}
+}
+
+func TestCLIDay13AgentDrivenFSM(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	runJSON := func(args ...string) map[string]any {
+		t.Helper()
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		base := []string{"--storage-dir", storageDir, "--model", "fake/model", "--json"}
+		cmd.SetArgs(append(base, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v output=%s", args, err, out.String())
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+			t.Fatalf("bad JSON for %v: %v output=%s", args, err, out.String())
+		}
+		return parsed
+	}
+
+	plan := runJSON("chat", "--once", "--input", "Спланируй задачу: реализовать MemoryManager")
+	if transition, _ := plan["transition"].(map[string]any); transition["To"] != "planning" {
+		t.Fatalf("planning intent did not auto-start task: %+v", plan)
+	}
+	approve := runJSON("chat", "--once", "--input", "Продолжай задачу")
+	if transition, _ := approve["transition"].(map[string]any); transition["To"] != "execution" {
+		t.Fatalf("approval did not auto-enter execution: %+v", approve)
+	}
+	ready := runJSON("chat", "--once", "--input", "Готово к проверке")
+	if transition, _ := ready["transition"].(map[string]any); transition["To"] != "validation" {
+		t.Fatalf("execution did not auto-enter validation: %+v", ready)
+	}
+	done := runJSON("chat", "--once", "--verify", "go version", "--input", "Проверь и заверши")
+	if transition, _ := done["transition"].(map[string]any); transition["To"] != "done" {
+		t.Fatalf("trusted validation did not auto-finish task: %+v", done)
+	}
+}
+
+func TestChatVerifyRequiresOnce(t *testing.T) {
+	cmd := newRootCommand(&globalOptions{})
+	cmd.SetArgs([]string{"chat", "--verify", "go version"})
+	if err := cmd.Execute(); err == nil || app.AsError(err).Code != "verify_requires_once" {
+		t.Fatalf("want verify_requires_once, got %v", err)
 	}
 }
 
@@ -570,7 +619,7 @@ func TestClassifierFailureFailsClosed(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, true)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, true, "")
 	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
 		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
 	}
@@ -584,7 +633,7 @@ func TestChatOnceJSONFailsWhenClassifierFails(t *testing.T) {
 	}
 	rt.Provider = providers.NewFakeProvider()
 	rt.Provider.(*providers.FakeProvider).ClassifierResponse = `not-json`
-	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail_json", "hello", false, true)
+	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail_json", "hello", false, true, "")
 	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
 		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
 	}
@@ -985,7 +1034,7 @@ func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, false)
+	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, false, "")
 	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret_blocked, got %v", err)
 	}

@@ -123,6 +123,14 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - `ProcessController` and `TransitionGate` own hard gates, output acceptance and state transitions.
 - This contract extends Day 13 behavior but must not bypass Day 11 classifier/proposal/user-confirmation flow or Day 12 profile-in-every-prompt flow.
 
+#### UX hard requirements: no internal-state choreography
+
+- Normal user flows MUST NOT require manual orchestration of internal state. The product must infer intent and drive task lifecycle through application code.
+- The happy path for task work MUST NOT require `/task start`, `/task move`, `/task step`, `/task expect`, manual storage edits, direct JSON edits, or direct writes to memory/task/invariant files.
+- Slash/top-level commands for task state are allowed only for optional inspection, explicit pause/resume, recovery, debugging, and deterministic tests. They are not valid substitutes for agent-driven behavior in acceptance demos.
+- If a scenario needs a user decision, the CLI must expose it as product semantics, not internals. Examples: memory proposal apply/reject, planning approval, pause/resume, and trusted verification via `--verify`.
+- Any new feature that exposes implementation details as required user steps is rejected until it has an intent-driven flow and regression coverage.
+
 #### Invariant contract
 
 - active invariants are stored in `<storage_root>/invariants/project.jsonl`, not in session dialogue;
