@@ -4,6 +4,8 @@
 
 Ключевой принцип: `day11.md`, `day12.md`, `day13.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи.
 
+Текущее состояние кода на 2026-06-18: базовый MVP и deterministic process-control loop уже реализованы. Этот документ теперь совмещает исходный implementation plan, фактический status snapshot и regression checklist. Новые изменения должны сохранять текущий контракт, а не начинать проект с нуля.
+
 ## 1. Итоговая цель проекта
 
 Нужно реализовать минимальный stateful CLI code assistant на Go, который:
@@ -141,26 +143,26 @@ ignore: proposal/audit only, never physical memory layer
 
 Правила:
 
-- profile/memory/task/transcript/classifier output являются untrusted data;
+- profile/memory/task/short_history/classifier output являются untrusted data;
 - они должны рендериться как quoted/tagged data, а не как инструкции;
 - canonical prompt block содержит `id`, `type`, `source`, `trust`, escaped content и стабильный ordering;
 - system/application/security policy всегда выше сохранённого контекста;
-- stage policy выше profile/memory/task/transcript data, но не удаляет profile block;
+- stage policy выше profile/memory/task/short_history data, но не удаляет profile block;
 - LLM должна знать текущий этап: planner в `planning`, implementer в `execution`, reviewer/QA в `validation`, terminal summarizer в `done`;
 - LLM может предложить process signal, но task transition применяет только приложение;
 - PromptBuilder не пишет файлы и не вызывает provider.
 
 ## 4. Текущая стартовая точка репозитория
 
-Сейчас в репозитории нет Go implementation skeleton:
+Репозиторий уже содержит working Go implementation:
 
-- нет `go.mod`;
-- нет `cmd/assistant/main.go`;
-- нет `internal/*` packages;
-- `.gitignore` пока не содержит `.assistant/`, что нужно только для demo/test storage opt-in;
-- есть документация и планы в `docs/*`, `.kilo/plans/*`.
+- `go.mod` с module `github.com/nikbrik/coding_writer` и dependency `github.com/spf13/cobra`;
+- entrypoint `cmd/assistant/main.go`;
+- packages `internal/app`, `internal/cli`, `internal/providers`, `internal/memory`, `internal/profiles`, `internal/tasks`, `internal/prompting`, `internal/process`, `internal/storage`, `internal/validation`;
+- acceptance tests in `tests/day_acceptance_test.go` and `tests/process_acceptance_test.go`;
+- `.assistant/` используется как repo-local demo/test storage opt-in and must stay gitignored.
 
-Следовательно, реализация стартует как новый Go CLI проект внутри текущего репозитория.
+Следовательно, дальнейшая работа начинается не с bootstrap, а с поддержания и расширения существующего CLI assistant.
 
 ## 5. Целевой стек
 
@@ -181,7 +183,7 @@ ignore: proposal/audit only, never physical memory layer
 - memory/profile/task contracts хорошо ложатся на typed structs;
 - файловое JSON/JSONL storage прозрачно для учебной проверки.
 
-## 6. Целевая структура файлов
+## 6. Текущая структура файлов
 
 ```text
 go.mod
@@ -191,86 +193,80 @@ cmd/assistant/
   main.go
 
 internal/app/
-  app.go
   config.go
   errors.go
+  id.go
   models.go
-  runtime.go
 
 internal/cli/
   root.go
-  chat.go
-  slash.go
-  commands.go
-  profiles.go
-  memory.go
-  tasks.go
-  model.go
-  output.go
 
 internal/providers/
   provider.go
   openrouter.go
   fake.go
-  errors.go
 
 internal/storage/
-  paths.go
   safe_path.go
-  atomic.go
   json.go
   jsonl.go
-  locks.go
+  errors.go
+  file_lock_unix.go
+  file_lock_unsupported.go
 
 internal/memory/
   manager.go
   classifier.go
   proposal_store.go
-  short_term.go
-  working.go
-  long_term.go
-  selector.go
-  commands.go
+  paths.go
 
 internal/profiles/
   manager.go
   render.go
   defaults.go
-  validate.go
 
 internal/tasks/
   manager.go
   state_machine.go
   render.go
-  validate.go
 
 internal/prompting/
   builder.go
-  templates.go
-  render.go
 
 internal/validation/
-  invariants.go
-  redaction.go
+  escape.go
   secrets.go
-  prompt_injection.go
 
-internal/testutil/
-  temp_storage.go
-  fixtures.go
-  fake_provider.go
+internal/process/
+  action_kind.go
+  action_router.go
+  audit_event.go
+  audit_store.go
+  controller.go
+  execution_validator.go
+  planning_validator.go
+  validation_validator.go
+  done_validator.go
+  permission.go
+  prompt_build_input.go
+  response_parser.go
+  retry_controller.go
+  result.go
+  stage_policy.go
+  stage_policy_registry.go
+  stage_prompt_factory.go
+  transition_gate.go
+  validator_runner.go
 
 tests/
-  smoke_test.go
-  day11_acceptance_test.go
-  day12_acceptance_test.go
-  day13_acceptance_test.go
+  day_acceptance_test.go
+  process_acceptance_test.go
 ```
 
 Примечание по тестам:
 
 - unit tests можно размещать рядом с packages;
-- `tests/*` оставить для end-to-end и acceptance-style tests через CLI app layer;
+- `tests/*` содержит end-to-end/acceptance-style tests for Day 11/12/13 and process control;
 - fake provider должен позволять проверить behavior без live API key.
 
 ## 7. Runtime storage layout
@@ -286,8 +282,9 @@ Default storage root для normal mode: OS user-data directory с `0700` direct
   sessions/
     <session_id>/
       short_term.jsonl
-      transcript.md
       memory_proposals.jsonl
+      prompts.jsonl       # only when prompt audit env is enabled
+      .last_activity
   tasks/
     current.json
     <task_id>.json
@@ -299,8 +296,9 @@ Default storage root для normal mode: OS user-data directory с `0700` direct
     knowledge.jsonl
     constraints.jsonl
   logs/
-    app.log
 ```
+
+Current note: P0 does not write `transcript.md`; `logs/` exists for extension, but no `app.log` writer is implemented.
 
 Storage rules:
 
@@ -488,7 +486,7 @@ CLI flags > env vars > config file > defaults
 API key rule:
 
 - `OPENROUTER_API_KEY` env-only for MVP;
-- no key in config/profile/memory/transcript/audit/logs.
+- no key in config/profile/memory/provider payload records/audit/logs; raw transcripts are not written in P0.
 
 Field-level config contract:
 
@@ -501,7 +499,7 @@ Field-level config contract:
 | Active profile | `--profile` | `ASSISTANT_PROFILE` | `active_profile_id` | first profile | yes | yes |
 | OpenRouter base URL | `--openrouter-base-url` | `ASSISTANT_OPENROUTER_BASE_URL` | `openrouter_base_url` | OpenRouter HTTPS endpoint | yes, explicit opt-in | no |
 | JSON output | `--json` | none | none | false | never | yes |
-| Non-interactive | `--once` / `--non-interactive` | none | none | false | never | yes |
+| Non-interactive chat | `chat --once` | none | none | false | never | yes |
 
 Exit codes:
 
@@ -517,20 +515,34 @@ Exit codes:
 
 ## 9. CLI command contract
 
+Current command surface is implemented in `internal/cli/root.go`.
+
 ### 9.1. Top-level commands
 
 ```text
 assistant init
 assistant chat
 assistant chat --once --input <text> --json
+assistant chat --once --render-prompt --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
-assistant profiles
-assistant memory
+assistant profiles [list]
+assistant profiles show [id]
+assistant profiles set <id>
+assistant profiles create <id> [--display-name <name>] [--style k=v] [--format k=v] [--constraint <text>]
 assistant memory list <short|work|long> --json
 assistant memory propose --latest --json
 assistant memory apply --proposal <id> --accept all --json
+assistant memory proposals [--session <id>] --json
+assistant task start <title> --json
 assistant task status --json
+assistant task move <stage> --json
+assistant task step <text> --json
+assistant task expect <action> --json
+assistant task pause --json
+assistant task resume --json
+assistant process audit [--latest|--limit <n>] --json
 assistant privacy
+assistant privacy purge --audit [--transcripts] --yes
 ```
 
 P0 must be scriptable:
@@ -553,6 +565,8 @@ P0 must be scriptable:
 /task step <text>
 /task expect <action>
 /task move <stage>
+/task plan <text>
+/task criteria <text>
 /task pause
 /task resume
 /save short <text>
@@ -563,12 +577,13 @@ P0 must be scriptable:
 /memory short
 /memory work
 /memory long
+/process audit
 /privacy
 /clear short
 /exit
 ```
 
-P1/debug only unless all docs/tests adopt them: `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage`, and broader `assistant task` subcommands other than `assistant task status --json`.
+Current boundary: slash `/task plan` and `/task criteria` are implemented. `/task decision`, `/task done`, `/task stage`, and top-level `assistant task plan|criteria|decision|done|stage` are not implemented.
 
 Memory apply scriptable syntax:
 
@@ -587,25 +602,43 @@ Parsing rules:
 
 ## 10. Реализация по фазам
 
+Status on 2026-06-18:
+
+| Area | Current status |
+| --- | --- |
+| Bootstrap, Cobra CLI, `go.mod`, `.assistant/` hygiene | Implemented |
+| Config/storage permissions/safe paths/atomic JSON/locked JSONL | Implemented |
+| OpenRouter provider, fake provider, model validation, retries/timeouts | Implemented |
+| Default profiles, profile CRUD, active profile in prompt | Implemented |
+| Task FSM, allowed transitions, pause/resume, top-level task commands | Implemented |
+| Memory layers, classifier, proposal store, apply accept/reject/edit, audit | Implemented |
+| Prompt builder, untrusted context blocks, rendered prompt inspection | Implemented |
+| ProcessController, stage policies, validators, retry, TransitionGate, audit | Implemented |
+| Acceptance tests for Day 11/12/13 and process control | Implemented |
+
+The detailed phase list below is kept as a regression checklist. Items phrased as "implement" are historical tasks unless a current gap is explicitly noted.
+
 ### Фаза 0. Contract freeze и bootstrap hygiene
 
-Цель: перед кодом зафиксировать неизменяемые semantics и не начать с конфликтующего контракта.
+Статус: completed.
 
-Действия:
+Цель: зафиксировать неизменяемые semantics и не начать с конфликтующего контракта.
+
+Фактически выполнено:
 
 - зафиксировать в implementation constants canonical values из раздела 3;
 - не добавлять `status=done`;
 - не добавлять physical `ignore` layer;
 - решить, что OS user-data directory является normal default storage;
-- оставить `.assistant/` только как demo/test opt-in и добавить его в `.gitignore`;
-- создать `go.mod` с module name, например `coding-writer-assistant` или согласованным именем repo;
+- оставить `.assistant/` только как demo/test opt-in и держать его в `.gitignore`;
+- создать `go.mod` с module `github.com/nikbrik/coding_writer`;
 - добавить `cmd/assistant/main.go`;
-- добавить пустые package directories только когда появляются реальные файлы;
+- добавлять package directories только с реальными файлами;
 - настроить `go test ./...` как базовую проверку.
 
 Done criteria:
 
-- `go test ./...` проходит на пустом skeleton;
+- `go test ./...` проходит на текущем implementation;
 - `.assistant/` игнорируется git для demo/test opt-in;
 - `assistant --help` запускается.
 
@@ -764,13 +797,13 @@ Done criteria:
 - реализовать `Move(nextStage)` с `AllowedTransitions`;
 - реализовать `SetStep(text)`;
 - реализовать `SetExpectedAction(action)`;
-- `AddPlanItem`, `AddCriteria`, `AddDecision` оставить P1/debug до включения в canonical command matrix;
+- `AddPlanItem` и `AddCriteria` реализованы для REPL slash commands; `AddDecision` не exposed in current command surface;
 - реализовать `Pause()`;
 - реализовать `Resume()`;
 - реализовать `Current()`;
 - реализовать task prompt render block;
 - реализовать P0: `/task start`, `/task status`, `/task move`, `/task step`, `/task expect`, `/task pause`, `/task resume`;
-- `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage` не реализовывать в P0 без обновления command matrix;
+- slash `/task plan` and `/task criteria` are implemented; `/task decision`, `/task done`, `/task stage` stay out of current command surface;
 - forbid state mutation when current task is paused except `/task resume` and local metadata inspection;
 - preserve state across process restart.
 
@@ -896,7 +929,7 @@ Done criteria:
 - поддержать `assistant chat --profile <id> --model <id>`;
 - поддержать `assistant chat --once --input <text> --json` для smoke tests;
 - session id создавать при старте chat;
-- transcript optional для P0, но если пишется, должен быть local-only и без secrets.
+- raw transcript is not written in current P0; prompt audit is optional and must stay local-only and secret-redacted/minimized by default.
 
 Tests:
 
@@ -975,8 +1008,8 @@ Done criteria:
 - blocked не сохранять;
 - status каждого record обновлять в audit;
 - layer mismatch между proposal и saved record должен быть невозможен без explicit edit status;
-- audit по умолчанию хранит minimized/redacted content; raw proposal/transcript retention только opt-in;
-- добавить purge/retention behavior для audit/transcripts.
+- audit по умолчанию хранит minimized/redacted content; raw prompt/proposal retention только opt-in;
+- добавить purge/retention behavior для audit/prompt audit files.
 
 Tests:
 
@@ -1011,7 +1044,7 @@ Done criteria:
 - block raw secret in audit content;
 - add canonical prompt-injection tagging/escaping for untrusted blocks;
 - add first-run provider disclosure and `assistant privacy` summary;
-- default audit/transcript retention to minimized/redacted data with raw opt-in and purge behavior;
+- default audit/prompt-audit retention to minimized/redacted data with raw opt-in and purge behavior;
 - detect profile/user conflict minimally;
 - ensure paused task gate before execution-like continuation;
 - ensure no silent long-term write.
@@ -1030,7 +1063,7 @@ Tests:
 
 Done criteria:
 
-- secrets do not appear in storage root, provider payload records, audit, logs, transcripts, or memory files;
+- secrets do not appear in storage root, provider payload records, audit, logs, prompt audit, or memory files;
 - blocked proposal records visible as blocked without raw secret;
 - paused task не продолжает execution without resume.
 
@@ -1323,7 +1356,7 @@ Expected:
 
 ### 13.4. Security/privacy tests
 
-- no `OPENROUTER_API_KEY` in config/profiles/memory/transcript/audit/logs;
+- no `OPENROUTER_API_KEY` in config/profiles/memory/provider payload records/audit/logs; raw transcripts are not written in P0;
 - bearer token blocked;
 - `sk-...` token blocked/redacted;
 - prompt-injection text in memory/profile is tagged as data;

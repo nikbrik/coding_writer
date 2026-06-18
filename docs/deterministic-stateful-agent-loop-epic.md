@@ -2,34 +2,33 @@
 
 ## Summary
 
-Сейчас приложение детерминированно хранит `TaskState` и валидирует переходы между `stage`, но не гарантирует, что LLM-ответ соответствует текущему этапу процесса. Этот epic описывает разработку deterministic process controller: приложение должно выбирать разрешённое действие, собирать stage-specific system prompt, вызывать LLM как исполнителя внутри узкой роли, валидировать ответ, ретраить исправление или блокировать отклонение.
+Текущий код уже реализует deterministic process controller поверх `TaskState`: приложение выбирает разрешённое действие, собирает stage-specific system prompt, вызывает LLM как исполнителя внутри узкой роли, валидирует ответ, ретраит исправление или блокирует отклонение. Этот epic теперь служит design/regression reference для уже реализованного loop.
 
 Главный принцип: LLM не является владельцем процесса. LLM генерирует candidate output. Приложение владеет stage, allowed actions, prompt policy, output schema, validation, transition gate и audit trail.
 
 ## Problem
 
-Текущий Day 13 закрывает базовую task state machine:
+Базовая task state machine реализована:
 
-- `TaskManager` хранит `stage`, `status`, `current_step`, `expected_action`.
+- `TaskManager` хранит `stage`, `status`, `current_step`, `completed_steps`, `expected_action`, `pending_planning`, `last_session_id`.
 - `state_machine.go` хранит allowed transitions.
 - `/task move`, `/task pause`, `/task resume`, `/task step`, `/task expect` меняют state через deterministic code path.
 - `PromptBuilder` добавляет `task.current` в prompt.
 
-Но текущий chat loop не гарантирует process compliance:
+Process compliance gaps below are closed in current code:
 
-- LLM может в `planning` начать implementation.
-- LLM может в `validation` добавлять новые features вместо review.
-- LLM может игнорировать `paused_warning`.
-- LLM может предложить переход stage без deterministic gate.
-- LLM output сохраняется в short memory до stage compliance validation.
-- Нет stage-specific prompt role.
-- Нет post-response validator.
-- Нет retry/correction loop.
-- Нет audit trail для stage decisions.
+- `PlanningValidator` rejects implementation claims in `planning`.
+- `ValidationValidator` rejects fixes/new features and blocks `ready_for_done` without evidence.
+- `ProcessController` blocks task-scoped paused requests before provider call.
+- `TransitionGate` owns chat-driven transitions.
+- Rejected output is not saved as accepted short memory.
+- `StagePromptFactory` injects stage-specific trusted roles.
+- `ResponseParser`, validators and `RetryController` run after provider response.
+- `AuditStore` writes `process_audit.jsonl` events for provider calls, retries, rejections and transitions.
 
 ## Goal
 
-Сделать приложение process-deterministic: для каждого user request приложение должно детерминированно определить текущий task stage, разрешённое действие, trusted stage policy, prompt contract, output schema, validation rules и допустимые state transitions.
+Поддерживать приложение process-deterministic: для каждого user request приложение детерминированно определяет текущий task stage, разрешённое действие, trusted stage policy, prompt contract, output schema, validation rules и допустимые state transitions.
 
 Результат LLM может оставаться probabilistic по формулировкам, но процесс должен быть deterministic: нельзя перейти в запрещённый stage, нельзя принять output, нарушающий текущий stage contract, нельзя продолжить paused task, нельзя сохранить invalid assistant response как нормальный успешный шаг.
 
@@ -72,7 +71,7 @@ Day 13 non-regression:
 
 ## Determinism Owner
 
-Детерминированность процесса должен гарантировать новый application-level слой: `ProcessController`.
+Детерминированность процесса гарантирует application-level слой: `ProcessController`.
 
 Ответственность `ProcessController`:
 
@@ -105,7 +104,7 @@ Supporting deterministic components:
 
 ## Current vs Target Flow
 
-Current flow:
+Pre-controller historical flow:
 
 ```text
 user input
@@ -116,7 +115,7 @@ user input
 -> memory classifier proposal
 ```
 
-Target flow:
+Current implemented flow:
 
 ```text
 user input
@@ -569,6 +568,8 @@ Audit event schema:
 ```
 
 ## Implementation Plan
+
+Current implementation status on 2026-06-18: phases 1-9 are implemented in `internal/process`, `internal/prompting`, `internal/cli`, and tests. The phase list remains as regression checklist and extension map.
 
 ### Phase 1: Policy and Types
 

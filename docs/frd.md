@@ -28,6 +28,13 @@ MVP должен реализовать:
 - stage-aware prompt contract: LLM получает текущий этап, роль этапа, allowed actions и forbidden actions;
 - pause/resume задачи без повторного объяснения контекста.
 
+Текущее состояние реализации на 2026-06-18:
+
+- Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, deterministic process controller, validators, transition gate, audit store.
+- Default storage root: `os.UserConfigDir()/coding-writer-assistant`; repo-local `.assistant/` используется только через explicit `--storage-dir` или `ASSISTANT_STORAGE_DIR`.
+- Acceptance flow проверяется fake provider tests: `TestDay11EndToEndMemoryProposalApplyInfluence`, `TestDay12ProfilesChangePromptAndResponse`, `TestDay13PauseResumeAfterRestartUsesWorkingMemory`.
+- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition and rejected-output no-persistence.
+
 MVP не должен реализовывать:
 
 - автоматическое редактирование файлов проекта;
@@ -120,23 +127,25 @@ FRD is source of truth for the implementation contract together with PRD and arc
 
 - CLI проверяет наличие runtime storage;
 - CLI создаёт runtime storage, если его нет;
-- CLI проверяет наличие активного профиля;
-- CLI запускает создание профиля, если профилей нет;
 - CLI проверяет наличие выбранной модели;
-- CLI предлагает выбрать или ввести модель, если модель не задана.
+- `assistant init` требует model id через `--model` или `ASSISTANT_MODEL`;
+- `assistant init` валидирует model id через provider и сохраняет config;
+- CLI создаёт default profiles `student` и `senior`, если профилей нет;
+- активный профиль по умолчанию `student`, если другой не задан через config/env/flag.
 
 MVP policy:
 
 - default config/storage root must be documented explicitly;
 - env vars override config;
 - hidden input or local key file is not part of P0 API key flow;
-- first run must show provider data-disclosure before any OpenRouter call.
+- first run must show provider data-disclosure before any OpenRouter call;
+- interactive model/profile interview is not implemented; current flow is scriptable commands and default profiles.
 
 Acceptance criteria:
 
 - запуск без existing storage root не падает;
-- после `assistant init` появляется `config.json`;
-- после `assistant init` появляется минимум один profile JSON;
+- `assistant init --model <id>` создаёт `config.json`;
+- `assistant init --model <id>` создаёт default profiles `student` и `senior`;
 - API key не записывается в `config.json`.
 
 ### FR-002. OpenRouter API key
@@ -147,7 +156,7 @@ Acceptance criteria:
 
 - CLI читает `OPENROUTER_API_KEY` из environment;
 - если ключ отсутствует, CLI сообщает пользователю, что ключ нужен;
-- ключ не должен сохраняться в docs, profiles, memory files, transcripts, audit trail или config;
+- ключ не должен сохраняться в docs, profiles, memory files, prompt audit, audit trail или config;
 - chat и classifier payload проходят локальный pre-provider secret scan до отправки;
 - при 401/403 CLI показывает понятную ошибку.
 
@@ -274,7 +283,7 @@ Acceptance criteria:
 
 Security rule:
 
-- prompt blocks from profile/memory/task/transcript/classifier are untrusted data and must be serialized/quoted/tagged as such.
+- prompt blocks from profile/memory/task/short_history/classifier are untrusted data and must be serialized/quoted/tagged as such.
 
 Acceptance criteria:
 
@@ -854,14 +863,26 @@ Traceability rule:
 assistant init
 assistant chat
 assistant chat --once --input <text> --json
+assistant chat --once --render-prompt --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
-assistant profiles
-assistant memory
+assistant profiles [list]
+assistant profiles show [id]
+assistant profiles set <id>
+assistant profiles create <id> [--display-name <name>] [--style k=v] [--format k=v] [--constraint <text>]
 assistant memory list <short|work|long> --json
 assistant memory propose --latest --json
 assistant memory apply --proposal <id> --accept all --json
+assistant memory proposals [--session <id>] --json
+assistant task start <title> --json
 assistant task status --json
+assistant task move <stage> --json
+assistant task step <text> --json
+assistant task expect <action> --json
+assistant task pause --json
+assistant task resume --json
+assistant process audit [--latest|--limit <n>] --json
 assistant privacy
+assistant privacy purge --audit [--transcripts] --yes
 ```
 
 Обязательные команды внутри chat:
@@ -876,6 +897,8 @@ assistant privacy
 /task step <text>
 /task expect <action>
 /task move <stage>
+/task plan <text>
+/task criteria <text>
 /task pause
 /task resume
 /save short <text>
@@ -886,6 +909,7 @@ assistant privacy
 /memory short
 /memory work
 /memory long
+/process audit
 /privacy
 /clear short
 /exit
@@ -896,16 +920,18 @@ Canonical P0 automation matrix:
 | Flow | P0 command/protocol | Output | Calls OpenRouter |
 | --- | --- | --- | --- |
 | One-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
+| Render prompt | `assistant chat --once --render-prompt --input <text> --json` | JSON rendered prompt, messages, prompt id | no |
 | Render/inspect memory | `assistant memory list <short|work|long> --json` | JSON records | no |
 | Propose memory | `assistant memory propose --latest --json` | JSON proposal with proposal id and record ids | classifier only |
 | Apply memory | `assistant memory apply --proposal <id> --accept all --json` | JSON apply result | no |
 | Reject memory record | `assistant memory apply --proposal <id> --reject <record_id> --json` | JSON apply result | no |
 | Edit memory record | `assistant memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json` | JSON apply result | no |
-| Task status | `assistant task status --json` or `/task status` | JSON/task text | no |
+| Task lifecycle | `assistant task start|status|move|step|expect|pause|resume ... --json` or matching slash commands | JSON/task text | no |
 | Profile switch | `assistant chat --profile <id> ...` or `/profile <id>` | active profile summary | no |
 | Privacy summary | `assistant privacy` or `/privacy` | provider/storage disclosure | no |
+| Process audit | `assistant process audit --latest --json` or `/process audit` | JSON/process event text | no |
 
-P1/debug commands such as `/task plan`, `/task criteria`, `/task decision`, `/task done`, `/task stage`, and top-level `assistant task` subcommands other than `assistant task status --json` are not required for P0 unless all docs and tests explicitly adopt them.
+Current command boundary: slash `/task plan` and `/task criteria` are implemented REPL conveniences. `/task decision`, `/task done`, `/task stage`, and top-level `assistant task plan|criteria|decision|done|stage` are not implemented in current code.
 
 ## 6.1. Config, env, flags, and exit codes
 
@@ -920,7 +946,14 @@ Field-level precedence is `CLI flag > env var > config file > default`, except s
 | Active profile | `--profile` | `ASSISTANT_PROFILE` | `active_profile_id` | first profile | yes | yes |
 | OpenRouter base URL | `--openrouter-base-url` | `ASSISTANT_OPENROUTER_BASE_URL` | `openrouter_base_url` | OpenRouter HTTPS endpoint | yes, explicit opt-in | no |
 | JSON output | `--json` | none | none | false | never | yes |
-| Non-interactive mode | `--once` / `--non-interactive` | none | none | false | never | yes |
+| Non-interactive chat | `chat --once` | none | none | false | never | yes |
+
+Debug/test env vars implemented in current code:
+
+- `ASSISTANT_PROVIDER=fake` or `ASSISTANT_FAKE_PROVIDER=1` selects `FakeProvider`.
+- `ASSISTANT_PROMPT_AUDIT=1` stores prompt metadata/hash in `sessions/<session_id>/prompts.jsonl`.
+- `ASSISTANT_RAW_PROMPT_AUDIT=1` stores raw rendered prompts; default JSON output returns only `rendered_prompt_id` unless `--render-prompt` is used.
+- Non-default `ASSISTANT_OPENROUTER_BASE_URL` must pass HTTPS validation and explicit trust (`trusted_openrouter_base_urls` or `--trust-openrouter-base-url`).
 
 Exit codes for non-interactive commands:
 

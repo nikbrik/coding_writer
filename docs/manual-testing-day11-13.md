@@ -79,6 +79,15 @@ test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 - приложение читает ключ из env и не сохраняет его в config;
 - реальные запросы к OpenRouter могут тратить деньги.
 
+Для сухого прогона без OpenRouter можно использовать deterministic fake provider:
+
+```bash
+export ASSISTANT_PROVIDER=fake
+export ASSISTANT_MODEL="fake/model"
+```
+
+В fake mode ключ `OPENROUTER_API_KEY` не нужен, но ответы будут тестовыми.
+
 ### 1.5. Проверить тесты проекта без влияния ручных env
 
 ```bash
@@ -105,7 +114,7 @@ assistant profiles list
 - в профилях есть `student` и `senior`;
 - ключ OpenRouter не печатается.
 
-Если ошибка `OPENROUTER_API_KEY is required`, значит ключ не задан в этом терминале.
+Если в live mode ошибка `OPENROUTER_API_KEY is required`, значит ключ не задан в этом терминале. В fake mode (`ASSISTANT_PROVIDER=fake`) ключ не нужен.
 
 Если ошибка про модель, проверьте ID модели в OpenRouter.
 
@@ -345,6 +354,20 @@ assistant chat --once --input "Ответь одним коротким пред
 ```bash
 assistant chat --once --render-prompt --input "Продолжай задачу."
 ```
+
+Prompt audit opt-in:
+
+```bash
+export ASSISTANT_PROMPT_AUDIT=1
+# raw prompt text is still off by default; enable only deliberately:
+export ASSISTANT_RAW_PROMPT_AUDIT=1
+```
+
+Ожидаемо:
+
+- без `ASSISTANT_RAW_PROMPT_AUDIT=1` JSON output содержит `rendered_prompt_id`, но не raw prompt;
+- с `--render-prompt` raw prompt выводится прямо в ответ команды;
+- audit/prompt files can be purged with `assistant privacy purge --audit --yes`.
 
 ## 6. Автоматические Acceptance-Тесты
 
