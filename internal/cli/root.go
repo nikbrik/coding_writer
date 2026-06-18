@@ -144,6 +144,49 @@ func (rt *runtime) activeProfile() (app.UserProfile, error) {
 	return rt.profileByID(id)
 }
 
+func (rt *runtime) syncActiveProfile(profile app.UserProfile) {
+	rt.Config.ActiveProfileID = profile.ID
+	if rt.Process != nil {
+		rt.Process.ActiveProfileID = profile.ID
+	}
+}
+
+func (rt *runtime) currentMutableWorkTask() (app.TaskState, error) {
+	taskState, err := rt.Tasks.Current()
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Category == app.CategoryValidation && appErr.Code == "missing_current_task" {
+			return app.TaskState{}, app.NewError(app.CategoryValidation, "missing_current_task", "work memory requires active task", nil)
+		}
+		return app.TaskState{}, err
+	}
+	if taskState.Status == app.TaskStatusPaused {
+		return taskState, app.NewError(app.CategoryValidation, "task_paused", "resume task before mutating working memory", nil)
+	}
+	if taskState.Stage == app.StageDone {
+		return taskState, app.NewError(app.CategoryValidation, "task_done", "done task is terminal; no work memory mutations allowed", nil)
+	}
+	return taskState, nil
+}
+
+func (rt *runtime) workApplyContext() (taskID string, blockCode string, blockMessage string, err error) {
+	taskState, err := rt.Tasks.Current()
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Category == app.CategoryValidation && appErr.Code == "missing_current_task" {
+			return "", "missing_current_task", "work memory requires active task", nil
+		}
+		return "", "", "", err
+	}
+	if taskState.Status == app.TaskStatusPaused {
+		return "", "task_paused", "resume task before applying memory proposal", nil
+	}
+	if taskState.Stage == app.StageDone {
+		return "", "task_done", "done task is terminal; no work memory mutations allowed", nil
+	}
+	return taskState.ID, "", "", nil
+}
+
 func (rt *runtime) profileByID(id string) (app.UserProfile, error) {
 	profile, err := rt.Profiles.Get(id)
 	if err == nil {
@@ -714,21 +757,15 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 			if proposalID == "" {
 				proposalID = "latest"
 			}
-			taskState, taskErr := rt.Tasks.Current()
-			if taskErr != nil {
-				appErr := app.AsError(taskErr)
-				if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
-					return taskErr
-				}
-			}
-			if taskState.Status == app.TaskStatusPaused {
-				return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
+			taskID, workBlockedCode, workBlockedMessage, err := rt.workApplyContext()
+			if err != nil {
+				return err
 			}
 			profile, err := rt.activeProfile()
 			if err != nil {
 				return err
 			}
-			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptIDs: map[string]bool{}, RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskState.ID, ProfileID: profile.ID}
+			optsApply := memory.ApplyOptions{ProposalID: proposalID, AcceptIDs: map[string]bool{}, RejectIDs: map[string]bool{}, Edits: map[string]memory.ProposalEdit{}, TaskID: taskID, ProfileID: profile.ID, WorkBlockedCode: workBlockedCode, WorkBlockedMessage: workBlockedMessage}
 			for _, v := range accept {
 				if v == "all" {
 					optsApply.AcceptAll = true
@@ -1144,7 +1181,12 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 			if err := rt.Profiles.Create(p); err != nil {
 				return false, err
 			}
-			_, _ = fmt.Fprintf(out, "created profile: %s\n", id)
+			profile, err := rt.Profiles.SetActive(id)
+			if err != nil {
+				return false, err
+			}
+			rt.syncActiveProfile(profile)
+			_, _ = fmt.Fprintf(out, "created and active profile: %s\n", id)
 			return false, nil
 		}
 		if err := rt.Profiles.EnsureDefaults(); err != nil {
@@ -1154,6 +1196,7 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		if err != nil {
 			return false, err
 		}
+		rt.syncActiveProfile(profile)
 		_, _ = fmt.Fprintf(out, "active profile: %s\n", profile.ID)
 	case "/model":
 		if len(parts) < 2 {
@@ -1182,8 +1225,12 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		layer := app.MemoryLayer(parts[1])
 		text := strings.TrimSpace(strings.TrimPrefix(line, "/save "+parts[1]))
 		taskState, _ := rt.Tasks.Current()
-		if layer == app.LayerWork && taskState.Status == app.TaskStatusPaused {
-			return false, app.NewError(app.CategoryValidation, "task_paused", "resume task before mutating working memory", nil)
+		if layer == app.LayerWork {
+			var err error
+			taskState, err = rt.currentMutableWorkTask()
+			if err != nil {
+				return false, err
+			}
 		}
 		profile, err := rt.activeProfile()
 		if err != nil {
@@ -1347,15 +1394,9 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		}
 		_, _ = fmt.Fprint(out, proposalText(proposal))
 	case "apply":
-		taskState, taskErr := rt.Tasks.Current()
-		if taskErr != nil {
-			appErr := app.AsError(taskErr)
-			if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
-				return taskErr
-			}
-		}
-		if taskState.Status == app.TaskStatusPaused {
-			return app.NewError(app.CategoryValidation, "task_paused", "resume task before applying memory proposal", nil)
+		taskID, workBlockedCode, workBlockedMessage, err := rt.workApplyContext()
+		if err != nil {
+			return err
 		}
 		profile, err := rt.activeProfile()
 		if err != nil {
@@ -1373,8 +1414,10 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 			applyOpts.ProposalID = "latest"
 		}
 		applyOpts.SessionID = sessionID
-		applyOpts.TaskID = taskState.ID
+		applyOpts.TaskID = taskID
 		applyOpts.ProfileID = profile.ID
+		applyOpts.WorkBlockedCode = workBlockedCode
+		applyOpts.WorkBlockedMessage = workBlockedMessage
 		result, err := rt.Proposals.Apply(ctx, applyOpts)
 		if err != nil {
 			return err
@@ -1815,6 +1858,14 @@ func proposalText(proposal app.MemoryProposal) string {
 		b.WriteString(string(record.Status))
 		b.WriteString(" ")
 		b.WriteString(record.Kind)
+		if record.Scope != "" {
+			b.WriteString(" scope=")
+			b.WriteString(safeTerminalText(record.Scope))
+		}
+		if record.ProfileID != "" {
+			b.WriteString(" profile=")
+			b.WriteString(safeTerminalText(record.ProfileID))
+		}
 		b.WriteString(": ")
 		b.WriteString(safeTerminalText(record.Content))
 		if record.Reason != "" {

@@ -121,7 +121,8 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	promptTask := taskPtr
 	promptStage := stage
 	promptTaskID := taskID(taskPtr)
-	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionAnswerQuestion {
+	pausedGeneric := taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionAnswerQuestion
+	if pausedGeneric {
 		promptTask = nil
 		promptStage = ""
 		promptTaskID = ""
@@ -244,12 +245,6 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	result.Answer = lastRaw
 	result.Messages = messages
 	result.RenderedPrompt = renderMessages(messages)
-	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionAnswerQuestion {
-		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "accepted", nil, "", "", result.Model); auditErr != nil {
-			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
-		}
-		return result, nil
-	}
 
 	var transitionCandidate *TransitionResult
 	if c.TransitionGate != nil && taskPtr != nil && action != ActionAnswerQuestion {
@@ -295,7 +290,11 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		taskPtr = &state
 	}
 
-	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, taskID(taskPtr), input.Input, lastRaw)
+	memoryTaskID := taskID(taskPtr)
+	if pausedGeneric {
+		memoryTaskID = ""
+	}
+	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, memoryTaskID, input.Input, lastRaw)
 	if err != nil {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", result.Model, auditError(err)); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -320,6 +319,10 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "provider_call", nil, "", "", memoryModel); auditErr != nil {
 		return result, auditErr
 	}
+	classifierTask := taskPtr
+	if pausedGeneric {
+		classifierTask = nil
+	}
 	proposal, err := c.Classifier.Propose(ctx, memory.ClassificationInput{
 		SessionID:          sessionID,
 		UserMessageID:      userRecord.ID,
@@ -327,7 +330,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		UserMessage:        input.Input,
 		AssistantMessage:   lastRaw,
 		Profile:            profile,
-		Task:               taskPtr,
+		Task:               classifierTask,
 		Model:              memoryModel,
 		ExistingShort:      bundle.Short,
 		ExistingWork:       bundle.Work,
@@ -342,6 +345,9 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		result.Warnings = append(result.Warnings, "memory proposal skipped: "+app.AsError(err).Code)
 		return result, nil
+	}
+	if pausedGeneric {
+		blockWorkProposalRecords(&proposal, "task paused; work memory mutation disabled")
 	}
 	if err := c.Proposals.Save(ctx, proposal); err != nil {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", memoryModel, auditError(err)); auditErr != nil {
@@ -380,6 +386,15 @@ func (c *ProcessController) activeProfile() (app.UserProfile, error) {
 
 func noSaveProposal(sessionID string) *app.MemoryProposal {
 	return &app.MemoryProposal{ID: app.NewID("proposal"), SessionID: sessionID, SourceMessageIDs: []string{}, Records: []app.ProposedMemoryRecord{}, Provider: "local", Model: "no-save", CreatedAt: time.Now().UTC()}
+}
+
+func blockWorkProposalRecords(proposal *app.MemoryProposal, reason string) {
+	for i := range proposal.Records {
+		if proposal.Records[i].Layer == app.ProposedLayerWork && proposal.Records[i].Status == app.ProposalPending {
+			proposal.Records[i].Status = app.ProposalBlocked
+			proposal.Records[i].BlockReason = reason
+		}
+	}
 }
 
 func isPlanningRejection(input string) bool {

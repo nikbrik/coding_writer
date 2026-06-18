@@ -46,6 +46,20 @@ func TestClassifierSupportsIgnoreAndBlocksSecrets(t *testing.T) {
 	}
 }
 
+func TestClassifierStampsTrustedGenerationProfile(t *testing.T) {
+	classifier := NewClassifier(&providers.FakeProvider{ClassifierResponse: `{"records":[{"layer":"long","kind":"preference","content":"Prefers terse answers","reason":"Stable preference","confidence":0.9},{"layer":"short","kind":"context","content":"Current topic is memory","reason":"Session context","confidence":0.8}]}`})
+	proposal, err := classifier.Propose(context.Background(), ClassificationInput{Model: "fake/model", Profile: app.UserProfile{ID: "senior"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.Records[0].ProfileID != "senior" || proposal.Records[0].Scope != "profile" {
+		t.Fatalf("long record missing trusted generation profile: %+v", proposal.Records[0])
+	}
+	if proposal.Records[1].ProfileID != "" || proposal.Records[1].Scope != "" {
+		t.Fatalf("short record should not get profile scope: %+v", proposal.Records[1])
+	}
+}
+
 func TestClassifierBlocksSecretReason(t *testing.T) {
 	classifier := NewClassifier(&providers.FakeProvider{ClassifierResponse: `{"records":[{"layer":"long","kind":"preference","content":"safe","reason":"OPENROUTER_API_KEY=sk-secret123456789","confidence":0.9}]}`})
 	proposal, err := classifier.Propose(context.Background(), ClassificationInput{Model: "fake/model"})

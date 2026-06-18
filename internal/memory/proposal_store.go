@@ -26,6 +26,9 @@ type ApplyOptions struct {
 	TaskID     string
 	ProfileID  string
 	Scope      string
+
+	WorkBlockedCode    string
+	WorkBlockedMessage string
 }
 
 type ProposalEdit struct {
@@ -187,7 +190,7 @@ func (s *ProposalStore) applyLocked(ctx context.Context, opts ApplyOptions, path
 				if opts.Scope != "" {
 					scope = opts.Scope
 				}
-				if profileID == "" {
+				if profileID == "" && record.Layer != app.ProposedLayerLong {
 					profileID = opts.ProfileID
 				}
 				if scope == "" {
@@ -310,14 +313,34 @@ func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
 		if err != nil {
 			return err
 		}
-		if layer == app.LayerWork && opts.TaskID == "" {
-			return app.NewError(app.CategoryValidation, "missing_current_task", "work memory requires active task", nil)
+		if layer == app.LayerWork {
+			if opts.WorkBlockedCode != "" {
+				message := opts.WorkBlockedMessage
+				if message == "" {
+					message = "work memory mutation is not allowed"
+				}
+				return app.NewError(app.CategoryValidation, opts.WorkBlockedCode, message, nil)
+			}
+			if opts.TaskID == "" {
+				return app.NewError(app.CategoryValidation, "missing_current_task", "work memory requires active task", nil)
+			}
 		}
 		if layer == app.LayerShort && opts.SessionID == "" {
 			return app.NewError(app.CategoryValidation, "missing_session", "short memory requires session id", nil)
 		}
+		if layer == app.LayerLong && record.Layer == app.ProposedLayerLong && record.ProfileID == "" && profileScopedLong(record.Kind, record.Scope, opts.Scope) {
+			return app.ErrorWithHint(app.CategoryValidation, "missing_proposal_profile", "long profile memory proposal has no generation profile", "regenerate the memory proposal so profile ownership is explicit", nil)
+		}
 	}
 	return nil
+}
+
+func profileScopedLong(kind, recordScope, overrideScope string) bool {
+	scope := strings.TrimSpace(overrideScope)
+	if scope == "" {
+		scope = strings.TrimSpace(recordScope)
+	}
+	return scope == "profile" || strings.EqualFold(strings.TrimSpace(kind), "preference")
 }
 
 func sanitizeProposal(proposal app.MemoryProposal) app.MemoryProposal {

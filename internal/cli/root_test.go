@@ -16,6 +16,24 @@ import (
 	"github.com/nikbrik/coding_writer/internal/providers"
 )
 
+func moveRuntimeTaskToDone(t *testing.T, rt *runtime) app.TaskState {
+	t.Helper()
+	if _, err := rt.Tasks.Start("done task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	state, err := rt.Tasks.Move(app.StageDone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state
+}
+
 func TestChatOnceRenderPromptJSONUsesFakeProviderAndProfile(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
@@ -232,12 +250,29 @@ func TestPausedTaskAllowsSafeQuestionAndBlocksMutations(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("safe informational chat should be allowed while paused, got %v output=%s", err, out.String())
 	}
-	mutated, err := filepath.Glob(filepath.Join(storageDir, "sessions", "*", "*.jsonl"))
+	var parsed chatResult
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("bad chat JSON: %v output=%s", err, out.String())
+	}
+	shortRecords, err := memory.NewManager(storageDir).List(context.Background(), app.LayerShort, parsed.SessionID, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mutated) != 0 {
-		t.Fatalf("paused informational chat must not write session memory/proposals: %v", mutated)
+	if len(shortRecords) != 2 || shortRecords[0].TaskID != "" || shortRecords[1].TaskID != "" {
+		t.Fatalf("paused informational chat should save taskless short memory: %+v", shortRecords)
+	}
+	proposal, err := memory.NewProposalStore(storageDir, memory.NewManager(storageDir)).Latest(context.Background(), parsed.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockedWork := false
+	for _, record := range proposal.Records {
+		if record.Layer == app.ProposedLayerWork && record.Status == app.ProposalBlocked {
+			blockedWork = true
+		}
+	}
+	if !blockedWork {
+		t.Fatalf("paused informational proposal should block work memory: %+v", proposal.Records)
 	}
 	cmd = newRootCommand(&globalOptions{})
 	out.Reset()
@@ -251,8 +286,77 @@ func TestPausedTaskAllowsSafeQuestionAndBlocksMutations(t *testing.T) {
 	cmd.SetOut(&out)
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "memory", "apply", "--accept", "all"})
 	err = cmd.Execute()
-	if err == nil || !strings.Contains(err.Error(), "task_paused") {
-		t.Fatalf("want task_paused for memory apply while paused, got %v output=%s", err, out.String())
+	if err != nil {
+		t.Fatalf("paused memory apply should save non-work records only, got %v output=%s", err, out.String())
+	}
+	workFiles, err := filepath.Glob(filepath.Join(storageDir, "tasks", "*", "work_memory.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workFiles) != 0 {
+		t.Fatalf("paused memory apply saved work memory files: %+v", workFiles)
+	}
+}
+
+func TestSaveWorkRejectsDoneTask(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := moveRuntimeTaskToDone(t, rt)
+	var out, diag bytes.Buffer
+	_, err = handleSlash(context.Background(), &out, &diag, rt, "session_done_save", "/save work should not save")
+	if err == nil || app.AsError(err).Code != "task_done" {
+		t.Fatalf("want task_done, got %v out=%s diag=%s", err, out.String(), diag.String())
+	}
+	records, err := rt.Memory.List(context.Background(), app.LayerWork, "", state.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("done task received work memory: %+v", records)
+	}
+}
+
+func TestMemoryApplyRejectsWorkProposalForDoneTaskWithoutPartialWrites(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := moveRuntimeTaskToDone(t, rt)
+	proposal := app.MemoryProposal{ID: "proposal_done_work", SessionID: "session_done_work", Records: []app.ProposedMemoryRecord{
+		{ID: "r_short", Layer: app.ProposedLayerShort, Kind: "context", Content: "short", Reason: "short", Status: app.ProposalPending},
+		{ID: "r_work", Layer: app.ProposedLayerWork, Kind: "requirement", Content: "work", Reason: "work", Status: app.ProposalPending},
+		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "long", ProfileID: "student", Reason: "long", Status: app.ProposalPending},
+	}, CreatedAt: state.UpdatedAt}
+	if err := rt.Proposals.Save(context.Background(), proposal); err != nil {
+		t.Fatal(err)
+	}
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--json", "memory", "apply", "--proposal", proposal.ID, "--accept", "all"})
+	err = cmd.Execute()
+	if err == nil || app.AsError(err).Code != "task_done" {
+		t.Fatalf("want task_done, got %v output=%s", err, out.String())
+	}
+	shortRecords, err := rt.Memory.List(context.Background(), app.LayerShort, "session_done_work", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workRecords, err := rt.Memory.List(context.Background(), app.LayerWork, "", state.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	longRecords, err := rt.Memory.List(context.Background(), app.LayerLong, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shortRecords) != 0 || len(workRecords) != 0 || len(longRecords) != 0 {
+		t.Fatalf("apply failure wrote partial records: short=%+v work=%+v long=%+v", shortRecords, workRecords, longRecords)
 	}
 }
 
@@ -503,6 +607,72 @@ func TestProfileFlagAffectsRenderedPromptWithoutPersisting(t *testing.T) {
 	}
 	if cfg.ActiveProfileID != "" {
 		t.Fatalf("profile flag persisted unexpectedly: %+v", cfg)
+	}
+}
+
+func TestProfileFlagMemoryProposalAppliesToGenerationProfile(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetArgs(append([]string{"--storage-dir", storageDir}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v output=%s", args, err, out.String())
+		}
+		return out.String()
+	}
+	run("task", "start", "profile memory")
+	run("--model", "fake/model", "--profile", "senior", "--json", "chat", "--once", "--input", "Запомни: я предпочитаю короткие ответы на русском")
+	run("--model", "fake/model", "--json", "memory", "apply", "--accept", "all")
+	records, err := memory.NewManager(storageDir).List(context.Background(), app.LayerLong, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range records {
+		if strings.Contains(record.Content, "короткие ответы на русском") {
+			if record.ProfileID != "senior" || record.Scope != "profile" {
+				t.Fatalf("long preference used wrong profile: %+v", record)
+			}
+			return
+		}
+	}
+	t.Fatalf("long preference was not saved: %+v", records)
+}
+
+func TestREPLProfileSwitchAffectsNextExchange(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, diag bytes.Buffer
+	input := strings.NewReader("/profile senior\nОбъясни memory layers\n/exit\n")
+	if err := runREPL(context.Background(), input, &out, &diag, rt); err != nil {
+		t.Fatalf("repl failed: %v diag=%s out=%s", err, diag.String(), out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "active profile: senior") || !strings.Contains(text, "senior profile") {
+		t.Fatalf("profile switch did not affect next exchange: out=%s diag=%s", text, diag.String())
+	}
+}
+
+func TestREPLProfileCreateActivatesProfile(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, diag bytes.Buffer
+	input := strings.NewReader("/profile create custom\n/profile\n/exit\n")
+	if err := runREPL(context.Background(), input, &out, &diag, rt); err != nil {
+		t.Fatalf("repl failed: %v diag=%s out=%s", err, diag.String(), out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "created and active profile: custom") || !strings.Contains(text, "active profile: custom") {
+		t.Fatalf("created profile was not active: out=%s diag=%s", text, diag.String())
 	}
 }
 

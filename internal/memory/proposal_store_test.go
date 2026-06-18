@@ -22,7 +22,7 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 	proposal := app.MemoryProposal{ID: "proposal_test", SessionID: "session_test", CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
 		{ID: "r_short", Layer: app.ProposedLayerShort, Kind: "context", Content: "short", Status: app.ProposalPending},
 		{ID: "r_work", Layer: app.ProposedLayerWork, Kind: "requirement", Content: "work", Status: app.ProposalPending},
-		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "long", Status: app.ProposalPending},
+		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "long", ProfileID: "student", Status: app.ProposalPending},
 		{ID: "r_ignore", Layer: app.ProposedLayerIgnore, Kind: "smalltalk", Content: "ignore", Status: app.ProposalPending},
 		{ID: "r_reject", Layer: app.ProposedLayerLong, Kind: "other", Content: "reject", Status: app.ProposalPending},
 	}}
@@ -66,6 +66,54 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 				t.Fatalf("non-preference long memory should be global and auditable to profile: %+v", record)
 			}
 		}
+	}
+}
+
+func TestProposalApplyUsesStoredGenerationProfile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	store := NewProposalStore(dir, mgr)
+	proposal := app.MemoryProposal{ID: "proposal_profile", SessionID: "session_profile", CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
+		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "prefers senior style", ProfileID: "senior", Status: app.ProposalPending},
+	}}
+	if err := store.Save(ctx, proposal); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: "session_profile", ProfileID: "student"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.SavedRecords) != 1 {
+		t.Fatalf("want one saved record, got %+v", result.SavedRecords)
+	}
+	if result.SavedRecords[0].ProfileID != "senior" || result.SavedRecords[0].Scope != "profile" {
+		t.Fatalf("apply-time profile overrode generation profile: %+v", result.SavedRecords[0])
+	}
+}
+
+func TestProposalApplyRejectsLegacyProfileMemoryWithoutGenerationProfile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	store := NewProposalStore(dir, mgr)
+	proposal := app.MemoryProposal{ID: "proposal_legacy_profile", SessionID: "session_legacy_profile", CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
+		{ID: "r_short", Layer: app.ProposedLayerShort, Kind: "context", Content: "short", Status: app.ProposalPending},
+		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "legacy preference", Status: app.ProposalPending},
+	}}
+	if err := store.Save(ctx, proposal); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, AcceptAll: true, SessionID: "session_legacy_profile", ProfileID: "student"})
+	if err == nil || app.AsError(err).Code != "missing_proposal_profile" {
+		t.Fatalf("want missing_proposal_profile, got %v", err)
+	}
+	shortRecords, err := mgr.List(ctx, app.LayerShort, "session_legacy_profile", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shortRecords) != 0 {
+		t.Fatalf("preflight failure allowed partial write: %+v", shortRecords)
 	}
 }
 

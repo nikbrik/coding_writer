@@ -78,6 +78,7 @@ func (c *Classifier) Propose(ctx context.Context, input ClassificationInput) (ap
 		proposal.Model = res.Model
 		proposal.TemplateHash = "p0-memory-classifier-v1"
 		proposal.CreatedAt = time.Now().UTC()
+		stampProposalProfile(&proposal, input.Profile.ID)
 		return proposal, nil
 	}
 	if lastErr != nil {
@@ -162,6 +163,24 @@ func parseProposal(content string) (app.MemoryProposal, error) {
 		proposal.Records = append(proposal.Records, record)
 	}
 	return proposal, nil
+}
+
+func stampProposalProfile(proposal *app.MemoryProposal, profileID string) {
+	profileID = strings.TrimSpace(profileID)
+	if profileID == "" {
+		return
+	}
+	for i := range proposal.Records {
+		if proposal.Records[i].Layer != app.ProposedLayerLong {
+			continue
+		}
+		if proposal.Records[i].ProfileID == "" {
+			proposal.Records[i].ProfileID = profileID
+		}
+		if proposal.Records[i].Scope == "" {
+			proposal.Records[i].Scope = defaultLongScope(proposal.Records[i].Kind, proposal.Records[i].ProfileID)
+		}
+	}
 }
 
 func classifierInstructions() string {

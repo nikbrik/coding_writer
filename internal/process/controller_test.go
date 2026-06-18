@@ -107,6 +107,52 @@ func TestProcessControllerPausedTaskBlocksChat(t *testing.T) {
 	}
 }
 
+func TestProcessControllerPausedGenericQuestionSavesTasklessMemory(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	state, err := ctrl.Tasks.Start("paused task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, err = ctrl.Tasks.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "paused_generic", Input: "Объясни memory layers."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer == "" || chatCalls(fake.SnapshotCalls()) != 1 {
+		t.Fatalf("paused generic question should call provider once: answer=%q calls=%+v", res.Answer, fake.SnapshotCalls())
+	}
+	shortRecords, err := ctrl.Memory.List(ctx, app.LayerShort, "paused_generic", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shortRecords) != 2 || shortRecords[0].TaskID != "" || shortRecords[1].TaskID != "" {
+		t.Fatalf("paused generic exchange should save taskless short memory: %+v", shortRecords)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != state.ID || current.Status != app.TaskStatusPaused || current.LastSessionID != "" {
+		t.Fatalf("paused generic exchange mutated task state: %+v", current)
+	}
+	proposal, err := memory.NewProposalStore(dir, ctrl.Memory).Latest(ctx, "paused_generic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, record := range proposal.Records {
+		if record.Layer == app.ProposedLayerWork {
+			if record.Status != app.ProposalBlocked {
+				t.Fatalf("work proposal should be blocked while paused: %+v", record)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected work proposal record in fake classifier output: %+v", proposal.Records)
+}
+
 func TestProcessControllerDoneTaskBlocksMutation(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
