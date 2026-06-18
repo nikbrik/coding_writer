@@ -4,7 +4,7 @@
 
 Проект недели: перейти от обычного prompt/response-бота к минимальному stateful-ассистенту. Ассистент должен работать через CLI, подключаться к OpenRouter, позволять выбрать модель в интерфейсе и явно управлять памятью.
 
-`day11.md`, `day12.md` и `day13.md` считаются жёсткими критериями приёмки. Лекция `03-memory-state-notes.md` задаёт архитектурные принципы: memory layers, персонализация, task state machine, инварианты, prompt builder, контролируемые переходы и сохранение состояния.
+`day11.md`, `day12.md`, `day13.md` и `day14.md` считаются жёсткими критериями приёмки. Лекция `03-memory-state-notes.md` задаёт архитектурные принципы: memory layers, персонализация, task state machine, инварианты, prompt builder, контролируемые переходы и сохранение состояния.
 
 Текущее состояние кода на 2026-06-18:
 
@@ -25,7 +25,8 @@
 - подключает профиль пользователя к каждому запросу;
 - демонстрирует разные ответы для разных профилей;
 - ведёт текущую задачу как конечный автомат: этап, текущий шаг, ожидаемое действие;
-- перед каждым task-scoped LLM call сообщает модели текущий `stage`, `current_step`, `expected_action`, разрешённое действие и роль этапа, чтобы code assistant не работал вслепую.
+- перед каждым task-scoped LLM call сообщает модели текущий `stage`, `current_step`, `expected_action`, разрешённое действие и роль этапа, чтобы code assistant не работал вслепую;
+- хранит active invariants отдельно от диалога, показывает их в prompt и блокирует conflict input/output до persistence.
 
 ## 3. MVP
 
@@ -46,6 +47,7 @@ MVP должен быть небольшим, но архитектурно пр
 11. Пользователь подтверждает сохранение или правит выбранные слои.
 12. Приложение сохраняет факты в физически разные хранилища.
 13. При следующем запросе ассистент использует выбранные слои памяти.
+14. Если пользователь или provider output нарушает active invariant, приложение отказывает с `invariant_conflict`, invariant ID и evidence.
 
 ## 4. Пользовательские сценарии
 
@@ -179,6 +181,27 @@ PRD, FRD и architecture должны ссылаться на один canonical
 - pause возможен на любом этапе;
 - resume восстанавливает context без повторного объяснения;
 - `current_step` и `expected_action` сохраняются и видны после restart.
+
+### Day 14 acceptance is mandatory
+
+- invariants are stored in `<storage_root>/invariants/project.jsonl`, separately from dialogue;
+- prompt contains `Invariant policy` and `id="invariants.active"`; invariant policy semantically outranks profile, memory, task, and user query;
+- conflict request, например `предложи переписать MVP на Python`, is refused before provider call with `stack.go` evidence;
+- conflict output is refused as a hard gate before short-memory persistence and memory classifier;
+- P0 conflict matching is deterministic normalized literal forbidden-term matching;
+- non-conflicting Go request still runs normal Day11/12/13 flow.
+
+### Conflict scenario
+
+Пользователь просит: `предложи переписать MVP на Python`.
+
+Ожидаемое поведение:
+
+- приложение загружает `stack.go` invariant;
+- `CheckInput` находит forbidden evidence `mvp на python`;
+- provider call не выполняется;
+- пользователь получает error/refusal `invariant_conflict` с `stack.go`, evidence и structured JSON violation data;
+- task state, memory и audit не мутируются, кроме process audit rejection.
 
 ### Definition of ready for implementation
 

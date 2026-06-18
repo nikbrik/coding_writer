@@ -1,8 +1,8 @@
 # Подробный план реализации CLI ассистента с memory layers, персонализацией и task FSM
 
-Источник плана: `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, `day11.md`, `day12.md`, `day13.md`.
+Источник плана: `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, `day11.md`, `day12.md`, `day13.md`, `day14.md`.
 
-Ключевой принцип: `day11.md`, `day12.md`, `day13.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи.
+Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer.
 
 Текущее состояние кода на 2026-06-18: базовый MVP и deterministic process-control loop уже реализованы. Этот документ теперь совмещает исходный implementation plan, фактический status snapshot и regression checklist. Новые изменения должны сохранять текущий контракт, а не начинать проект с нуля.
 
@@ -23,7 +23,8 @@
 - ведёт текущую задачу как конечный автомат с `stage`, `current_step`, `expected_action`, `status`;
 - сообщает LLM текущий stage, роль этапа, allowed actions and forbidden actions перед task-scoped provider call;
 - поддерживает pause/resume задачи на любом рабочем этапе без повторного объяснения контекста;
-- имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13.
+- имеет отдельный invariant layer, который хранится вне диалога, рендерится в prompt и deterministic блокирует конфликты;
+- имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13/14.
 
 ## 2. Жёсткий acceptance contract
 
@@ -65,6 +66,19 @@
 - pause возможен на рабочих этапах `planning`, `execution`, `validation`;
 - resume после restart CLI восстанавливает `stage`, `current_step`, `expected_action`, plan и working memory;
 - ассистент продолжает задачу без повторного объяснения пользователем.
+
+### 2.4. Day 14: invariants
+
+Обязательные свойства:
+
+- инварианты хранятся отдельно от диалога в `<storage_root>/invariants/project.jsonl`;
+- active invariants попадают в prompt как trusted system policy с marker `Invariant policy` и `id="invariants.active"`;
+- user input, конфликтующий с invariant, блокируется до provider call;
+- provider output, конфликтующий с invariant, отклоняется как hard gate без correction retry до accepted persistence и до memory classifier;
+- отказ содержит `invariant_conflict`, ID инварианта, evidence и structured JSON violations;
+- P0 matcher is normalized literal forbidden-term matching; semantic invariant matching and `RequiredTerms` are future work unless explicitly implemented;
+- custom invariants are bounded privileged local policy data; content may be provider-visible and is rendered with source/provenance labels;
+- tests используют fake provider/deterministic checks, не live OpenRouter.
 
 ## 3. Канонический контракт реализации
 
@@ -134,7 +148,7 @@ ignore: proposal/audit only, never physical memory layer
 3. Trusted process-control policy: app owns state, transitions, memory writes and validation.
 4. Trusted stage-specific policy: role, allowed actions, forbidden actions and output schema.
 5. Active profile.
-6. Invariants.
+6. Invariants: active policy from `<storage_root>/invariants/project.jsonl`, semantic priority below base/security/process/stage and above profile/memory/task/user text.
 7. Task state: `stage`, `current_step`, `expected_action`, `status`, allowed transitions.
 8. Working memory.
 9. Selected long-term memory.
@@ -158,7 +172,7 @@ ignore: proposal/audit only, never physical memory layer
 
 - `go.mod` с module `github.com/nikbrik/coding_writer` и dependency `github.com/spf13/cobra`;
 - entrypoint `cmd/assistant/main.go`;
-- packages `internal/app`, `internal/cli`, `internal/providers`, `internal/memory`, `internal/profiles`, `internal/tasks`, `internal/prompting`, `internal/process`, `internal/storage`, `internal/validation`;
+- packages `internal/app`, `internal/cli`, `internal/providers`, `internal/memory`, `internal/profiles`, `internal/tasks`, `internal/invariants`, `internal/prompting`, `internal/process`, `internal/storage`, `internal/validation`;
 - acceptance tests in `tests/day_acceptance_test.go` and `tests/process_acceptance_test.go`;
 - `.assistant/` используется как repo-local demo/test storage opt-in and must stay gitignored.
 
@@ -295,6 +309,8 @@ Default storage root для normal mode: OS user-data directory с `0700` direct
     decisions.jsonl
     knowledge.jsonl
     constraints.jsonl
+  invariants/
+    project.jsonl
   logs/
 ```
 
@@ -533,6 +549,8 @@ assistant memory list <short|work|long> --json
 assistant memory propose --latest --json
 assistant memory apply --proposal <id> --accept all --json
 assistant memory proposals [--session <id>] --json
+assistant invariants list --json
+assistant invariants add <id> --kind <kind> --content <text> [--severity block] [--forbid <term>...] --json
 assistant task start <title> --json
 assistant task status --json
 assistant task move <stage> --json
@@ -577,6 +595,8 @@ P0 must be scriptable:
 /memory short
 /memory work
 /memory long
+/invariants
+/invariants add <id> --kind <kind> --content <text> --forbid <term>
 /process audit
 /privacy
 /clear short
@@ -615,6 +635,7 @@ Status on 2026-06-18:
 | Prompt builder, untrusted context blocks, rendered prompt inspection | Implemented |
 | ProcessController, stage policies, validators, retry, TransitionGate, audit | Implemented |
 | Acceptance tests for Day 11/12/13 and process control | Implemented |
+| Day 14 invariant storage, prompt rendering, input/output conflict refusal, CLI inspection | Implemented |
 
 The detailed phase list below is kept as a regression checklist. Items phrased as "implement" are historical tasks unless a current gap is explicitly noted.
 

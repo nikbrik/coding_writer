@@ -12,7 +12,7 @@ import (
 func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	profile := profiles.DefaultProfiles(time.Now().UTC())[0]
 	task := app.TaskState{ID: "task_test", Title: "t", Stage: app.StageExecution, Status: app.TaskStatusPaused, CurrentStep: "step", ExpectedAction: app.ExpectedLLMResponse}
-	messages, err := NewBuilder().Build(BuildInput{Profile: profile, Task: &task, Memory: app.MemoryBundle{Work: []app.MemoryRecord{{Layer: app.LayerWork, Content: "work"}}, Long: []app.MemoryRecord{{Layer: app.LayerLong, Content: "long"}}, Short: []app.MemoryRecord{{Layer: app.LayerShort, Content: "short"}}}, Query: "query"})
+	messages, err := NewBuilder().Build(BuildInput{Profile: profile, Task: &task, Memory: app.MemoryBundle{Work: []app.MemoryRecord{{Layer: app.LayerWork, Content: "work"}}, Long: []app.MemoryRecord{{Layer: app.LayerLong, Content: "long"}}, Short: []app.MemoryRecord{{Layer: app.LayerShort, Content: "short"}}}, Invariants: []app.Invariant{{ID: "stack.go", Scope: "project", Kind: "architecture", Content: "Use Go", Severity: "block"}}, Query: "query"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,8 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 		"Current stage: execution",
 		"Tool and side-effect policy",
 		`id="profile.active"`,
-		"Invariants",
+		"Invariant policy",
+		`id="invariants.active"`,
 		`id="task.current"`,
 		`id="memory.working"`,
 		`id="memory.long"`,
@@ -41,6 +42,9 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	}
 	if !strings.Contains(rendered, `trust="untrusted"`) || !strings.Contains(rendered, "task paused") {
 		t.Fatalf("missing untrusted tags or paused warning:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "stack.go") || !strings.Contains(rendered, "Use Go") {
+		t.Fatalf("missing active invariant text:\n%s", rendered)
 	}
 	if strings.Contains(rendered, "Role: implementer") {
 		t.Fatalf("answer_question prompt should not include execution role body:\n%s", rendered)

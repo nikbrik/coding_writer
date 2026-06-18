@@ -1,6 +1,6 @@
-# Ручное тестирование дней 11-13
+# Ручное тестирование дней 11-14
 
-Цель: проверить дни 11, 12 и 13 максимально похоже на обычный пользовательский опыт. Один раз настраиваем команду `assistant`, добавляем ее в `PATH`, задаем понятный path для данных и дальше работаем через интерактивный чат с короткими slash-командами.
+Цель: проверить дни 11, 12, 13 и 14 максимально похоже на обычный пользовательский опыт. Один раз настраиваем команду `assistant`, добавляем ее в `PATH`, задаем понятный path для данных и дальше работаем через интерактивный чат с короткими slash-командами.
 
 ## 1. Предварительная Настройка
 
@@ -42,20 +42,20 @@ assistant --help
 ### 1.3. Задать path хранилища
 
 ```bash
-export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13"
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-14"
 mkdir -p "$ASSISTANT_STORAGE_DIR"
 ```
 
 Ожидаемо:
 
-- данные ручного теста будут лежать в `/Users/nikita/code/coding_writer/.assistant/storage/manual-day11-13`;
+- данные ручного теста будут лежать в `/Users/nikita/code/coding_writer/.assistant/storage/manual-day11-14`;
 - память, задачи, профили и audit будут сохраняться между запусками `assistant chat`;
 - это удобнее, чем `mktemp`, потому что после перезапуска терминала можно вернуться к тому же состоянию.
 
 Если нужен полностью чистый прогон, задайте другой path, например:
 
 ```bash
-export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13-run2"
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-14-run2"
 mkdir -p "$ASSISTANT_STORAGE_DIR"
 ```
 
@@ -106,12 +106,14 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./...
 ```bash
 assistant init --model "$ASSISTANT_MODEL"
 assistant profiles list
+assistant invariants list
 ```
 
 Ожидаемо:
 
-- `init` выводит `initialized /Users/nikita/code/coding_writer/.assistant/storage/manual-day11-13`;
+- `init` выводит `initialized /Users/nikita/code/coding_writer/.assistant/storage/manual-day11-14`;
 - в профилях есть `student` и `senior`;
+- в invariants есть default `stack.go`, `memory.layers`, `security.no_secrets`;
 - ключ OpenRouter не печатается.
 
 Если в live mode ошибка `OPENROUTER_API_KEY is required`, значит ключ не задан в этом терминале. В fake mode (`ASSISTANT_PROVIDER=fake`) ключ не нужен.
@@ -323,14 +325,58 @@ assistant chat
 export CW_ROOT="/Users/nikita/code/coding_writer"
 cd "$CW_ROOT"
 export PATH="$CW_ROOT/.assistant/bin:$PATH"
-export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-13"
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/manual-day11-14"
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
 export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
 ```
 
 Критерий готовности дня 13: задача хранит stage, step, expected action, выдерживает pause/resume и продолжает после нового запуска CLI.
 
-## 5. Быстрые Команды Для Диагностики
+## 5. День 14. Инварианты
+
+### Что проверяем
+
+- Инварианты хранятся отдельно от диалога.
+- Prompt показывает active invariants.
+- Конфликтный запрос блокируется до provider call.
+- Отказ называет invariant ID и evidence.
+- P0 matching is normalized literal forbidden-term matching; paraphrase/semantic matching is not claimed in this manual path.
+
+### Ручной сценарий
+
+Вне REPL:
+
+```bash
+assistant invariants list --json
+assistant chat --once --render-prompt --input "Как устроен Go MVP?" --json
+assistant chat --once --input "предложи переписать MVP на Python" --json
+```
+
+Ожидаемо:
+
+- `invariants list` показывает `stack.go` и другие default invariants;
+- rendered prompt содержит `Invariant policy`, `id="invariants.active"`, `stack.go`;
+- конфликтный запрос возвращает JSON error с `invariant_conflict`, `stack.go`, `mvp на python` и structured `violations`;
+- provider chat call для конфликтного запроса не выполняется.
+
+Внутри REPL:
+
+```text
+/invariants
+/invariants add custom.no_beta --kind business --content "Do not propose beta stack" --forbid "beta stack"
+/invariants
+/exit
+```
+
+Ожидаемо:
+
+- `/invariants` показывает active invariants;
+- custom invariant сохраняется в `<storage_root>/invariants/project.jsonl`;
+- custom invariant content is bounded and may be visible to the configured provider when rendered into prompts.
+
+Критерий готовности дня 14: инварианты есть в отдельном storage, видны в prompt, конфликт deterministic блокируется, безопасный запрос продолжает обычный flow.
+
+## 6. Быстрые Команды Для Диагностики
 
 Эти команды можно запускать вне REPL, если нужно быстро посмотреть состояние:
 
@@ -340,6 +386,7 @@ assistant memory list short
 assistant memory list work
 assistant memory list long
 assistant profiles list
+assistant invariants list
 assistant process audit --latest
 ```
 
@@ -369,12 +416,12 @@ export ASSISTANT_RAW_PROMPT_AUDIT=1
 - с `--render-prompt` raw prompt выводится прямо в ответ команды;
 - audit/prompt files can be purged with `assistant privacy purge --audit --yes`.
 
-## 6. Автоматические Acceptance-Тесты
+## 7. Автоматические Acceptance-Тесты
 
-Автотесты не заменяют ручную проверку с вашим ключом, но подтверждают базовую логику дней 11-13:
+Автотесты не заменяют ручную проверку с вашим ключом, но подтверждают базовую логику дней 11-14:
 
 ```bash
-env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|TestDay12|TestDay13'
+env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|TestDay12|TestDay13|TestDay14'
 ```
 
 Ожидаемо:
@@ -382,11 +429,13 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|
 - `TestDay11EndToEndMemoryProposalApplyInfluence` проходит;
 - `TestDay12ProfilesChangePromptAndResponse` проходит;
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
+- `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит;
 - итоговый статус `ok`.
 
-## 7. Финальный Чек-Лист
+## 8. Финальный Чек-Лист
 
 - Настройка готова, если `which assistant` указывает на `.assistant/bin/assistant`, `assistant init` проходит, а `assistant chat` отвечает через OpenRouter.
 - День 11 готов, если `short`, `work`, `long` хранят разные данные и следующий ответ использует сохраненную память.
 - День 12 готов, если `student`, `senior` и `tester` дают заметно разные ответы.
 - День 13 готов, если задача проходит `planning -> execution -> validation -> done`, хранит шаг и ожидаемое действие, а pause/resume работает после перезапуска CLI.
+- День 14 готов, если invariants хранятся отдельно, prompt содержит active invariants, conflict request получает `invariant_conflict`, а non-conflict flow не ломает дни 11-13.

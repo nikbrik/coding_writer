@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/invariants"
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/profiles"
@@ -47,6 +48,7 @@ type runtime struct {
 	Profiles        *profiles.Manager
 	Tasks           *tasks.Manager
 	Memory          *memory.Manager
+	Invariants      *invariants.Manager
 	Proposals       *memory.ProposalStore
 	Provider        providers.LLMProvider
 	Builder         *prompting.Builder
@@ -88,7 +90,7 @@ func newRootCommand(opts *globalOptions) *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.TrustOpenRouterBaseURL, "trust-openrouter-base-url", false, "trust non-default OpenRouter-compatible base URL for this invocation")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON")
 	cmd.PersistentFlags().BoolVar(&opts.Quiet, "quiet", false, "suppress diagnostic output")
-	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
+	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), invariantsCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
 	return cmd
 }
 
@@ -124,6 +126,7 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 		}
 	}
 	memMgr := memory.NewManager(storageDir)
+	invMgr := invariants.NewManager(storageDir)
 	return &runtime{
 		StorageDir: storageDir,
 		Config:     cfg,
@@ -131,6 +134,7 @@ func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
 		Profiles:   profMgr,
 		Tasks:      tasks.NewManager(storageDir),
 		Memory:     memMgr,
+		Invariants: invMgr,
 		Proposals:  memory.NewProposalStore(storageDir, memMgr),
 		Quiet:      opts.Quiet,
 	}, nil
@@ -244,6 +248,7 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	rt.Process.Profiles = rt.Profiles
 	rt.Process.ActiveProfileID = rt.Config.ActiveProfileID
 	rt.Process.Memory = rt.Memory
+	rt.Process.Invariants = rt.Invariants
 	rt.Process.Proposals = rt.Proposals
 	rt.Process.Model = rt.Config.ActiveModel
 	rt.Process.MemoryModel = rt.Config.MemoryModel
@@ -255,8 +260,8 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	return rt.Process
 }
 
-func (rt *runtime) preflightProcess(input process.ExchangeInput) error {
-	return rt.ensureProcessController().Preflight(input)
+func (rt *runtime) preflightProcess(ctx context.Context, input process.ExchangeInput) error {
+	return rt.ensureProcessController().PreflightContext(ctx, input)
 }
 
 func (rt *runtime) attachProviderToProcess() *process.ProcessController {
@@ -296,11 +301,18 @@ func initCommand(opts *globalOptions) *cobra.Command {
 			if err := rt.Profiles.EnsureDefaults(); err != nil {
 				return err
 			}
+			if err := rt.Invariants.EnsureDefaults(); err != nil {
+				return err
+			}
 			profilesList, err := rt.Profiles.List()
 			if err != nil {
 				return err
 			}
-			out := map[string]any{"ok": true, "storage_dir": rt.StorageDir, "config": rt.Config, "profiles": profilesList}
+			invariantsList, err := rt.Invariants.List(cmd.Context())
+			if err != nil {
+				return err
+			}
+			out := map[string]any{"ok": true, "storage_dir": rt.StorageDir, "config": rt.Config, "profiles": profilesList, "invariants": invariantsList}
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, out, fmt.Sprintf("initialized %s\n", rt.StorageDir))
 		},
 	}
@@ -331,7 +343,7 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 				}
 				sessionID := app.NewID("session")
 				if !chatOpts.RenderPrompt {
-					if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
+					if err := rt.preflightProcess(cmd.Context(), process.ExchangeInput{SessionID: sessionID, Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
 						return err
 					}
 					rt.ensureProvider()
@@ -378,7 +390,7 @@ type chatResult struct {
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool) (chatResult, error) {
-	if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
+	if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
 	if !renderOnly {
@@ -435,7 +447,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 			}
 			continue
 		}
-		if err := rt.preflightProcess(process.ExchangeInput{SessionID: sessionID, Input: line}); err != nil {
+		if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: line}); err != nil {
 			failed = true
 			printError(diag, err, false)
 			continue
@@ -801,6 +813,60 @@ func memoryApplyCommand(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+func invariantsCommand(opts *globalOptions) *cobra.Command {
+	cmd := &cobra.Command{Use: "invariants", Short: "Inspect invariant policy"}
+	cmd.AddCommand(invariantsListCommand(opts), invariantsAddCommand(opts))
+	return cmd
+}
+
+func invariantsListCommand(opts *globalOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List active invariants",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			if err := rt.Invariants.EnsureDefaults(); err != nil {
+				return err
+			}
+			items, err := rt.Invariants.List(cmd.Context())
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "invariants": items}, invariantsText(items))
+		},
+	}
+}
+
+func invariantsAddCommand(opts *globalOptions) *cobra.Command {
+	var kind, content, severity string
+	var forbid []string
+	cmd := &cobra.Command{
+		Use:   "add <id>",
+		Short: "Add project invariant",
+		Long:  "Add a bounded project invariant. Invariant content can be rendered into provider-visible prompts.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			inv, err := rt.Invariants.Add(cmd.Context(), app.Invariant{ID: args[0], Scope: "project", Kind: kind, Content: content, Severity: severity, ForbiddenTerms: forbid, Source: "user"})
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "invariant": inv}, invariantsText([]app.Invariant{inv}))
+		},
+	}
+	cmd.Flags().StringVar(&kind, "kind", "other", "invariant kind")
+	cmd.Flags().StringVar(&content, "content", "", "invariant content")
+	cmd.Flags().StringVar(&severity, "severity", "block", "block or warn")
+	cmd.Flags().StringArrayVar(&forbid, "forbid", nil, "forbidden literal term, repeatable")
+	return cmd
+}
+
 func taskCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "task", Short: "Task state commands", RunE: func(cmd *cobra.Command, args []string) error {
 		return app.NewError(app.CategoryCLI, "unknown_task_command", "unknown task command", nil)
@@ -1112,6 +1178,8 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
   /memory propose                propose memory from latest exchange
   /memory apply --accept all     apply pending memory proposal
   /memory apply --accept <id>|--reject <id>|--edit <id>:layer=<l>,content=<c>
+	/invariants                    list active invariants
+	/invariants add <id> --kind <k> --content <text> --forbid <term>
   /clear short                   clear short-term memory
 	/process audit                  show latest process audit event
   /privacy                       show privacy summary
@@ -1243,6 +1311,8 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		_, _ = fmt.Fprintf(out, "saved: %s\n", record.ID)
 	case "/memory":
 		return false, handleMemorySlash(ctx, out, diag, rt, sessionID, parts, line)
+	case "/invariants":
+		return false, handleInvariantsSlash(ctx, out, rt, parts, line)
 	case "/process":
 		if len(parts) >= 2 && parts[1] == "audit" {
 			events, err := process.NewAuditStore(rt.StorageDir).Latest(1)
@@ -1262,6 +1332,61 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 		return false, app.ErrorWithHint(app.CategoryCLI, "unknown_command", "unknown slash command", "type /help for available commands", nil)
 	}
 	return false, nil
+}
+
+func handleInvariantsSlash(ctx context.Context, out io.Writer, rt *runtime, parts []string, rawLine string) error {
+	if len(parts) == 1 {
+		items, err := rt.Invariants.List(ctx)
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprint(out, invariantsText(items))
+		return nil
+	}
+	if parts[1] != "add" {
+		return app.NewError(app.CategoryCLI, "unknown_invariants_command", "unknown invariants command", nil)
+	}
+	if len(parts) < 3 {
+		return app.NewError(app.CategoryCLI, "missing_invariant_id", "invariant id required", nil)
+	}
+	tokens := splitShellTokens(strings.TrimSpace(strings.TrimPrefix(rawLine, "/invariants add "+parts[2])))
+	inv := app.Invariant{ID: parts[2], Scope: "project", Kind: "other", Severity: "block", Source: "user"}
+	for i := 0; i < len(tokens); {
+		switch tokens[i] {
+		case "--kind":
+			if i+1 >= len(tokens) {
+				return app.NewError(app.CategoryCLI, "missing_kind", "--kind requires a value", nil)
+			}
+			inv.Kind = tokens[i+1]
+			i += 2
+		case "--content":
+			if i+1 >= len(tokens) {
+				return app.NewError(app.CategoryCLI, "missing_content", "--content requires a value", nil)
+			}
+			inv.Content = tokens[i+1]
+			i += 2
+		case "--severity":
+			if i+1 >= len(tokens) {
+				return app.NewError(app.CategoryCLI, "missing_severity", "--severity requires a value", nil)
+			}
+			inv.Severity = tokens[i+1]
+			i += 2
+		case "--forbid":
+			if i+1 >= len(tokens) {
+				return app.NewError(app.CategoryCLI, "missing_forbid", "--forbid requires a value", nil)
+			}
+			inv.ForbiddenTerms = append(inv.ForbiddenTerms, tokens[i+1])
+			i += 2
+		default:
+			i++
+		}
+	}
+	added, err := rt.Invariants.Add(ctx, inv)
+	if err != nil {
+		return err
+	}
+	_, _ = fmt.Fprint(out, invariantsText([]app.Invariant{added}))
+	return nil
 }
 
 func handleTaskSlash(out io.Writer, rt *runtime, parts []string, rest string) error {
@@ -1893,6 +2018,28 @@ func proposalsText(proposals []app.MemoryProposal) string {
 	var b strings.Builder
 	for _, p := range proposals {
 		b.WriteString(fmt.Sprintf("proposal=%s session=%s records=%d\n", p.ID, p.SessionID, len(p.Records)))
+	}
+	return b.String()
+}
+
+func invariantsText(items []app.Invariant) string {
+	if len(items) == 0 {
+		return "no invariants\n"
+	}
+	var b strings.Builder
+	for _, inv := range items {
+		b.WriteString(inv.ID)
+		b.WriteString(" [")
+		b.WriteString(inv.Severity)
+		b.WriteString("] ")
+		b.WriteString(inv.Kind)
+		b.WriteString(": ")
+		b.WriteString(safeTerminalText(inv.Content))
+		if len(inv.ForbiddenTerms) > 0 {
+			b.WriteString(" forbid=")
+			b.WriteString(safeTerminalText(strings.Join(inv.ForbiddenTerms, ",")))
+		}
+		b.WriteByte('\n')
 	}
 	return b.String()
 }

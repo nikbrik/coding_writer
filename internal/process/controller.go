@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/invariants"
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/profiles"
 	"github.com/nikbrik/coding_writer/internal/providers"
@@ -19,6 +20,7 @@ type ProcessController struct {
 	Profiles        *profiles.Manager
 	ActiveProfileID string
 	Memory          *memory.Manager
+	Invariants      *invariants.Manager
 	Proposals       *memory.ProposalStore
 	Classifier      *memory.Classifier
 	Provider        providers.LLMProvider
@@ -74,6 +76,17 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	taskPtr := preflight.Task
 	stage := preflight.Stage
 	action := preflight.Action
+	if c.Invariants != nil {
+		violations, err := c.Invariants.CheckInput(ctx, input.Input)
+		if err != nil {
+			return nil, err
+		}
+		if len(violations) > 0 {
+			invErr := invariants.Error(violations)
+			_ = c.saveAudit(sessionID, taskPtr, stage, action, "rejected", invariantAuditMessages(violations), "", "", c.Model)
+			return nil, invErr
+		}
+	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.PendingPlanning != nil {
 		if isPlanningRejection(input.Input) {
 			state, err := c.Tasks.RejectPendingPlanningProposal()
@@ -136,11 +149,19 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if err != nil {
 		return nil, err
 	}
+	var activeInvariants []app.Invariant
+	if c.Invariants != nil {
+		activeInvariants, err = c.Invariants.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	messages, err := c.Builder.Build(PromptBuildInput{
 		Profile:    profile,
 		Task:       promptTask,
 		Memory:     bundle,
+		Invariants: activeInvariants,
 		Query:      input.Input,
 		Stage:      promptStage,
 		ActionKind: action,
@@ -195,6 +216,19 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		lastRaw = res.Message.Content
 		result.Model = res.Model
+		if c.Invariants != nil {
+			violations, err := c.Invariants.CheckOutput(ctx, lastRaw)
+			if err != nil {
+				return result, err
+			}
+			if len(violations) > 0 {
+				invErr := invariants.Error(violations)
+				if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", invariantAuditMessages(violations), "", "", result.Model); auditErr != nil {
+					result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+				}
+				return result, invErr
+			}
+		}
 
 		parsed, parseErr = Parse(stage, action, lastRaw)
 		if parseErr == nil {
@@ -232,6 +266,9 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if len(validatorErrors) > 0 {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", validatorErrors, "", "", result.Model); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
+		}
+		if strings.Contains(validatorErrors[0], "invariant_conflict") {
+			return result, app.NewError(app.CategoryValidation, "invariant_conflict", "response rejected: "+strings.Join(validatorErrors, "; "), nil)
 		}
 		return result, app.NewError(app.CategoryValidation, "validation_failed", "response rejected: "+strings.Join(validatorErrors, "; "), nil)
 	}
@@ -409,8 +446,7 @@ func isPlanningRejection(input string) bool {
 	return false
 }
 
-// Preflight runs local hard gates without loading provider/profile/memory.
-func (c *ProcessController) Preflight(input ExchangeInput) error {
+func (c *ProcessController) PreflightContext(ctx context.Context, input ExchangeInput) error {
 	if c == nil {
 		return app.NewError(app.CategoryInternal, "missing_process_controller", "process controller is required", nil)
 	}
@@ -426,12 +462,32 @@ func (c *ProcessController) Preflight(input ExchangeInput) error {
 		_ = c.saveAudit(sessionID, nil, "", ActionAnswerQuestion, "rejected", []string{err.Message}, "", "", c.Model)
 		return err
 	}
-	_, err := c.resolveProcessState(input)
+	preflight, err := c.resolveProcessState(input)
 	if err != nil {
 		task, stage, action := c.bestEffortState(input)
 		_ = c.saveAudit(sessionID, task, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model)
+		return err
 	}
-	return err
+	if c.Invariants != nil {
+		violations, err := c.Invariants.CheckInput(ctx, input.Input)
+		if err != nil {
+			return err
+		}
+		if len(violations) > 0 {
+			invErr := invariants.Error(violations)
+			_ = c.saveAudit(sessionID, preflight.Task, preflight.Stage, preflight.Action, "rejected", invariantAuditMessages(violations), "", "", c.Model)
+			return invErr
+		}
+	}
+	return nil
+}
+
+func invariantAuditMessages(violations []app.InvariantViolation) []string {
+	out := make([]string, 0, len(violations))
+	for _, v := range violations {
+		out = append(out, "invariant_conflict: "+v.InvariantID+" evidence=[REDACTED]")
+	}
+	return out
 }
 
 type resolvedProcessState struct {

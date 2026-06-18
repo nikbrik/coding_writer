@@ -19,12 +19,13 @@ const (
 )
 
 type Error struct {
-	Category ErrorCategory `json:"category"`
-	Code     string        `json:"code"`
-	Message  string        `json:"message"`
-	Hint     string        `json:"hint,omitempty"`
-	Path     string        `json:"path,omitempty"`
-	Err      error         `json:"-"`
+	Category   ErrorCategory        `json:"category"`
+	Code       string               `json:"code"`
+	Message    string               `json:"message"`
+	Hint       string               `json:"hint,omitempty"`
+	Path       string               `json:"path,omitempty"`
+	Violations []InvariantViolation `json:"violations,omitempty"`
+	Err        error                `json:"-"`
 }
 
 func (e *Error) Error() string {

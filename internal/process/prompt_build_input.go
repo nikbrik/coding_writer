@@ -7,6 +7,7 @@ type PromptBuildInput struct {
 	Profile    app.UserProfile
 	Task       *app.TaskState
 	Memory     app.MemoryBundle
+	Invariants []app.Invariant
 	Query      string
 	Stage      app.TaskStage
 	ActionKind ActionKind

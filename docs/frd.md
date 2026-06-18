@@ -8,7 +8,8 @@ FRD описывает функциональные требования к MVP 
 
 - `day11.md`: явная модель памяти с отдельными слоями;
 - `day12.md`: персонализация через профиль пользователя;
-- `day13.md`: состояние задачи как конечный автомат.
+- `day13.md`: состояние задачи как конечный автомат;
+- `day14.md`: отдельный invariant layer с prompt visibility и deterministic conflict refusal.
 
 ## 2. Scope MVP
 
@@ -26,7 +27,8 @@ MVP должен реализовать:
 - физически раздельное хранение слоёв памяти;
 - task state machine с `stage`, `current_step`, `expected_action`;
 - stage-aware prompt contract: LLM получает текущий этап, роль этапа, allowed actions и forbidden actions;
-- pause/resume задачи без повторного объяснения контекста.
+- pause/resume задачи без повторного объяснения контекста;
+- invariant manager/checker: отдельное storage, prompt block, input/output enforcement.
 
 Текущее состояние реализации на 2026-06-18:
 
@@ -67,6 +69,8 @@ MVP не должен реализовывать:
 
 `Invariant` — ограничение, которое нельзя нарушать между запросами.
 
+`InvariantViolation` — deterministic refusal record с `invariant_id`, `severity`, `message`, `evidence`.
+
 `ProcessController` — application-level controller, который до provider call выбирает current stage, разрешённое действие, stage policy, prompt contract и после provider call принимает или отклоняет output.
 
 `StagePolicy` — trusted policy для конкретного `stage`: роль LLM, allowed actions, forbidden actions, output schema, validation rules.
@@ -102,7 +106,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 #### Command contract
 
 - top-level and slash commands must map to one canonical command tree;
-- P0 commands are only the ones required for Day 11/12/13 demo and smoke tests.
+- P0 commands are only the ones required for Day 11/12/13/14 demo and smoke tests.
 - the command tree must define P0/P1 status, top-level and slash forms, JSON output, exit behavior, and whether a command calls OpenRouter.
 
 #### Memory layers
@@ -118,6 +122,17 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - LLM does not update `TaskState`, write memory, run tools, persist output or apply transitions directly.
 - `ProcessController` and `TransitionGate` own hard gates, output acceptance and state transitions.
 - This contract extends Day 13 behavior but must not bypass Day 11 classifier/proposal/user-confirmation flow or Day 12 profile-in-every-prompt flow.
+
+#### Invariant contract
+
+- active invariants are stored in `<storage_root>/invariants/project.jsonl`, not in session dialogue;
+- prompt builder renders active invariants with `Invariant policy` and `id="invariants.active"`; invariants semantically outrank profile, memory, task, and user query even when rendered after profile for prompt readability;
+- input conflict returns `invariant_conflict` before chat provider call;
+- output conflict returns `invariant_conflict` immediately, with no correction retry, before short-memory persistence, process transition, and memory classifier;
+- refusal must name invariant ID and evidence, and JSON output must expose structured violations;
+- MVP enforcement is normalized literal forbidden-term matching; broader semantic matching and `RequiredTerms` semantics are future work unless explicitly implemented;
+- custom/user invariants are privileged local policy data, rendered with source labels and bounded count/length limits; invariant content may be provider-visible;
+- default invariants cover stack, process ownership, memory layers, no silent long-term writes, secrets, paused task, done terminal task, and OpenRouter key env-only.
 
 ### FR-001. Первый запуск
 
@@ -146,6 +161,7 @@ Acceptance criteria:
 - запуск без existing storage root не падает;
 - `assistant init --model <id>` создаёт `config.json`;
 - `assistant init --model <id>` создаёт default profiles `student` и `senior`;
+- `assistant init --model <id>` создаёт default project invariants in `<storage_root>/invariants/project.jsonl`;
 - API key не записывается в `config.json`.
 
 ### FR-002. OpenRouter API key
@@ -602,7 +618,7 @@ Acceptance criteria:
 3. Trusted process-control policy.
 4. Trusted stage-specific policy: role, allowed actions, forbidden actions, output schema.
 5. Active profile.
-6. Invariants.
+6. Invariants from `<storage_root>/invariants/project.jsonl` with `Invariant policy` and `id="invariants.active"`; semantic priority is above profile/memory/task/user content.
 7. Task state: stage, current_step, expected_action, status, allowed transitions.
 8. Working memory.
 9. Selected long-term memory.
@@ -1122,6 +1138,14 @@ VR-014: LLM transition proposal must not mutate task state without `TransitionGa
 
 VR-015: rejected wrong-stage output must not trigger normal memory classification or accepted short-memory append.
 
+VR-016: invariant-conflicting input must return `invariant_conflict` before provider call.
+
+VR-017: invariant-conflicting output must return `invariant_conflict` before accepted persistence and memory classifier.
+
+VR-018: invariant matching in P0 is deterministic normalized literal forbidden-term matching; docs/tests must not claim semantic matching until implemented.
+
+VR-019: custom invariants must be bounded by count/content/term limits before storage/rendering.
+
 ## 10. Acceptance checklist
 
 - `assistant init` создаёт storage и профиль.
@@ -1146,6 +1170,12 @@ VR-015: rejected wrong-stage output must not trigger normal memory classificatio
 - Validation stage prompt gives reviewer/QA role.
 - Wrong-stage LLM output is rejected before accepted persistence.
 - Stage transitions are applied only by application gate, not by LLM text.
+- `assistant invariants list --json` показывает default invariants.
+- `assistant invariants add ... --forbid ... --json` сохраняет custom invariant.
+- Prompt contains `Invariant policy`, `id="invariants.active"`, and active invariant IDs.
+- Request `предложи переписать MVP на Python` is refused with `invariant_conflict`, `stack.go`, and evidence before provider call.
+- JSON refusal exposes structured `violations` data.
+- Output conflict test proves no memory classifier/proposal path ran.
 - Restart CLI не теряет profile, memory и task state.
 - Secrets не сохраняются.
-- Day 11, Day 12 и Day 13 criteria закрыты.
+- Day 11, Day 12, Day 13 и Day 14 criteria закрыты.

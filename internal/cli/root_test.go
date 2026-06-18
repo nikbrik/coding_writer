@@ -205,6 +205,89 @@ func TestInitPersistsValidatedModel(t *testing.T) {
 	if cfg.ActiveModel != "fake/model" || cfg.MemoryModel != "fake/model" {
 		t.Fatalf("model not persisted by init: %+v", cfg)
 	}
+	if _, err := os.Stat(filepath.Join(storageDir, "invariants", "project.jsonl")); err != nil {
+		t.Fatalf("init did not persist invariants: %v", err)
+	}
+}
+
+func TestCLIInvariantsListAndAddJSON(t *testing.T) {
+	storageDir := t.TempDir()
+	run := func(args ...string) map[string]any {
+		t.Helper()
+		cmd := newRootCommand(&globalOptions{})
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		base := []string{"--storage-dir", storageDir, "--json"}
+		cmd.SetArgs(append(base, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("command %v failed: %v output=%s", args, err, out.String())
+		}
+		var parsed map[string]any
+		if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+			t.Fatalf("bad JSON: %v output=%s", err, out.String())
+		}
+		return parsed
+	}
+	list := run("invariants", "list")
+	if !strings.Contains(fmt.Sprint(list["invariants"]), "stack.go") {
+		t.Fatalf("defaults missing: %+v", list)
+	}
+	add := run("invariants", "add", "custom.rule", "--kind", "business", "--content", "No beta", "--forbid", "beta")
+	if !strings.Contains(fmt.Sprint(add["invariant"]), "custom.rule") {
+		t.Fatalf("add missing invariant: %+v", add)
+	}
+	list = run("invariants", "list")
+	if !strings.Contains(fmt.Sprint(list["invariants"]), "custom.rule") {
+		t.Fatalf("custom invariant not persisted: %+v", list)
+	}
+}
+
+func TestCLIInvariantConflictJSONIncludesViolations(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "предложи переписать MVP на Python"})
+	err := cmd.Execute()
+	if err == nil || app.AsError(err).Code != "invariant_conflict" {
+		t.Fatalf("want invariant_conflict, got %v output=%s", err, out.String())
+	}
+	printError(&stderr, err, true)
+	if !strings.Contains(stderr.String(), `"violations"`) || !strings.Contains(stderr.String(), `"invariant_id":"stack.go"`) && !strings.Contains(stderr.String(), `"invariant_id": "stack.go"`) {
+		t.Fatalf("missing structured violations: %s", stderr.String())
+	}
+}
+
+func TestREPLInvariantsListAndAdd(t *testing.T) {
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", "/invariants"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "stack.go") {
+		t.Fatalf("defaults missing from /invariants: %s", out.String())
+	}
+	out.Reset()
+	line := `/invariants add custom.no_beta --kind business --content "Do not propose beta stack" --forbid "beta stack"`
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", line); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "custom.no_beta") {
+		t.Fatalf("added invariant missing: %s", out.String())
+	}
+	out.Reset()
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", "/invariants"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "custom.no_beta") || !strings.Contains(out.String(), "beta stack") {
+		t.Fatalf("custom invariant not persisted/listed: %s", out.String())
+	}
 }
 
 func TestInitRequiresModel(t *testing.T) {

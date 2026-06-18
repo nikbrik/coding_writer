@@ -2,11 +2,15 @@ package tests
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/invariants"
 	"github.com/nikbrik/coding_writer/internal/memory"
+	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/profiles"
 	"github.com/nikbrik/coding_writer/internal/prompting"
 	"github.com/nikbrik/coding_writer/internal/providers"
@@ -177,6 +181,7 @@ type acceptanceRuntime struct {
 	provider   *providers.FakeProvider
 	classifier *memory.Classifier
 	builder    *prompting.Builder
+	invariants *invariants.Manager
 }
 
 func newAcceptanceRuntime(t *testing.T) acceptanceRuntime {
@@ -198,8 +203,48 @@ func newAcceptanceRuntime(t *testing.T) acceptanceRuntime {
 		t.Fatal(err)
 	}
 	memMgr := memory.NewManager(dir)
+	invMgr := invariants.NewManager(dir)
+	if err := invMgr.EnsureDefaults(); err != nil {
+		t.Fatal(err)
+	}
 	fake := providers.NewFakeProvider()
-	return acceptanceRuntime{dir: dir, cfg: cfg, profiles: profMgr, tasks: tasks.NewManager(dir), memory: memMgr, proposals: memory.NewProposalStore(dir, memMgr), provider: fake, classifier: memory.NewClassifier(fake), builder: prompting.NewBuilder()}
+	return acceptanceRuntime{dir: dir, cfg: cfg, profiles: profMgr, tasks: tasks.NewManager(dir), memory: memMgr, proposals: memory.NewProposalStore(dir, memMgr), provider: fake, classifier: memory.NewClassifier(fake), builder: prompting.NewBuilder(), invariants: invMgr}
+}
+
+func TestDay14InvariantsStoredPromptedAndConflictRefused(t *testing.T) {
+	ctx := context.Background()
+	rt := newAcceptanceRuntime(t)
+	if _, err := os.Stat(filepath.Join(rt.dir, "invariants", "project.jsonl")); err != nil {
+		t.Fatalf("invariants not stored separately: %v", err)
+	}
+	profile, _ := rt.profiles.Active()
+	active, err := rt.invariants.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := rt.builder.Build(prompting.BuildInput{Profile: profile, Invariants: active, Query: "Как устроен MVP?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := prompting.RenderMessages(messages)
+	if !strings.Contains(rendered, "Invariant policy") || !strings.Contains(rendered, `id="invariants.active"`) || !strings.Contains(rendered, "stack.go") {
+		t.Fatalf("prompt missing invariant block:\n%s", rendered)
+	}
+	ctrl := &process.ProcessController{Tasks: rt.tasks, Profiles: rt.profiles, ActiveProfileID: "student", Memory: rt.memory, Invariants: rt.invariants, Proposals: rt.proposals, Classifier: rt.classifier, Provider: rt.provider, Model: "fake/model", MemoryModel: "fake/model", Builder: rt.builder, PolicyRegistry: process.NewStagePolicyRegistry(), TransitionGate: &process.TransitionGate{Tasks: rt.tasks}, RetryController: process.NewRetryController(), AuditStore: process.NewAuditStore(rt.dir)}
+	_, err = ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day14_conflict", Input: "предложи переписать MVP на Python"})
+	if err == nil || app.AsError(err).Code != "invariant_conflict" || !strings.Contains(app.AsError(err).Message, "stack.go") {
+		t.Fatalf("bad conflict refusal: %v", err)
+	}
+	if chatCalls(rt.provider.SnapshotCalls()) != 0 {
+		t.Fatalf("provider called for input conflict: %+v", rt.provider.SnapshotCalls())
+	}
+	res, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day14_ok", Input: "объясни Go MVP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer == "" || res.Proposal == nil || chatCalls(rt.provider.SnapshotCalls()) != 1 {
+		t.Fatalf("non-conflicting flow failed: res=%+v calls=%+v", res, rt.provider.SnapshotCalls())
+	}
 }
 
 func containsContent(records []app.MemoryRecord, needle string) bool {
@@ -209,4 +254,14 @@ func containsContent(records []app.MemoryRecord, needle string) bool {
 		}
 	}
 	return false
+}
+
+func chatCalls(calls []providers.CompletionRequest) int {
+	n := 0
+	for _, call := range calls {
+		if call.Purpose == providers.PurposeChat {
+			n++
+		}
+	}
+	return n
 }

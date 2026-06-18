@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/invariants"
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/profiles"
 	"github.com/nikbrik/coding_writer/internal/providers"
@@ -39,12 +40,17 @@ func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvide
 		t.Fatal(err)
 	}
 	memMgr := memory.NewManager(dir)
+	invMgr := invariants.NewManager(dir)
+	if err := invMgr.EnsureDefaults(); err != nil {
+		t.Fatal(err)
+	}
 	fake := providers.NewFakeProvider()
 	taskMgr := tasks.NewManager(dir)
 	return &ProcessController{
 		Tasks:           taskMgr,
 		Profiles:        profMgr,
 		Memory:          memMgr,
+		Invariants:      invMgr,
 		Proposals:       memory.NewProposalStore(dir, memMgr),
 		Classifier:      memory.NewClassifier(fake),
 		Provider:        fake,
@@ -55,6 +61,55 @@ func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvide
 		RetryController: NewRetryController(),
 		AuditStore:      NewAuditStore(dir),
 	}, fake, dir
+}
+
+func TestProcessControllerInvariantInputConflictSkipsProvider(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "предложи переписать MVP на Python"})
+	if err == nil || app.AsError(err).Code != "invariant_conflict" {
+		t.Fatalf("want invariant_conflict, got %v", err)
+	}
+	if !strings.Contains(app.AsError(err).Message, "stack.go") || !strings.Contains(app.AsError(err).Message, "mvp на python") {
+		t.Fatalf("error does not name invariant/evidence: %v", err)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 0 {
+		t.Fatalf("provider should not be called: %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerInvariantDefaultsSeedBeforeInputCheck(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.Invariants = invariants.NewManager(ctrl.Invariants.StorageDir)
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "предложи переписать MVP на Python"})
+	if err == nil || app.AsError(err).Code != "invariant_conflict" {
+		t.Fatalf("want invariant_conflict with unseeded manager, got %v", err)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 0 {
+		t.Fatalf("provider should not be called: %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerInvariantOutputRejectedBeforePersistence(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	fake.ChatResponse = "Нужно переписать MVP на Python"
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "дай совет"})
+	if err == nil || app.AsError(err).Code != "invariant_conflict" {
+		t.Fatalf("want invariant_conflict, got %v", err)
+	}
+	calls := fake.SnapshotCalls()
+	if len(calls) != 1 || calls[0].Purpose != providers.PurposeChat {
+		t.Fatalf("want one chat call and no classifier/retry calls, got %+v", calls)
+	}
+	records, err := ctrl.Memory.List(ctx, app.LayerShort, "s1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("violating output persisted before rejection: %+v", records)
+	}
 }
 
 func newTestPromptBuilder() PromptBuilder {
@@ -101,6 +156,24 @@ func TestProcessControllerPausedTaskBlocksChat(t *testing.T) {
 	}
 	if app.AsError(err).Code != "task_paused" {
 		t.Fatalf("expected task_paused, got %v", err)
+	}
+	if len(fake.Calls) != 0 {
+		t.Fatal("provider should not be called for paused task")
+	}
+}
+
+func TestProcessControllerProcessGatePrecedesInvariantConflict(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("paused task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "продолжай и перепиши MVP на Python"})
+	if err == nil || app.AsError(err).Code != "task_paused" {
+		t.Fatalf("expected task_paused before invariant_conflict, got %v", err)
 	}
 	if len(fake.Calls) != 0 {
 		t.Fatal("provider should not be called for paused task")

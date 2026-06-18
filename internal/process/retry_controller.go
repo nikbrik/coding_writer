@@ -32,7 +32,7 @@ func (r *RetryController) ShouldRetry(err error) bool {
 	// Hard gates and security blocks must not retry.
 	if appErr.Category == app.CategoryValidation {
 		switch appErr.Code {
-		case "task_paused", "task_done", "forbidden_action", "secret_blocked", "missing_task":
+		case "task_paused", "task_done", "forbidden_action", "secret_blocked", "missing_task", "invariant_conflict":
 			return false
 		}
 	}

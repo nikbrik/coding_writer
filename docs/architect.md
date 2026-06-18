@@ -8,7 +8,7 @@
 
 ## 1.1. Canonical contract
 
-Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, and Day 13.
+Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, Day 13, and Day 14.
 
 ### Task state
 
@@ -37,6 +37,16 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, a
 - LLM may propose signals, findings or transition readiness, but application code owns state mutation.
 - Deterministic process control must not bypass Day 11 memory proposal confirmation or Day 12 profile attachment.
 
+### Invariant control
+
+- `InvariantManager` owns `<storage_root>/invariants/project.jsonl`.
+- `EnsureDefaults` persists default project invariants idempotently during `assistant init`, test setup, and normal invariant-dependent runtime paths.
+- `PromptBuilder` receives active invariants from `ProcessController` and renders them as trusted policy with semantic priority above profile, memory, task, and user query.
+- `CheckInput` runs before provider call; direct conflict fails closed with `invariant_conflict`.
+- `CheckOutput` runs before accepted persistence, transitions and memory classifier; conflict output is rejected as a hard gate with no correction retry in Day14.
+- P0 matcher uses normalized literal forbidden-term matching. Semantic matching, aliases, regexes and `RequiredTerms` are future extensions unless implemented.
+- Custom/user invariants are privileged local policy data with source/provenance labels, bounded lengths/counts, and provider-visible disclosure.
+
 Implementation status on 2026-06-18: this architecture is implemented in the current Go codebase. The normal chat path goes through `internal/process.ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, validators, bounded retry, `TransitionGate`, `ProcessAuditStore`, `internal/prompting.Builder`, `internal/memory.Classifier`, and `internal/providers.OpenRouterProvider` or `FakeProvider`.
 
 Главные блоки:
@@ -53,7 +63,8 @@ Implementation status on 2026-06-18: this architecture is implemented in the cur
 - response validator;
 - transition gate;
 - response loop;
-- invariant checker.
+- invariant checker;
+- invariant manager.
 
 ## 2. Рекомендуемый стек
 
@@ -150,6 +161,9 @@ internal/process/
 internal/prompting/
   builder.go
 
+internal/invariants/
+  manager.go
+
 internal/storage/
   atomic.go/json.go/jsonl.go/safe_path.go/file_lock_*.go
 
@@ -198,6 +212,8 @@ Storage contract:
     decisions.jsonl
     knowledge.jsonl
     constraints.jsonl
+  invariants/
+    project.jsonl
   process_audit.jsonl
   logs/
 ```

@@ -55,7 +55,7 @@ func (m *ConfigManager) ConfigPath() (string, error) {
 }
 
 func (m *ConfigManager) EnsureStorageTree() error {
-	for _, dir := range []string{"profiles", "sessions", "tasks", "long_term", "logs"} {
+	for _, dir := range []string{"profiles", "sessions", "tasks", "long_term", "logs", "invariants"} {
 		path, err := storage.SafeJoin(m.StorageDir, dir)
 		if err != nil {
 			return NewError(CategoryValidation, "unsafe_storage_path", "unsafe storage path", err)

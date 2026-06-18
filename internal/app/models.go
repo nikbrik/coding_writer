@@ -101,6 +101,28 @@ type UserProfile struct {
 	UpdatedAt      time.Time         `json:"updated_at"`
 }
 
+type Invariant struct {
+	ID             string    `json:"id"`
+	Scope          string    `json:"scope"`
+	Kind           string    `json:"kind"`
+	Content        string    `json:"content"`
+	Severity       string    `json:"severity"`
+	ForbiddenTerms []string  `json:"forbidden_terms,omitempty"`
+	RequiredTerms  []string  `json:"required_terms,omitempty"`
+	Source         string    `json:"source"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type InvariantViolation struct {
+	InvariantID string `json:"invariant_id"`
+	Kind        string `json:"kind,omitempty"`
+	Direction   string `json:"direction,omitempty"`
+	Severity    string `json:"severity"`
+	Message     string `json:"message"`
+	Evidence    string `json:"evidence"`
+}
+
 type TaskStage string
 
 const (
