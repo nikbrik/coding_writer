@@ -11,12 +11,22 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
 		errs = append(errs, "execution output missing required summary/next_signal")
 	}
-	combined := strings.Join(append([]string{out.Summary}, append(out.ChangedArtifacts, out.Verification...)...), " ")
+	progressClaims := []string{out.CurrentStep, out.NextStep}
+	progressClaims = append(progressClaims, out.CompletedSteps...)
+	combinedParts := append([]string{out.Summary}, progressClaims...)
+	combinedParts = append(combinedParts, out.ChangedArtifacts...)
+	combinedParts = append(combinedParts, out.Verification...)
+	combined := strings.Join(combinedParts, " ")
 	if containsTestPassClaim(combined) && !hasTrustedEvidence(trustedEvidence) {
 		errs = append(errs, "test/tool claims require trusted application evidence")
 	}
 	if containsSideEffectClaim(combined) && !hasTrustedEvidence(trustedEvidence) {
 		errs = append(errs, "side-effect claims require trusted application evidence")
+	}
+	for _, claim := range progressClaims {
+		if containsProgressToolClaim(claim) && !hasTrustedEvidence(trustedEvidence) {
+			errs = append(errs, "execution progress claims require trusted application evidence")
+		}
 	}
 	for _, v := range out.Verification {
 		lower := strings.ToLower(v)
@@ -44,4 +54,19 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 		}
 	}
 	return errs
+}
+
+func containsProgressToolClaim(text string) bool {
+	lower := strings.ToLower(text)
+	if strings.Contains(lower, "tool_result") || strings.Contains(lower, "tool result") {
+		return true
+	}
+	claimVerb := strings.Contains(lower, "ran ") || strings.Contains(lower, "executed ") || strings.Contains(lower, "запустил")
+	if claimVerb && strings.Contains(lower, "test") {
+		return true
+	}
+	if strings.Contains(lower, "go test") && (strings.Contains(lower, "passed") || strings.Contains(lower, "ok") || strings.Contains(lower, "success")) {
+		return true
+	}
+	return false
 }

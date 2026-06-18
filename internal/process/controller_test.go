@@ -293,6 +293,39 @@ func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
 	}
 }
 
+func TestProcessControllerRejectsUnverifiedExecutionProgressClaims(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetStep("first"); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"execution","summary":"worked","current_step":"updated file internal/foo.go","completed_steps":["tests passed"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "progress_claims", Input: "реализуй", ActionKind: ActionExecutePlanStep})
+	if err == nil || app.AsError(err).Code != "validation_failed" {
+		t.Fatalf("want validation_failed, got %v", err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.CurrentStep != "first" || len(current.CompletedSteps) != 0 {
+		t.Fatalf("execution progress claim mutated state: %+v", current)
+	}
+	records, err := ctrl.Memory.List(ctx, app.LayerShort, "progress_claims", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("rejected progress claim should not save short memory: %+v", records)
+	}
+}
+
 func TestProcessControllerDoneBenignInputIsReadOnlyAnswer(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

@@ -73,6 +73,55 @@ func TestExecutionRejectsImplementationClaimWithoutTrustedEvidence(t *testing.T)
 	}
 }
 
+func TestExecutionRejectsImplementationClaimInCurrentStep(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", CurrentStep: "updated file internal/foo.go", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected current_step implementation claim rejection")
+	}
+}
+
+func TestExecutionRejectsTestClaimInNextStep(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", NextStep: "tests passed", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected next_step test claim rejection")
+	}
+}
+
+func TestExecutionRejectsRanTestClaimInCurrentStep(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", CurrentStep: "ran go test ./...", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected current_step test command claim rejection")
+	}
+}
+
+func TestExecutionRejectsImplementationClaimInCompletedSteps(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", CompletedSteps: []string{"updated file internal/foo.go"}, NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected completed_steps implementation claim rejection")
+	}
+}
+
+func TestExecutionRejectsGoTestPassedClaimInCompletedSteps(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", CompletedSteps: []string{"go test ./... passed"}, NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected completed_steps terse test claim rejection")
+	}
+}
+
+func TestExecutionRejectsToolResultClaimInNextStep(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "s", NextStep: "tool_result: go test ok", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected next_step tool result claim rejection")
+	}
+}
+
+func TestExecutionAllowsBenignProgressFields(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "worked", CurrentStep: "first", CompletedSteps: []string{"first"}, NextStep: "second", NextSignal: "continue_execution"})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+}
+
 func TestAnswerQuestionRejectsImplementationClaim(t *testing.T) {
 	errs := validateAnswerQuestion("updated file internal/foo.go")
 	if len(errs) == 0 {
