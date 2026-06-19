@@ -98,6 +98,41 @@ func TestProcessControllerInvariantInputConflictSkipsProvider(t *testing.T) {
 	}
 }
 
+func TestProcessControllerSemanticInvariantInputConflictSkipsChatProvider(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.InvariantValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponse = `{"violations":[{"invariant_id":"stack.go","severity":"block","problem":"semantic conflict with Go MVP stack","evidence":"rewrite to Python"}]}`
+	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "сделай реализацию на другом языке"})
+	if err == nil || app.AsError(err).Code != "invariant_conflict" {
+		t.Fatalf("want invariant_conflict, got %v", err)
+	}
+	if !strings.Contains(app.AsError(err).Message, "stack.go") || !strings.Contains(app.AsError(err).Message, "rewrite to Python") {
+		t.Fatalf("error does not name semantic invariant/evidence: %v", err)
+	}
+	if validatorCalls(fake.SnapshotCalls()) != 1 || chatCalls(fake.SnapshotCalls()) != 0 {
+		t.Fatalf("want one validator call and no chat call, got %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerSemanticInvariantCanAllowPolicyDiscussion(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.InvariantValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"violations":[]}`,
+		`{"violations":[]}`,
+	}
+	fake.ChatResponse = "Можно обсудить правило, но не нарушать его."
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "почему нельзя переписать MVP на Python?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Answer, "обсудить правило") || chatCalls(fake.SnapshotCalls()) != 1 {
+		t.Fatalf("policy discussion should reach chat provider: res=%+v calls=%+v", res, fake.SnapshotCalls())
+	}
+}
+
 func TestProcessControllerInvariantDefaultsSeedBeforeInputCheck(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

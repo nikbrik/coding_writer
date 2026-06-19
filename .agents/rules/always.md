@@ -5,10 +5,15 @@ Load these canonical shared rule files before work:
 - `.agents/rules/search.md`
 - `.agents/rules/goal-loop.md`
 - `.agents/rules/harness-evolution.md`
+- `.agents/rules/validation.md`
 
 ## Search
 
 - Canonical search policy lives in `.agents/rules/search.md`.
+
+## Validation
+
+- Canonical validation policy lives in `.agents/rules/validation.md`.
 
 ## Style
 

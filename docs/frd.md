@@ -9,7 +9,7 @@ FRD описывает функциональные требования к MVP 
 - `day11.md`: явная модель памяти с отдельными слоями;
 - `day12.md`: персонализация через профиль пользователя;
 - `day13.md`: состояние задачи как конечный автомат;
-- `day14.md`: отдельный invariant layer с prompt visibility и deterministic conflict refusal.
+- `day14.md`: отдельный invariant layer с prompt visibility и semantic conflict refusal через out-of-band LLM validator.
 
 ## 2. Scope MVP
 
@@ -30,9 +30,9 @@ MVP должен реализовать:
 - pause/resume задачи без повторного объяснения контекста;
 - invariant manager/checker: отдельное storage, prompt block, input/output enforcement.
 
-Текущее состояние реализации на 2026-06-18:
+Текущее состояние реализации на 2026-06-19:
 
-- Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, deterministic process controller, validators, transition gate, audit store.
+- Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, process controller, structural validators, semantic validators, transition gate, audit store.
 - Default storage root: `os.UserConfigDir()/coding-writer-assistant`; repo-local `.assistant/` используется только через explicit `--storage-dir` или `ASSISTANT_STORAGE_DIR`.
 - Acceptance flow проверяется fake provider tests: `TestDay11EndToEndMemoryProposalApplyInfluence`, `TestDay12ProfilesChangePromptAndResponse`, `TestDay13PauseResumeAfterRestartUsesWorkingMemory`.
 - Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition and rejected-output no-persistence.
@@ -69,7 +69,7 @@ MVP не должен реализовывать:
 
 `Invariant` — ограничение, которое нельзя нарушать между запросами.
 
-`InvariantViolation` — deterministic refusal record с `invariant_id`, `severity`, `message`, `evidence`.
+`InvariantViolation` — structured refusal record с `invariant_id`, `severity`, `message`, `evidence`.
 
 `ProcessController` — application-level controller, который до provider call выбирает current stage, разрешённое действие, stage policy, prompt contract и после provider call принимает или отклоняет output.
 
@@ -79,7 +79,7 @@ MVP не должен реализовывать:
 
 `StagePromptFactory` — компонент, который добавляет trusted stage-specific system prompt перед untrusted profile/task/memory blocks.
 
-`TransitionGate` — единственный компонент, который применяет stage transition после deterministic validation; LLM может только предложить signal.
+`TransitionGate` — единственный компонент, который применяет stage transition после структурной и смысловой validation; LLM может только предложить signal.
 
 ## 4. Пользовательские роли
 
@@ -135,10 +135,11 @@ FRD is source of truth for the implementation contract together with PRD and arc
 
 - active invariants are stored in `<storage_root>/invariants/project.jsonl`, not in session dialogue;
 - prompt builder renders active invariants with `Invariant policy` and `id="invariants.active"`; invariants semantically outrank profile, memory, task, and user query even when rendered after profile for prompt readability;
-- input conflict returns `invariant_conflict` before chat provider call;
-- output conflict returns `invariant_conflict` immediately, with no correction retry, before short-memory persistence, process transition, and memory classifier;
+- input conflict is checked by an out-of-band LLM invariant validator and returns `invariant_conflict` before the normal chat provider call;
+- output conflict is checked by the same invariant validator and returns `invariant_conflict` immediately, with no correction retry, before short-memory persistence, process transition, and memory classifier;
 - refusal must name invariant ID and evidence, and JSON output must expose structured violations;
-- MVP enforcement is normalized literal forbidden-term matching; broader semantic matching and `RequiredTerms` semantics are future work unless explicitly implemented;
+- `forbidden_terms` are examples/fallback signals, not the primary product decision for policy conflicts;
+- local invariant checks may only be hard gates/fallbacks; semantic policy conflict decisions must use LLM structured validation or another documented semantic method;
 - custom/user invariants are privileged local policy data, rendered with source labels and bounded count/length limits; invariant content may be provider-visible;
 - default invariants cover stack, process ownership, memory layers, no silent long-term writes, secrets, paused task, done terminal task, and OpenRouter key env-only.
 
@@ -1150,7 +1151,7 @@ VR-016: invariant-conflicting input must return `invariant_conflict` before prov
 
 VR-017: invariant-conflicting output must return `invariant_conflict` before accepted persistence and memory classifier.
 
-VR-018: invariant matching in P0 is deterministic normalized literal forbidden-term matching; docs/tests must not claim semantic matching until implemented.
+VR-018: invariant policy conflicts must be judged by out-of-band LLM structured validation in real mode; local keyword/regex checks are allowed only as hard gates, fallback, or prefilters, not final semantic decisions.
 
 VR-019: custom invariants must be bounded by count/content/term limits before storage/rendering.
 
@@ -1181,7 +1182,7 @@ VR-019: custom invariants must be bounded by count/content/term limits before st
 - `assistant invariants list --json` показывает default invariants.
 - `assistant invariants add ... --forbid ... --json` сохраняет custom invariant.
 - Prompt contains `Invariant policy`, `id="invariants.active"`, and active invariant IDs.
-- Request `предложи переписать MVP на Python` is refused with `invariant_conflict`, `stack.go`, and evidence before provider call.
+- Request `предложи переписать MVP на Python` is refused with `invariant_conflict`, `stack.go`, and evidence before normal chat provider call.
 - JSON refusal exposes structured `violations` data.
 - Output conflict test proves no memory classifier/proposal path ran.
 - Restart CLI не теряет profile, memory и task state.

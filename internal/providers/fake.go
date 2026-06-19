@@ -194,6 +194,16 @@ func defaultClassifierJSON(prompt string) string {
 
 func defaultValidatorJSON(prompt string) string {
 	lower := strings.ToLower(prompt)
+	if strings.Contains(lower, "out-of-band invariant policy referee") {
+		text := strings.ToLower(invariantTextFromPrompt(prompt))
+		if (strings.Contains(text, "brute force") || strings.Contains(text, "o(n^2)")) && strings.Contains(prompt, "algorithm.no_bruteforce") {
+			return `{"violations":[{"invariant_id":"algorithm.no_bruteforce","severity":"block","problem":"text asks for brute-force stock-profit behavior forbidden by the algorithm invariant","evidence":"semantic conflict"}]}`
+		}
+		if strings.Contains(text, "python") || strings.Contains(text, "node") || strings.Contains(text, "rust") || strings.Contains(text, "brute force") || strings.Contains(text, "o(n^2)") {
+			return `{"violations":[{"invariant_id":"stack.go","severity":"block","problem":"text asks for behavior that conflicts with the Go MVP stack invariant","evidence":"semantic conflict"}]}`
+		}
+		return `{"violations":[]}`
+	}
 	if strings.Contains(lower, "out-of-band intent referee") {
 		action := "answer_question"
 		for _, candidate := range []string{"answer_question", "plan_task", "ask_clarification", "execute_plan_step", "summarize_execution", "review_output", "verify_criteria", "summarize_done", "propose_transition"} {
@@ -213,6 +223,25 @@ func defaultValidatorJSON(prompt string) string {
 		return `{"action_kind":"` + action + `","transition_signal":"` + signal + `","confidence":0.8,"reason":"fake deterministic intent"}`
 	}
 	return `{"verdict":"pass","findings":[]}`
+}
+
+func invariantTextFromPrompt(prompt string) string {
+	idx := strings.LastIndex(prompt, "user: ")
+	if idx < 0 {
+		return ""
+	}
+	payload := strings.TrimSpace(prompt[idx+len("user: "):])
+	if nl := strings.IndexByte(payload, '\n'); nl >= 0 {
+		payload = payload[:nl]
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return ""
+	}
+	if value, ok := decoded["text"].(string); ok {
+		return value
+	}
+	return ""
 }
 
 func semanticUserInputFromPrompt(prompt string) string {

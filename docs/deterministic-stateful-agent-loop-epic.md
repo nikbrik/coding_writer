@@ -39,7 +39,8 @@ Process compliance gaps below are closed in current code:
 - Не гарантировать байт-в-байт одинаковый natural language output от разных моделей.
 - Не делать multi-agent orchestration как обязательную архитектуру.
 - Не отдавать LLM право менять `TaskState` напрямую.
-- Не заменять deterministic validators вторым LLM-judge без code gate.
+- Не заменять objective code gates вторым LLM-judge: schema, enum, stage, transition, secret and trusted-evidence checks remain in application code.
+- Смысловые проверки, например user intent, stage-contract meaning and invariant conflicts, должны идти через LLM structured validator или другой документированный semantic method, а не через keyword/substring matching.
 - Не смешивать trusted system policy и untrusted task/memory/profile data.
 - Не ослаблять Day 11, Day 12 or Day 13 acceptance ради process controller.
 
@@ -569,7 +570,7 @@ Audit event schema:
 
 ## Implementation Plan
 
-Current implementation status on 2026-06-18: phases 1-9 are implemented in `internal/process`, `internal/prompting`, `internal/cli`, and tests. The phase list remains as regression checklist and extension map.
+Current implementation status on 2026-06-19: phases 1-9 are implemented in `internal/process`, `internal/prompting`, `internal/cli`, and tests. The phase list remains as regression checklist and extension map.
 
 ### Phase 1: Policy and Types
 

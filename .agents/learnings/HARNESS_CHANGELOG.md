@@ -4,6 +4,12 @@
 > Правило: только append-only записи между маркерами.
 
 <!-- HARNESS-CHANGELOG:START -->
+## 2026-06-19 | semantic validation rule
+**Applied**: RULE-001
+**Files**: .agents/rules/always.md, .agents/rules/validation.md
+**Reason**: Made semantic product validation policy explicit: no keyword/substring/simple-regex final validators for meaning-based decisions.
+
+---
 ## 2026-06-19 | real CLI validation and manual suite
 **Applied**: LEARNING-001, LEARNING-002, ERROR-001, ERROR-002
 **Files**: .kilo/learnings/LEARNINGS.md, .kilo/learnings/ERRORS.md

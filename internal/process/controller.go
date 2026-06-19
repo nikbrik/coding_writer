@@ -16,22 +16,23 @@ import (
 
 // ProcessController owns the deterministic chat exchange flow.
 type ProcessController struct {
-	Tasks             *tasks.Manager
-	Profiles          *profiles.Manager
-	ActiveProfileID   string
-	Memory            *memory.Manager
-	Invariants        *invariants.Manager
-	Proposals         *memory.ProposalStore
-	Classifier        *memory.Classifier
-	Provider          providers.LLMProvider
-	Model             string
-	MemoryModel       string
-	Builder           PromptBuilder
-	PolicyRegistry    *StagePolicyRegistry
-	TransitionGate    *TransitionGate
-	RetryController   *RetryController
-	AuditStore        *AuditStore
-	SemanticValidator *SemanticValidator
+	Tasks              *tasks.Manager
+	Profiles           *profiles.Manager
+	ActiveProfileID    string
+	Memory             *memory.Manager
+	Invariants         *invariants.Manager
+	Proposals          *memory.ProposalStore
+	Classifier         *memory.Classifier
+	Provider           providers.LLMProvider
+	Model              string
+	MemoryModel        string
+	Builder            PromptBuilder
+	PolicyRegistry     *StagePolicyRegistry
+	TransitionGate     *TransitionGate
+	RetryController    *RetryController
+	AuditStore         *AuditStore
+	SemanticValidator  *SemanticValidator
+	InvariantValidator *SemanticValidator
 }
 
 // ExchangeInput controls a single process-controlled exchange.
@@ -80,7 +81,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	action := preflight.Action
 	semanticSignal := "none"
 	if c.Invariants != nil {
-		violations, err := c.Invariants.CheckInput(ctx, input.Input)
+		violations, err := c.checkInvariantPolicy(ctx, sessionID, "input", input.Input, taskPtr, stage, action, !input.RenderOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -331,7 +332,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		lastRaw = res.Message.Content
 		result.Model = res.Model
 		if c.Invariants != nil {
-			violations, err := c.Invariants.CheckOutput(ctx, lastRaw)
+			violations, err := c.checkInvariantPolicy(ctx, sessionID, "output", lastRaw, taskPtr, stage, action, true)
 			if err != nil {
 				return result, err
 			}
@@ -715,7 +716,7 @@ func (c *ProcessController) PreflightContext(ctx context.Context, input Exchange
 		return err
 	}
 	if c.Invariants != nil {
-		violations, err := c.Invariants.CheckInput(ctx, input.Input)
+		violations, err := c.checkInvariantPolicy(ctx, sessionID, "input", input.Input, preflight.Task, preflight.Stage, preflight.Action, true)
 		if err != nil {
 			return err
 		}
@@ -726,6 +727,35 @@ func (c *ProcessController) PreflightContext(ctx context.Context, input Exchange
 		}
 	}
 	return nil
+}
+
+func (c *ProcessController) checkInvariantPolicy(ctx context.Context, sessionID, direction, text string, task *app.TaskState, stage app.TaskStage, action ActionKind, allowSemantic bool) ([]app.InvariantViolation, error) {
+	if c == nil || c.Invariants == nil {
+		return nil, nil
+	}
+	if allowSemantic && c.InvariantValidator != nil {
+		items, err := c.Invariants.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return c.InvariantValidator.ValidateInvariants(ctx, InvariantValidationInput{
+			SessionID:  sessionID,
+			Direction:  direction,
+			Text:       text,
+			Stage:      stage,
+			ActionKind: action,
+			Task:       task,
+			Invariants: items,
+		})
+	}
+	switch direction {
+	case "input":
+		return c.Invariants.CheckInput(ctx, text)
+	case "output":
+		return c.Invariants.CheckOutput(ctx, text)
+	default:
+		return nil, app.NewError(app.CategoryValidation, "invalid_invariant_direction", "invalid invariant validation direction", nil)
+	}
 }
 
 func invariantAuditMessages(violations []app.InvariantViolation) []string {

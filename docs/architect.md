@@ -50,12 +50,13 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - `InvariantManager` owns `<storage_root>/invariants/project.jsonl`.
 - `EnsureDefaults` persists default project invariants idempotently during `assistant init`, test setup, and normal invariant-dependent runtime paths.
 - `PromptBuilder` receives active invariants from `ProcessController` and renders them as trusted policy with semantic priority above profile, memory, task, and user query.
-- `CheckInput` runs before provider call; direct conflict fails closed with `invariant_conflict`.
-- `CheckOutput` runs before accepted persistence, transitions and memory classifier; conflict output is rejected as a hard gate with no correction retry in Day14.
-- P0 matcher uses normalized literal forbidden-term matching. Semantic matching, aliases, regexes and `RequiredTerms` are future extensions unless implemented.
+- `InvariantValidator` runs before the normal chat provider call; semantic conflicts fail closed with `invariant_conflict`.
+- `InvariantValidator` also runs on provider output before accepted persistence, transitions and memory classifier; conflict output is rejected as a hard gate with no correction retry in Day14.
+- Local `CheckInput`/`CheckOutput` matching is fallback/hard-gate behavior for modes without an LLM validator, not the primary product decision.
+- Semantic policy decisions use out-of-band LLM structured validation; keyword lists or simple regexes are not acceptable final validators for invariant conflicts.
 - Custom/user invariants are privileged local policy data with source/provenance labels, bounded lengths/counts, and provider-visible disclosure.
 
-Implementation status on 2026-06-18: this architecture is implemented in the current Go codebase. The normal chat path goes through `internal/process.ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, validators, bounded retry, `TransitionGate`, `ProcessAuditStore`, `internal/prompting.Builder`, `internal/memory.Classifier`, and `internal/providers.OpenRouterProvider` or `FakeProvider`.
+Implementation status on 2026-06-19: this architecture is implemented in the current Go codebase. The normal chat path goes through `internal/process.ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, structural validators, semantic validators, bounded retry, `TransitionGate`, `ProcessAuditStore`, `internal/prompting.Builder`, `internal/memory.Classifier`, and `internal/providers.OpenRouterProvider` or `FakeProvider`.
 
 Главные блоки:
 
@@ -1659,7 +1660,7 @@ Current status: items 1-20 are implemented and covered by unit/acceptance tests.
 - summarization of long sessions;
 - replayable task history;
 - multi-provider support;
-- stronger deterministic invariant checker for project constraints;
+- richer semantic invariant checking for project constraints, for example embeddings or domain-specific semantic indexes beyond the current LLM referee;
 - richer non-interactive automation beyond current `chat --once`.
 
 ## 18. Главный архитектурный инвариант

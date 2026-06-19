@@ -429,7 +429,7 @@ Recovery safe request:
 - rendered prompt содержит active invariant block;
 - safe Go request проходит и дает complete solution;
 - conflict request возвращает `invariant_conflict`;
-- отказ содержит invariant ID/evidence (`stack.go`, `algorithm.no_bruteforce`, `Python`, `O(n^2)` или `brute force`);
+- отказ содержит invariant ID/evidence; evidence может быть короткой цитатой или семантическим описанием конфликта;
 - после отказа safe request снова проходит;
 - invariants лежат отдельно в `$ASSISTANT_STORAGE_DIR/invariants`.
 

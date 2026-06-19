@@ -6,7 +6,7 @@
 
 Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer.
 
-Текущее состояние кода на 2026-06-18: базовый MVP, deterministic process-control loop и Day14 invariant layer реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
+Текущее состояние кода на 2026-06-19: базовый MVP, process-control loop и Day14 invariant layer с out-of-band LLM validation реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
 
 ## 1. Текущее Поведение Проекта
 
@@ -25,7 +25,7 @@
 - ведёт текущую задачу как конечный автомат с `stage`, `current_step`, `expected_action`, `status`;
 - сообщает LLM текущий stage, роль этапа, allowed actions and forbidden actions перед task-scoped provider call;
 - поддерживает pause/resume задачи на любом рабочем этапе без повторного объяснения контекста;
-- имеет отдельный invariant layer, который хранится вне диалога, рендерится в prompt и deterministic блокирует конфликты;
+- имеет отдельный invariant layer, который хранится вне диалога, рендерится в prompt и блокирует конфликты через out-of-band LLM invariant validator;
 - имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13/14.
 
 ## 2. Regression Acceptance Contract
@@ -75,10 +75,10 @@
 
 - инварианты хранятся отдельно от диалога в `<storage_root>/invariants/project.jsonl`;
 - active invariants попадают в prompt как trusted system policy с marker `Invariant policy` и `id="invariants.active"`;
-- user input, конфликтующий с invariant, блокируется до provider call;
-- provider output, конфликтующий с invariant, отклоняется как hard gate без correction retry до accepted persistence и до memory classifier;
+- user input, конфликтующий с invariant, блокируется до normal chat provider call через out-of-band LLM invariant validator;
+- provider output, конфликтующий с invariant, отклоняется тем же semantic validator как hard gate без correction retry до accepted persistence и до memory classifier;
 - отказ содержит `invariant_conflict`, ID инварианта, evidence и structured JSON violations;
-- P0 matcher is normalized literal forbidden-term matching; semantic invariant matching and `RequiredTerms` are future work unless explicitly implemented;
+- `forbidden_terms` are examples/fallback signals, not the final semantic decision; simple keyword/regex matching is not allowed as the primary product validator for policy conflicts;
 - custom invariants are bounded privileged local policy data; content may be provider-visible and is rendered with source/provenance labels;
 - tests используют fake provider/deterministic checks, не live OpenRouter.
 
@@ -624,7 +624,7 @@ Parsing rules:
 
 ## 10. Historical Phase Checklist
 
-Status on 2026-06-18:
+Status on 2026-06-19:
 
 | Area | Current status |
 | --- | --- |

@@ -312,8 +312,10 @@ func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 			model = rt.Config.ActiveModel
 		}
 		pc.SemanticValidator = process.NewSemanticValidator(provider, model)
+		pc.InvariantValidator = process.NewSemanticValidator(provider, model)
 	} else {
 		pc.SemanticValidator = nil
+		pc.InvariantValidator = nil
 	}
 	return pc
 }

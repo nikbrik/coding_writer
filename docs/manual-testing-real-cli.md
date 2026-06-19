@@ -13,8 +13,8 @@
 
 - Реальные части: CLI commands, локальное storage, profiles, memory proposals/apply, task FSM, OpenRouter provider, prompt rendering, process audit, invariants.
 - Fake mode нужен только для CI и deterministic tests.
-- Real OpenRouter mode включает out-of-band LLM validation по умолчанию: основной ответ и проверка идут разными provider calls.
-- Deterministic local gates остаются только для hard safety: secrets, unsafe paths, stage policy, invariant literal preflight, trusted evidence metadata.
+- Real OpenRouter mode включает out-of-band LLM validation по умолчанию: основной ответ, смысловая проверка процесса и invariant conflict check идут разными provider calls.
+- Deterministic local gates остаются только для hard safety: secrets, unsafe paths, schema/stage policy, fallback invariant tripwires, trusted evidence metadata.
 - Если нужно сравнить старое поведение, можно отключить LLM referee: `ASSISTANT_LLM_VALIDATION=off`.
 
 ## 1. Общая подготовка
@@ -137,7 +137,7 @@ Acceptance proof:
 - invariants are stored separately;
 - active invariants appear in rendered prompt;
 - safe Go `MaxProfit` request runs normally and returns complete code/tests/complexity;
-- conflicting Python/brute-force rewrite request is blocked with `invariant_conflict`, invariant ID, and evidence;
+- conflicting Python/brute-force rewrite request is blocked by the out-of-band invariant validator with `invariant_conflict`, invariant ID, and evidence;
 - custom algorithm invariant persists in `invariants/project.jsonl`.
 
 ## 3. Validation model
@@ -276,7 +276,7 @@ Expected:
 
 - Fails with `invariant_conflict`.
 - Error names `stack.go` and evidence.
-- Audit has rejection before chat provider call.
+- Audit has invariant rejection before normal chat provider call.
 
 ### Case 9. Custom invariant persists separately
 
