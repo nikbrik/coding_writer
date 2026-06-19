@@ -316,6 +316,10 @@ assistant chat
 /exit
 ```
 
+Если после строки `Продолжай с того места...` CLI сразу отвечает `ready for validation` и `/task status` показывает `stage=validation`, это нормальный проход: значит все execution deliverables уже были выданы до pause. В этом случае не нужно повторно просить финальный код в validation stage и не нужно считать `blocked_missing_evidence` багом. Следующий шаг - agent verification ниже.
+
+Если в validation stage вручную ввести `Готово к проверке`, ожидаемый ответ может быть `blocked_missing_evidence`: это значит, что модель не видит trusted output команды `go test`. Для перехода `validation -> done` нужен именно `--verify`.
+
 ### Acceptance proof на видео
 
 - первый обычный запрос создает planning task;
