@@ -525,7 +525,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	autoVerifyCommand := ""
 	if strings.TrimSpace(verifyCommand) == "" {
 		var autoErr error
-		autoVerifyCommand, autoErr = autoTrustedVerificationCommand(ctx, sessionID, input, currentTask, renderOnly, pc.SemanticValidator)
+		autoVerifyCommand, autoErr = autoTrustedVerificationCommand(ctx, rt, sessionID, input, currentTask, renderOnly, pc.SemanticValidator)
 		if autoErr != nil {
 			return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, autoErr
 		}
@@ -559,13 +559,69 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		}
 		return result, err
 	}
+	if postResult, postCommand, postErr := runPostApprovalTrustedVerification(ctx, rt, pc, sessionID, renderOnly, procResult); postErr != nil {
+		result.OK = false
+		if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+			result.Task = &task
+		}
+		return result, postErr
+	} else if postResult != nil {
+		if strings.TrimSpace(postResult.Answer) != "" {
+			result.Answer = postResult.Answer
+		}
+		if postResult.Model != "" {
+			result.Model = postResult.Model
+		}
+		result.Transition = postResult.Transition
+		result.Warnings = append(result.Warnings, postResult.Warnings...)
+		if postCommand != "" {
+			result.Warnings = append(result.Warnings, "auto verification: "+postCommand)
+		}
+	}
 	if task, taskErr := rt.Tasks.Current(); taskErr == nil {
 		result.Task = &task
 	}
 	return result, nil
 }
 
-func autoTrustedVerificationCommand(ctx context.Context, sessionID, input string, task app.TaskState, renderOnly bool, semanticValidator *process.SemanticValidator) (string, error) {
+func runPostApprovalTrustedVerification(ctx context.Context, rt *runtime, pc *process.ProcessController, sessionID string, renderOnly bool, procResult *process.ExchangeResult) (*process.ExchangeResult, string, error) {
+	if renderOnly || rt == nil || pc == nil || procResult == nil || procResult.Transition == nil {
+		return nil, "", nil
+	}
+	if !procResult.Transition.Moved || procResult.Transition.From != app.StagePlanning || procResult.Transition.To != app.StageExecution {
+		return nil, "", nil
+	}
+	task, err := rt.Tasks.Current()
+	if err != nil {
+		return nil, "", err
+	}
+	command, err := resolveTrustedVerificationCommand(ctx, rt, task)
+	if err != nil {
+		return nil, "", err
+	}
+	if command == "" {
+		return nil, "", nil
+	}
+	evidence, err := runTrustedVerification(ctx, rt.StorageDir, task.ID, sessionID, command, false)
+	if err != nil {
+		return nil, command, err
+	}
+	follow, err := pc.RunExchange(ctx, process.ExchangeInput{
+		SessionID:             sessionID,
+		Input:                 "Application-issued trusted verification evidence is available for the approved plan. Move to validation if the evidence satisfies execution readiness.",
+		ActionKind:            process.ActionSummarizeExecution,
+		TrustedEvidence:       evidence,
+		RequireMemoryProposal: false,
+		SkipSemanticIntent:    true,
+		SkipPromptImprovement: true,
+	})
+	if err != nil {
+		return nil, command, err
+	}
+	return follow, command, nil
+}
+
+func autoTrustedVerificationCommand(ctx context.Context, rt *runtime, sessionID, input string, task app.TaskState, renderOnly bool, semanticValidator *process.SemanticValidator) (string, error) {
 	if renderOnly || strings.TrimSpace(task.ID) == "" || task.Status == app.TaskStatusPaused || task.Stage == app.StageDone {
 		return "", nil
 	}
@@ -584,7 +640,7 @@ func autoTrustedVerificationCommand(ctx context.Context, sessionID, input string
 		if !semanticAutoVerificationIntent(intent, task.Stage) {
 			return "", nil
 		}
-		return firstTrustedVerificationCommand(task), nil
+		return resolveTrustedVerificationCommand(ctx, rt, task)
 	}
 	return "", nil
 }
@@ -595,7 +651,7 @@ func semanticAutoVerificationIntent(intent process.SemanticIntentResult, stage a
 	}
 	switch stage {
 	case app.StageExecution:
-		return intent.TransitionSignal == "ready_for_validation"
+		return intent.TransitionSignal == "ready_for_validation" || intent.ActionKind == process.ActionSummarizeExecution
 	case app.StageValidation:
 		return intent.TransitionSignal == "ready_for_done"
 	default:
@@ -603,7 +659,115 @@ func semanticAutoVerificationIntent(intent process.SemanticIntentResult, stage a
 	}
 }
 
-func firstTrustedVerificationCommand(task app.TaskState) string {
+func resolveTrustedVerificationCommand(ctx context.Context, rt *runtime, task app.TaskState) (string, error) {
+	if command := explicitTrustedVerificationCommand(task); command != "" {
+		return command, nil
+	}
+	return planTrustedVerificationCommand(ctx, rt, task)
+}
+
+type verificationCommandPlan struct {
+	Command    string  `json:"command"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+func planTrustedVerificationCommand(ctx context.Context, rt *runtime, task app.TaskState) (string, error) {
+	if rt == nil || strings.TrimSpace(task.ID) == "" || strings.TrimSpace(rt.Config.ActiveModel) == "" {
+		return "", nil
+	}
+	payload, err := verificationPlannerPayload(task)
+	if err != nil {
+		return "", err
+	}
+	temp := 0.0
+	res, err := rt.ensureProvider().Complete(ctx, providers.CompletionRequest{
+		Purpose:     providers.PurposeValidator,
+		Model:       rt.Config.ActiveModel,
+		JSONMode:    true,
+		Temperature: &temp,
+		Messages: []app.ChatMessage{
+			{ID: app.NewID("msg"), Role: app.RoleSystem, Content: verificationPlannerSystemPrompt()},
+			{ID: app.NewID("msg"), Role: app.RoleUser, Content: payload},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	plan, err := decodeVerificationCommandPlan(res.Message.Content)
+	if err != nil {
+		return "", nil
+	}
+	command := strings.TrimSpace(plan.Command)
+	if command == "" || plan.Confidence < 0.65 {
+		return "", nil
+	}
+	tokens, err := parseTrustedVerificationCommand(command)
+	if err != nil || !trustedVerificationCandidateUsable(tokens) {
+		return "", nil
+	}
+	return strings.Join(tokens, " "), nil
+}
+
+func verificationPlannerPayload(task app.TaskState) (string, error) {
+	payload := map[string]any{
+		"task": map[string]any{
+			"id":                  task.ID,
+			"title":               task.Title,
+			"objective":           task.Objective,
+			"stage":               task.Stage,
+			"current_step":        task.CurrentStep,
+			"completed_steps":     task.CompletedSteps,
+			"acceptance_criteria": task.AcceptanceCriteria,
+			"plan":                task.Plan,
+			"microtasks":          task.Microtasks,
+			"validation_evidence": task.ValidationEvidence,
+			"history_log":         task.HistoryLog,
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", app.NewError(app.CategoryInternal, "verification_planner_payload", err.Error(), err)
+	}
+	redacted, _ := validation.RedactText(string(data))
+	if validation.HasSecret(redacted) {
+		return "", app.NewError(app.CategoryValidation, "secret_blocked", "secret-like verification planner payload cannot be sent to provider", nil)
+	}
+	return redacted, nil
+}
+
+func verificationPlannerSystemPrompt() string {
+	return `You are an internal verification command planner for a terminal-first coding agent.
+Return strict JSON only with exactly these keys: command, confidence, reason.
+command must be one exact argv-only command, not prose, not markdown, not a shell script.
+Choose a command only when task state semantically justifies a concrete verification action.
+Do not use language-specific path heuristics such as "directory path means go test".
+If no safe exact command is justified, return {"command":"","confidence":0,"reason":"no safe exact verification command"}.
+Allowed command families after local policy validation: go test/vet/version/build, git diff/status, npm/pnpm/yarn test or run test*, pytest, python -m pytest, cargo/dotnet/mvn/make test.
+Never include shell operators, environment expansion, redirection, absolute paths, parent paths, or secrets.`
+}
+
+func decodeVerificationCommandPlan(raw string) (verificationCommandPlan, error) {
+	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	dec.DisallowUnknownFields()
+	var out verificationCommandPlan
+	if err := dec.Decode(&out); err != nil {
+		return verificationCommandPlan{}, err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return verificationCommandPlan{}, app.NewError(app.CategoryValidation, "invalid_json", "verification planner returned multiple JSON documents", err)
+	}
+	if out.Command == "" && out.Confidence > 0 {
+		return verificationCommandPlan{}, app.NewError(app.CategoryValidation, "invalid_json", "verification planner confidence requires command", nil)
+	}
+	if out.Confidence < 0 || out.Confidence > 1 {
+		return verificationCommandPlan{}, app.NewError(app.CategoryValidation, "invalid_json", "verification planner confidence must be between 0 and 1", nil)
+	}
+	return out, nil
+}
+
+func explicitTrustedVerificationCommand(task app.TaskState) string {
 	candidates := []string{}
 	candidates = append(candidates, task.AcceptanceCriteria...)
 	candidates = append(candidates, task.Plan...)
@@ -613,8 +777,7 @@ func firstTrustedVerificationCommand(task app.TaskState) string {
 	}
 	for _, text := range candidates {
 		for _, command := range trustedVerificationCommandCandidates(text) {
-			command = specializeTrustedVerificationCommand(command, task)
-			if _, err := parseTrustedVerificationCommand(command); err == nil {
+			if tokens, err := parseTrustedVerificationCommand(command); err == nil && trustedVerificationCandidateUsable(tokens) {
 				return command
 			}
 		}
@@ -624,8 +787,7 @@ func firstTrustedVerificationCommand(task app.TaskState) string {
 
 var (
 	quotedVerificationCommandPattern = regexp.MustCompile("[`\"']([^`\"']+)[`\"']")
-	verificationPrefixPattern        = regexp.MustCompile(`(?i)\b(go)\s+(test|vet|version)\b|\b(git)\s+(diff|status)\b`)
-	goPackagePathPattern             = regexp.MustCompile("(^|[[:space:]'\"`])((\\./)?[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+)")
+	verificationPrefixPattern        = regexp.MustCompile(`(?i)\b(go)\s+(test|vet|version|build)\b|\b(git)\s+(diff|status)\b|\b(npm|pnpm)\s+(test|run)\b|\b(yarn)\s+(test|run)\b|\b(pytest)\b|\b(python3?|py)\s+-m\s+pytest\b|\b(cargo|dotnet|mvn|make)\s+test\b`)
 )
 
 func trustedVerificationCommandCandidates(text string) []string {
@@ -644,6 +806,90 @@ func trustedVerificationCommandCandidates(text string) []string {
 		out = append(out, scanVerificationCommand(text[loc[0]:]))
 	}
 	return out
+}
+
+func trustedVerificationCandidateUsable(tokens []string) bool {
+	baseArgCount := trustedVerificationBaseArgCount(tokens)
+	if baseArgCount == 0 || len(tokens) < baseArgCount {
+		return false
+	}
+	extras := tokens[baseArgCount:]
+	if tokens[0] == "go" && (tokens[1] == "test" || tokens[1] == "vet" || tokens[1] == "build") && !hasVerificationPackageTarget(extras) {
+		return false
+	}
+	allowFlagValue := false
+	for _, arg := range extras {
+		if allowFlagValue && verificationFlagValueUsable(arg) {
+			allowFlagValue = false
+			continue
+		}
+		allowFlagValue = false
+		if verificationExtraArgUsable(arg) {
+			allowFlagValue = verificationFlagMayTakeValue(arg)
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func trustedVerificationBaseArgCount(tokens []string) int {
+	if !allowedVerificationCommand(tokens) {
+		return 0
+	}
+	switch tokens[0] {
+	case "pytest":
+		return 1
+	case "python", "python3", "py":
+		return 3
+	case "npm", "pnpm":
+		if len(tokens) >= 3 && tokens[1] == "run" {
+			return 3
+		}
+		return 2
+	case "yarn":
+		if len(tokens) >= 3 && tokens[1] == "run" {
+			return 3
+		}
+		return 2
+	default:
+		return 2
+	}
+}
+
+func hasVerificationPackageTarget(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") || arg == "--" {
+			continue
+		}
+		if verificationExtraArgUsable(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func verificationExtraArgUsable(arg string) bool {
+	if arg == "--" || strings.HasPrefix(arg, "-") {
+		return true
+	}
+	return arg == "." || arg == "./..." || strings.HasPrefix(arg, "./") || strings.Contains(arg, "/")
+}
+
+func verificationFlagMayTakeValue(arg string) bool {
+	if arg == "--" || !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "-run", "-bench", "-count", "-timeout", "-tags", "-coverprofile", "-k", "-m", "--grep", "--filter", "--testNamePattern":
+		return true
+	default:
+		return false
+	}
+}
+
+func verificationFlagValueUsable(arg string) bool {
+	return arg != "" && !strings.HasPrefix(arg, "-") && isVerificationArgToken(arg)
 }
 
 func scanVerificationCommand(text string) string {
@@ -672,81 +918,9 @@ func cleanVerificationToken(token string) string {
 	return token
 }
 
-func specializeTrustedVerificationCommand(command string, task app.TaskState) string {
-	tokens, err := parseTrustedVerificationCommand(command)
-	if err != nil || len(tokens) < 2 || tokens[0] != "go" {
-		return command
-	}
-	if tokens[1] != "test" && tokens[1] != "vet" && tokens[1] != "build" {
-		return command
-	}
-	if len(tokens) > 3 || len(tokens) == 3 && tokens[2] != "./..." {
-		return command
-	}
-	pkg := taskGoPackagePath(task)
-	if pkg == "" {
-		return command
-	}
-	return strings.Join([]string{tokens[0], tokens[1], pkg}, " ")
-}
-
-func taskGoPackagePath(task app.TaskState) string {
-	candidates := []string{task.Title, task.Objective, task.CurrentStep}
-	candidates = append(candidates, task.AcceptanceCriteria...)
-	candidates = append(candidates, task.Plan...)
-	for _, microtask := range task.Microtasks {
-		candidates = append(candidates, microtask.PlanItem, microtask.ResultSummary)
-	}
-	for _, text := range candidates {
-		for _, match := range goPackagePathPattern.FindAllStringSubmatch(text, -1) {
-			if len(match) < 3 {
-				continue
-			}
-			path := strings.TrimSpace(match[2])
-			if path == "" || strings.Contains(path, "..") {
-				continue
-			}
-			if !strings.HasPrefix(path, "./") {
-				path = "./" + path
-			}
-			clean := filepath.Clean(path)
-			if hasParentPathSegment(clean) || !directoryHasGoFiles(clean) {
-				continue
-			}
-			if !strings.HasPrefix(clean, ".") {
-				clean = "./" + clean
-			}
-			return clean
-		}
-	}
-	return ""
-}
-
-func directoryHasGoFiles(path string) bool {
-	cwd, err := os.Getwd()
-	if err != nil {
-		cwd = "."
-	}
-	for {
-		candidate := filepath.Join(cwd, path)
-		info, err := os.Stat(candidate)
-		if err == nil && info.IsDir() {
-			matches, err := filepath.Glob(filepath.Join(candidate, "*.go"))
-			if err == nil && len(matches) > 0 {
-				return true
-			}
-		}
-		parent := filepath.Dir(cwd)
-		if parent == cwd {
-			return false
-		}
-		cwd = parent
-	}
-}
-
 func isVerificationStopWord(token string) bool {
 	switch strings.ToLower(strings.TrimSpace(token)) {
-	case "pass", "passes", "passed", "complete", "completes", "successfully", "succeeds", "без", "успешно", "проходит", "прошла", "прошли", "должен", "должна", "должно", "and", "or", "then", "to":
+	case "pass", "passes", "passed", "complete", "completes", "successfully", "succeeds", "без", "успешно", "проходит", "прошла", "прошли", "должен", "должна", "должно", "and", "or", "then", "to", "as", "using", "via", "when", "if", "after", "before", "как", "через", "если", "для":
 		return true
 	default:
 		return false
@@ -917,7 +1091,7 @@ func parseTrustedVerificationCommand(command string) ([]string, error) {
 		return nil, app.NewError(app.CategoryValidation, "unsafe_verification_command", "verification command executable must be resolved from PATH", nil)
 	}
 	if !allowedVerificationCommand(tokens) {
-		return nil, app.ErrorWithHint(app.CategoryValidation, "unsafe_verification_command", "verification command is not in the trusted allowlist", "allowed: go test|go vet|go version; git diff|git status", nil)
+		return nil, app.ErrorWithHint(app.CategoryValidation, "unsafe_verification_command", "verification command is not in the trusted allowlist", "allowed: go test|go vet|go build|go version; git diff|git status; npm|pnpm|yarn test/run test*; pytest; python -m pytest; cargo|dotnet|mvn|make test", nil)
 	}
 	return tokens, nil
 }
@@ -930,22 +1104,58 @@ func containsUnsafeVerificationSyntax(command string) bool {
 }
 
 func allowedVerificationCommand(tokens []string) bool {
-	if len(tokens) < 2 {
+	if len(tokens) == 0 {
 		return false
 	}
 	switch tokens[0] {
 	case "go":
+		if len(tokens) < 2 {
+			return false
+		}
 		switch tokens[1] {
-		case "test", "vet", "version":
+		case "test", "vet", "build", "version":
 			return true
 		}
 	case "git":
+		if len(tokens) < 2 {
+			return false
+		}
 		switch tokens[1] {
 		case "diff", "status":
 			return true
 		}
+	case "npm", "pnpm":
+		if len(tokens) < 2 {
+			return false
+		}
+		if tokens[1] == "test" {
+			return true
+		}
+		return len(tokens) >= 3 && tokens[1] == "run" && isVerificationTestScript(tokens[2])
+	case "yarn":
+		if len(tokens) < 2 {
+			return false
+		}
+		if isVerificationTestScript(tokens[1]) {
+			return true
+		}
+		return len(tokens) >= 3 && tokens[1] == "run" && isVerificationTestScript(tokens[2])
+	case "pytest":
+		return true
+	case "python", "python3", "py":
+		return len(tokens) >= 3 && tokens[1] == "-m" && tokens[2] == "pytest"
+	case "cargo", "dotnet", "mvn", "make":
+		if len(tokens) < 2 {
+			return false
+		}
+		return tokens[1] == "test"
 	}
 	return false
+}
+
+func isVerificationTestScript(script string) bool {
+	script = strings.ToLower(strings.TrimSpace(script))
+	return script == "test" || strings.HasPrefix(script, "test:") || strings.HasPrefix(script, "test-") || strings.HasPrefix(script, "test_")
 }
 
 func hasParentPathSegment(token string) bool {

@@ -178,6 +178,9 @@ func defaultStructuredChatAnswer(prompt string) string {
 		return `{"role":"risk_regression_specialist","summary":"risks reviewed","findings":[],"proposed_plan":["verify days 11-14"],"proposed_acceptance_criteria":["no regressions"]}`
 	}
 	if strings.Contains(lower, "agent role: planning_orchestrator") {
+		if strings.Contains(lower, "manual_scratch/day15_contains_duplicate") {
+			return `{"stage":"planning","summary":"solve Contains Duplicate in manual_scratch/day15_contains_duplicate","assumptions":[],"acceptance_criteria":["ContainsDuplicate(nums []int) bool uses an O(n) map/set approach","table tests cover empty, single, duplicate positive, duplicate negative, and no duplicate","go test ./manual_scratch/day15_contains_duplicate passes"],"plan":["implement ContainsDuplicate with a seen map","add table-driven tests for the required cases","run go test ./manual_scratch/day15_contains_duplicate as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
 		if strings.Contains(lower, "manual_scratch/day14_stock_profit") {
 			return `{"stage":"planning","summary":"verify manual_scratch/day14_stock_profit with go test","assumptions":[],"acceptance_criteria":["go test ./manual_scratch/day14_stock_profit passes"],"plan":["inspect the existing package goal","run go test ./manual_scratch/day14_stock_profit as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
 		}
@@ -188,6 +191,9 @@ func defaultStructuredChatAnswer(prompt string) string {
 	}
 	switch {
 	case strings.Contains(lower, "current stage: planning"):
+		if strings.Contains(lower, "manual_scratch/day15_contains_duplicate") {
+			return `{"stage":"planning","summary":"solve Contains Duplicate in manual_scratch/day15_contains_duplicate","assumptions":[],"acceptance_criteria":["ContainsDuplicate(nums []int) bool uses an O(n) map/set approach","table tests cover empty, single, duplicate positive, duplicate negative, and no duplicate","go test ./manual_scratch/day15_contains_duplicate passes"],"plan":["implement ContainsDuplicate with a seen map","add table-driven tests for the required cases","run go test ./manual_scratch/day15_contains_duplicate as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
 		if strings.Contains(lower, "manual_scratch/day14_stock_profit") {
 			return `{"stage":"planning","summary":"verify manual_scratch/day14_stock_profit with go test","assumptions":[],"acceptance_criteria":["go test ./manual_scratch/day14_stock_profit passes"],"plan":["inspect the existing package goal","run go test ./manual_scratch/day14_stock_profit as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
 		}
@@ -199,6 +205,9 @@ func defaultStructuredChatAnswer(prompt string) string {
 		}
 		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"needs_user_input"}`
 	case strings.Contains(lower, "current stage: execution"):
+		if strings.Contains(lower, "manual_scratch/day15_contains_duplicate") {
+			return `{"stage":"execution","summary":"Contains Duplicate implementation prepared","deliverable":"\u0060\u0060\u0060go\nfunc ContainsDuplicate(nums []int) bool {\n\tseen := make(map[int]struct{}, len(nums))\n\tfor _, n := range nums {\n\t\tif _, ok := seen[n]; ok {\n\t\t\treturn true\n\t\t}\n\t\tseen[n] = struct{}{}\n\t}\n\treturn false\n}\n\u0060\u0060\u0060","current_step":"implement ContainsDuplicate with tests","completed_steps":["implemented O(n) map/set solution","covered required table tests"],"next_step":"","changed_artifacts":["manual_scratch/day15_contains_duplicate/contains_duplicate.go","manual_scratch/day15_contains_duplicate/contains_duplicate_test.go"],"verification":["go test ./manual_scratch/day15_contains_duplicate"],"blockers":[],"next_signal":"ready_for_validation"}`
+		}
 		if strings.Contains(lower, "готово к проверке") || strings.Contains(lower, "ready for validation") {
 			return `{"stage":"execution","summary":"fake execution ready for validation","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"proposed step","completed_steps":["proposed step"],"next_step":"","changed_artifacts":["internal/memory/manager.go"],"verification":["not run"],"blockers":[],"next_signal":"ready_for_validation"}`
 		}
@@ -226,6 +235,22 @@ func defaultValidatorJSON(prompt string) string {
 	lower := strings.ToLower(prompt)
 	if strings.Contains(lower, "you improve user prompts for an internal orchestrator") {
 		return `{"improved_prompt":"` + escapeJSON(promptImproverOriginalFromPrompt(prompt)) + `","preserved_intent":true,"added_requirements":[],"removed_requirements":[],"clarifications":[],"rationale":"fake prompt improvement"}`
+	}
+	if strings.Contains(lower, "verification command planner") {
+		switch {
+		case strings.Contains(lower, "manual_scratch/day15_contains_duplicate"):
+			return `{"command":"go test ./manual_scratch/day15_contains_duplicate","confidence":0.96,"reason":"fake planner selected exact package verification from task context"}`
+		case strings.Contains(lower, "manual_scratch/day14_stock_profit"):
+			return `{"command":"go test ./manual_scratch/day14_stock_profit","confidence":0.96,"reason":"fake planner selected exact package verification from task context"}`
+		case strings.Contains(lower, "python") || strings.Contains(lower, "pytest"):
+			return `{"command":"python -m pytest","confidence":0.9,"reason":"fake planner selected pytest verification"}`
+		case strings.Contains(lower, "npm") || strings.Contains(lower, "package.json"):
+			return `{"command":"npm test","confidence":0.9,"reason":"fake planner selected npm test verification"}`
+		case strings.Contains(lower, "cargo") || strings.Contains(lower, "rust"):
+			return `{"command":"cargo test","confidence":0.9,"reason":"fake planner selected cargo test verification"}`
+		default:
+			return `{"command":"","confidence":0,"reason":"fake planner found no safe exact verification command"}`
+		}
 	}
 	if strings.Contains(lower, "planning approval referee") {
 		return `{"verdict":"approved","confidence":0.9,"reason":"fake approval"}`

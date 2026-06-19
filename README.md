@@ -1,8 +1,12 @@
 # Coding Writer
 
-Coding Writer - это CLI-помощник для задач по коду.
+Coding Writer - это terminal-first AI coding agent CLI в том же классе продуктов, что Claude Code и Codex CLI.
 
-Он умеет вести диалог, помнить контекст, менять стиль ответа, вести задачу по стадиям и проверять постоянные правила проекта. Главное: модель не управляет приложением сама. Она отвечает в заданном формате, а приложение проверяет ответ и только потом сохраняет новое состояние.
+Целевая пользовательская модель: разработчик открывает репозиторий, запускает `assistant chat`, пишет задачу обычным языком, а агент планирует работу, понимает контекст проекта, применяет изменения через контролируемые tools, запускает проверки, показывает evidence/diff и доводит задачу до завершения в одном chat flow.
+
+Текущий P0 — это control-plane срез такого агента: диалог, память, профили, task lifecycle, semantic validation, audit and trusted verification. Это не финальная “chat utility”. File edit tools, shell/test tools, repo context search and patch application are P1/P2 layers that must integrate into the same chat-first lifecycle.
+
+Главное: модель не управляет приложением сама. Она отвечает в заданном формате, а приложение проверяет ответ и только потом сохраняет новое состояние или запускает разрешённые tools.
 
 ## Общая идея
 
@@ -29,11 +33,13 @@ flowchart TD
 
 Проверки идут в двух местах. Модель возвращает структурированный JSON там, где приложению нужно принять решение. Затем Go-код разбирает этот JSON строго: лишние поля, неверная стадия или пустые обязательные поля считаются ошибкой. Для смысловых решений, например "пользователь правда одобрил переход дальше или просто обсуждает его" или "запрос реально нарушает правило проекта", используется отдельный LLM-валидатор. Локально приложение оставляет только hard gates: секреты, некорректный JSON, небезопасные id и отсутствие обязательных полей.
 
-Подробные сценарии ручной демонстрации лежат в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Фокусный live-сценарий Day 15 описан в [docs/manual-testing-day15.md](docs/manual-testing-day15.md); deterministic script остаётся regression smoke, не заменой live proof.
+Подробные сценарии ручной демонстрации, включая единственный canonical live-сценарий Day 15, лежат в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Deterministic script остаётся regression smoke, не заменой live proof.
 
 ## CLI chat UX
 
 Обычный `assistant chat` и `assistant chat --once --input <text>` выводят человекочитаемый transcript, а не raw JSON. Пользователь видит секции `Assistant`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal` и `Next`. Это основной интерфейс для demo и ручного тестирования.
+
+Для Day 15 primary demo пользователь запускает `assistant chat` один раз и дальше пишет сообщения внутри этого chat session. `assistant chat --once --input ...` допустим для automation/smoke, но не является основным пользовательским demo-сценарием Day 15.
 
 В interactive TTY headings и labels подсвечиваются ANSI-стилями; при redirect/non-TTY вывод остается plain text без escape-кодов, чтобы demo logs и tests читались стабильно.
 
@@ -219,7 +225,7 @@ flowchart TD
 - ответ относится к текущей стадии;
 - ответ имеет нужную структуру;
 - переход разрешен;
-- для завершения есть надежное подтверждение, например результат `go test`.
+- для завершения есть надежное app-issued подтверждение: результат allowlisted verification command, сохранённый как trusted evidence.
 
 Здесь несколько уровней проверки:
 
@@ -227,7 +233,7 @@ flowchart TD
 - stage validators проверяют обязательные поля и простые запреты в Go-коде;
 - `SemanticValidator` отдельно спрашивает модель-валидатор о смысле ответа и получает строгий JSON `pass` или `fail`;
 - `TransitionGate` проверяет, можно ли менять стадию именно из текущего состояния;
-- trusted verification добавляется только приложением: semantic referee сначала подтверждает intent `ready_for_validation` или `ready_for_done`, затем ассистент берет allowlisted команду из approved plan/acceptance criteria, запускает ее локально и сохраняет evidence; `--verify` остается explicit override/debug, не happy path.
+- trusted verification добавляется только приложением: после approval утвержденного плана или semantic referee intent `ready_for_validation`/`ready_for_done` запускается `VerificationResolver`. Он берёт exact safe command из approved plan/acceptance criteria или вызывает structured verification planner/referee со strict JSON. Затем приложение локально проверяет argv-only command, allowlist, path safety, timeout/output cap, запускает её и сохраняет evidence. `--verify` остается explicit override/debug, не happy path.
 
 Например, в `execution` модель может дать код в `deliverable`, но не может сама заявить "тесты прошли", если приложение не передало результат команды как trusted evidence. В `validation` переход в `done` запрещен, если нет проверок, есть blocker/high finding или отсутствует trusted evidence.
 
@@ -337,6 +343,7 @@ go test ./tests -run TestDay14
 - `PromptImprover` - уточняет task prompt перед stage-specific вызовом, не меняя исходную цель пользователя;
 - `PlanningSwarm` - собирает несколько независимых specialist plans и один финальный merged plan;
 - `AgentRunner` - запускает role-scoped microtask agents для execution и review;
+- `VerificationResolver` - получает exact verification command из approved task state или strict-JSON verification planner, но не делает language/path inference в application code;
 - `TrustedEvidenceStore` - сохраняет app-issued evidence от auto verification или explicit `--verify`, с digest и bounded summary;
 - `LifecycleGate` - решает, можно ли перейти между стадиями.
 
@@ -351,8 +358,11 @@ flowchart TD
     Policy --> Swarm["PlanningSwarm<br/>specialists + orchestrator"]
     Policy --> Agents["AgentRunner<br/>executor / reviewer"]
     Controller --> Intent["Semantic intent referee<br/>strict JSON signal"]
-    Intent --> Verify["auto verification<br/>from plan / criteria"]
-    Verify --> Evidence["TrustedEvidenceStore<br/>exit code + digest + summary"]
+    Controller --> Approval["User approval<br/>approved plan"]
+    Approval --> Verify["VerificationResolver<br/>exact command or planner"]
+    Intent --> Verify
+    Verify --> Policy["local command policy<br/>argv-only + allowlist"]
+    Policy --> Evidence["TrustedEvidenceStore<br/>exit code + digest + summary"]
     Swarm --> Gate["LifecycleGate"]
     Agents --> Gate
     Evidence --> Gate
@@ -379,6 +389,7 @@ sequenceDiagram
     participant C as CLI / ProcessController
     participant P as PlanningSwarm
     participant A as Microtask agents
+    participant R as VerificationResolver
     participant E as TrustedEvidenceStore
     participant G as LifecycleGate
 
@@ -392,7 +403,8 @@ sequenceDiagram
     C->>A: executor microtasks
     A-->>C: deliverable
     U->>C: "Проверь и заверши"
-    C->>E: auto-run allowlisted verification from plan/criteria
+    C->>R: exact command or strict-JSON planner
+    R->>E: run only allowlisted argv, store evidence
     C->>G: проверить execution + evidence
     G-->>C: execution -> validation
     C->>A: reviewer microtask
@@ -417,7 +429,7 @@ Lifecycle gate закрывает конкретные переходы:
 - `done` нельзя получить словами модели вроде "тесты прошли": нужен app-issued evidence;
 - audit должен показывать prompt improvement, planning swarm, approval validation, executor/reviewer roles и lifecycle transitions.
 
-Ручной сценарий для демо описан в [docs/manual-testing-demo.md](docs/manual-testing-demo.md), focused live Day 15 proof - в [docs/manual-testing-day15.md](docs/manual-testing-day15.md).
+Ручной сценарий для демо описан в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Day 15 live proof хранится только там, чтобы не было второго source of truth.
 
 ## Как собрать и запустить
 
@@ -467,7 +479,7 @@ go test ./tests -run 'TestDay11|TestDay12|TestDay13|TestDay14'
 bash scripts/manual-day15-user-flow.sh
 ```
 
-Live Day 15 proof требует `OPENROUTER_API_KEY`, `ASSISTANT_MODEL=google/gemini-3.1-flash-lite` и выполняется по [docs/manual-testing-day15.md](docs/manual-testing-day15.md).
+Live Day 15 proof требует `OPENROUTER_API_KEY`, `ASSISTANT_MODEL=google/gemini-3.1-flash-lite` и выполняется по [docs/manual-testing-demo.md](docs/manual-testing-demo.md).
 
 Проверить весь проект:
 
@@ -478,7 +490,6 @@ go test ./...
 ## Где читать дальше
 
 - [docs/manual-testing-demo.md](docs/manual-testing-demo.md) - подробный сценарий демонстрации дней 11-15;
-- [docs/manual-testing-day15.md](docs/manual-testing-day15.md) - live chat-only Day 15 manual flow;
 - [docs/prd.md](docs/prd.md) - описание продукта;
 - [docs/frd.md](docs/frd.md) - функциональные требования;
 - [docs/architect.md](docs/architect.md) - архитектурные заметки.

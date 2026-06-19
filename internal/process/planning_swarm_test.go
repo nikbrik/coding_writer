@@ -39,3 +39,34 @@ func TestPlanningSwarmRetriesMalformedAgentJSON(t *testing.T) {
 		t.Fatalf("expected retry to call provider twice, got %d", got)
 	}
 }
+
+func TestPlanningSwarmContinuesAfterMalformedSpecialistJSON(t *testing.T) {
+	fake := providers.NewFakeProvider()
+	fake.ChatResponses = []string{
+		`{"role":"requirements_specialist","summary":`,
+		`{"role":"requirements_specialist","summary":`,
+		`{"role":"code_research_specialist","summary":"ok","findings":[]}`,
+		`{"role":"architecture_specialist","summary":"ok","findings":[]}`,
+		`{"role":"test_validation_specialist","summary":"ok","findings":[]}`,
+		`{"role":"risk_regression_specialist","summary":"ok","findings":[]}`,
+		`{"stage":"planning","summary":"verify package","assumptions":[],"acceptance_criteria":["go test passes"],"plan":["Run go test ./manual_scratch/day14_stock_profit"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`,
+		`{"role":"requirements_specialist","summary":"ok","findings":[]}`,
+		`{"role":"code_research_specialist","summary":"ok","findings":[]}`,
+		`{"role":"architecture_specialist","summary":"ok","findings":[]}`,
+		`{"role":"test_validation_specialist","summary":"ok","findings":[]}`,
+		`{"role":"risk_regression_specialist","summary":"ok","findings":[]}`,
+	}
+	swarm := &PlanningSwarm{
+		Runner: &AgentRunner{Provider: fake, Model: "fake/model"},
+	}
+	res, err := swarm.Run(context.Background(), "session_retry", &app.TaskState{ID: "task_retry", Stage: app.StagePlanning}, "verify package")
+	if err != nil {
+		t.Fatalf("planning swarm should tolerate one malformed specialist: %v", err)
+	}
+	if res.FinalSummary != "verify package" || len(res.FinalPlan) != 1 {
+		t.Fatalf("unexpected final plan: %+v", res)
+	}
+	if len(res.Findings) != 1 || res.Findings[0].Severity != PlanFindingMedium {
+		t.Fatalf("expected medium helper finding, got %+v", res.Findings)
+	}
+}

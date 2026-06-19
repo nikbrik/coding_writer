@@ -2,7 +2,7 @@
 
 Дата анализа: 2026-06-19.
 
-Статус на 2026-06-19: реализовано. Этот файл теперь historical planning/reference material. Актуальный продуктовый контракт живёт в `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, а live/manual proof описан в `docs/manual-testing-day15.md` и `docs/manual-testing-demo.md`.
+Статус на 2026-06-19: реализовано. Этот файл теперь historical planning/reference material. Актуальный продуктовый контракт живёт в `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, а единственный canonical live/manual proof описан в `docs/manual-testing-demo.md`.
 
 Финальный итог реализации:
 
@@ -1161,7 +1161,6 @@ Files to update:
 - `docs/frd.md`;
 - `docs/architect.md`;
 - `docs/manual-testing-demo.md`;
-- add `docs/manual-testing-day15.md`;
 - maybe update `docs/implementation-status-regression-plan.md` if it is still maintained as current status.
 
 Avoid:
@@ -1477,19 +1476,32 @@ go test ./manual_scratch/day15_contains_duplicate
 
 ### 10.9. Move to validation and finish
 
-Final implemented Day 15 flow must use semantic intent signal plus auto verification from approved plan/criteria. The user does not type `--verify` and does not type the exact command:
+Final implemented Day 15 flow must use approved-plan or semantic-intent auto verification through `VerificationResolver`. The resolver first accepts exact safe commands from approved task state; if none exists, it asks a structured verification planner/referee for strict JSON `{command, confidence, reason}` and then local policy validates argv-only allowlist/path/timeout before execution. The user does not type `--verify` and does not type the exact command:
 
 ```bash
-assistant chat --once --input "Готово к проверке: проверь результат."
-assistant chat --once --input "Проверь критерии по результатам проверки, но пока не завершай задачу; дай review."
-assistant chat --once --input "Проверь критерии и заверши задачу, если проверка подтверждает стандартный Go test."
+assistant chat
+```
+
+Then the user types inside the same chat session:
+
+```text
+Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии.
+Да, план принят. Приступай к выполнению.
+Готово к проверке: проверь результат.
+Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate.
+/exit
+```
+
+Post-run assertions only:
+
+```bash
 assistant task status --json
 assistant process audit --limit 20 --json
 ```
 
 Expected:
 
-- `execution -> validation` happens after normal-language review/check request and accepted execution/evidence preconditions;
+- `execution -> validation` happens after normal-language review/check request and accepted execution/evidence preconditions; no app code may infer a command from language/package path alone;
 - `validation -> done` happens only after app-issued trusted evidence and accepted validation;
 - reviewer agent validates output;
 - lifecycle gate moves `validation -> done`;
@@ -1575,7 +1587,7 @@ Add acceptance section:
 Update scope:
 
 - remove or revise "multi-agent workflow out of MVP" because Day 15 adds minimal microtask orchestration.
-- Clarify that full autonomous IDE agent is still out of MVP.
+- Clarify that full autonomous IDE integrations are still out of P0, but the product north star remains a Claude Code / Codex CLI-like coding agent with controlled repo tools in P1/P2.
 
 Add requirements:
 
@@ -1623,11 +1635,11 @@ Keep old days stable.
 
 Minimal update:
 
-- add note at top: Day 15 has separate manual doc;
+- keep Day 15 demo scenario only in `docs/manual-testing-demo.md`;
 - keep "agent verification" blocks clearly separated from the primary user demo; they may use `--json` or explicit overrides only as deterministic regression/debug tools;
 - do not require re-recording Day 11-14 unless acceptance commands changed.
 
-### 11.6. Add `docs/manual-testing-day15.md`
+### 11.6. Update `docs/manual-testing-demo.md`
 
 Use section 10 as source.
 

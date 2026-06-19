@@ -6,11 +6,13 @@
 
 Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md`, `day15.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer, нельзя закрывать Day 15 ручным управлением state или fake-only proof.
 
-Текущее состояние кода на 2026-06-19: базовый MVP, process-control loop, Day14 invariant layer и Day15 controlled lifecycle реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
+Текущее состояние кода на 2026-06-19: базовый P0 control-plane для AI coding agent CLI, process-control loop, Day14 invariant layer и Day15 controlled lifecycle реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
+
+Product north star: система должна развиваться в аналог по классу продукта Claude Code / Codex CLI. P0 пока не является полноценным repo-editing agent; он фиксирует фундамент: chat-first UX, memory/profile/task state, lifecycle gates, semantic validation, audit and trusted evidence. Будущие P1/P2 изменения должны добавлять repository tools, patch application, shell/test execution and failure recovery в этот же chat-driven workflow, а не строить отдельную debug utility.
 
 ## 1. Текущее Поведение Проекта
 
-Репозиторий содержит минимальный stateful CLI code assistant на Go, который:
+Репозиторий содержит минимальный stateful AI coding agent CLI на Go, который:
 
 - работает через терминальный CLI;
 - вызывает OpenRouter для основного ответа;
@@ -294,7 +296,7 @@ tests/
 Примечание по тестам:
 
 - unit tests можно размещать рядом с packages;
-- `tests/*` содержит end-to-end/acceptance-style tests for Day 11/12/13/14 and process control; Day 15 additionally has deterministic `scripts/manual-day15-user-flow.sh` and live manual proof in `docs/manual-testing-day15.md`;
+- `tests/*` содержит end-to-end/acceptance-style tests for Day 11/12/13/14 and process control; Day 15 additionally has deterministic `scripts/manual-day15-user-flow.sh` and live manual proof in `docs/manual-testing-demo.md`;
 - fake provider должен позволять проверить behavior без live API key.
 
 ## 7. Runtime storage layout
@@ -1237,7 +1239,7 @@ Done criteria:
 Done criteria:
 
 - `go test ./...` подтверждает Day 11/12/13/14 and process regression coverage; `scripts/manual-day15-user-flow.sh` подтверждает deterministic Day 15 regression;
-- live Day 15 proof uses OpenRouter model `google/gemini-3.1-flash-lite`, normal `assistant chat --once --input ...` output, no fake provider, no `--verify`, no `/task move|step|expect`, and no user-supplied exact test command;
+- live Day 15 proof uses OpenRouter model `google/gemini-3.1-flash-lite`, one normal `assistant chat` REPL session, approved-plan/app-owned trusted verification, no fake provider, no `--json`, no `--verify`, no `/task move|step|expect`, and no user-supplied exact test command;
 - no test requires live key by default;
 - optional live smoke documented in command output or plan.
 
@@ -1452,9 +1454,9 @@ Expected:
 
 Do not implement in P0:
 
-- automatic file editing tools;
-- IDE agent behavior;
-- repository RAG;
+- automatic file editing tools as default path without approval/tool safety;
+- IDE-specific integrations;
+- production-grade repository RAG;
 - vector DB;
 - web UI;
 - general-purpose multi-agent workflow beyond the Day 15 planning/execution/validation control loop;
@@ -1464,6 +1466,8 @@ Do not implement in P0:
 - full TUI with Bubble Tea.
 
 These non-goals prevent bypassing Day 11/12/13/14/15 by building unrelated functionality.
+
+They are not product-level non-goals. For the Claude Code / Codex CLI-like target, controlled file read/edit, shell/test execution, diff review and repository context are expected follow-up layers after the P0 control plane.
 
 ## 16. Main risks and mitigations
 

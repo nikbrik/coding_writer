@@ -159,4 +159,100 @@ README для новой фичи должен сначала объяснять
 - 2026-06-19 README/demo docs для Day 15 сначала были сведены к ссылкам/commands; пользователь потребовал консистентное описание системы со схемами.
 
 ---
+## 2026-06-19 | day15-primary-demo-one-repl-app-owned-verification
+**Тип**: correction
+**Модуль**: manual testing
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Primary Day 15 demo/manual proof должен быть одним `assistant chat` REPL session: пользователь запускает chat один раз и дальше пишет normal messages inside REPL. App-owned trusted verification может запускаться после approval approved plan или semantic check/finish intent; пользователь не вводит точную command и не управляет FSM командами.
+
+### Когда важно
+Когда обновляется Day 15 demo-дока, manual regression script, PRD/FRD/architecture или live acceptance proof.
+
+### Применение
+Не заменять primary demo на серию `assistant chat --once --input ...`. Сценарий должен сохранять human transcript, проверять отсутствие raw stage JSON, final state `done/none/ready_for_done`, app-issued evidence, audit roles planning specialists/orchestrator/executor/reviewer, provider `google/gemini-3.1-flash-lite` для live proof.
+
+### Evidence
+- 2026-06-19 live Gemini proof passed as one REPL process with app-owned `go test ./manual_scratch/day14_stock_profit` evidence; prior five-command `--once` flow was rejected as non-user scenario.
+
+---
+## 2026-06-19 | product-north-star-coding-agent-cli
+**Тип**: correction
+**Модуль**: product
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Конечная цель проекта — terminal-first AI coding agent CLI в классе Claude Code / Codex CLI, а не generic chat utility, memory demo или debug wrapper вокруг LLM.
+
+### Когда важно
+Когда меняются PRD/FRD/architecture, UX сценарии, Day acceptance, tool roadmap, task lifecycle или agent behavior.
+
+### Применение
+Оценивать решения через вопрос: помогает ли это разработчику работать в репозитории через chat-driven autonomous workflow с repo context, controlled file edits, command/test execution, diffs, evidence and recovery. P0 ограничения на file/shell tools — временная граница control-plane среза, не отказ от конечной цели.
+
+### Evidence
+- 2026-06-19 пользователь указал, что расхождение ожиданий возникло из-за незафиксированной цели: нужен аналог по классу Claude Code / Codex CLI.
+
+---
+## 2026-06-19 | day15-demo-single-source-leetcode-task
+**Тип**: correction
+**Модуль**: manual testing
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Day 15 demo scenario должен жить только в общем `docs/manual-testing-demo.md`, без отдельного focused duplicate doc. Основная задача demo должна выглядеть как нормальная coding-agent задача, например простая LeetCode-style задача, а не "проверь существующий package".
+
+### Когда важно
+Когда обновляется Day 15 manual demo, deterministic smoke, README/PRD/FRD/architecture links или сценарий для записи видео.
+
+### Применение
+Держать Day 15 canonical scenario в `docs/manual-testing-demo.md`; если нужен smoke, он должен повторять тот же user flow через один `assistant chat` process. Для Day 15 использовать маленькую coding task вроде `Contains Duplicate`, где пользователь просит решить задачу, а приложение само выводит проверку из approved plan/criteria.
+
+### Evidence
+- 2026-06-19 пользователь указал, что Day 15 demo хранился в двух файлах и содержал странную задачу "проверить существующий Go package"; scenario заменён на `Contains Duplicate` и focused doc удалён.
+
+---
+## 2026-06-19 | day15-approved-plan-command-inference-live-variance
+**Тип**: correction
+**Модуль**: trusted verification
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Day 15 live flow должен выводить trusted verification из approved plan/criteria даже когда модель пишет natural language вроде `standard go test commands`, package path с trailing punctuation или test/pass wording в другой criteria line. Reviewer-agent output variance не должен ломать flow, если app-issued criteria-matched evidence уже есть.
+
+### Когда важно
+Когда меняется `firstTrustedVerificationCommand`, approved-plan verification, reviewer validation path или live manual scenario через OpenRouter.
+
+### Применение
+Не принимать natural-language phrase `go test commands` как argv command; нормализовать package paths перед `directoryHasGoFiles`; infer `go test ./pkg` только из approved task state с существующим Go package path and test/pass/verification criteria. При reviewer rejection сохранять warning, но final lifecycle decision оставлять за application gate and trusted evidence.
+
+### Evidence
+- 2026-06-19 live Gemini Day 15 выявил 408 retry, `go test commands` false command, trailing-dot package path miss и reviewer variance; после fixes clean live proof passed with `DAY15_LIVE_PASS ... events=61`.
+- 2026-06-19 superseded by `verification-command-selection-no-language-path-heuristics`: do not infer commands from language/path; use exact approved command or structured verification planner.
+
+---
+## 2026-06-19 | verification-command-selection-no-language-path-heuristics
+**Тип**: correction
+**Модуль**: verification architecture
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Нельзя выбирать verification command эвристикой по языку, framework или path, например `Go package path -> go test ./pkg`. Это ломает coding-agent архитектуру для других языков и превращает app в набор случайных language hacks.
+
+### Когда важно
+Когда меняются trusted verification, Day 15 lifecycle, manual demo, CLI `--verify`, command allowlist или auto evidence.
+
+### Применение
+Правильный flow: exact command из approved task state -> иначе structured verification planner/referee strict JSON `{command, confidence, reason}` -> локальный argv-only parser/allowlist/path safety/timeout/output cap -> trusted evidence store. Natural-language fragments like `go test commands` are not commands.
+
+### Evidence
+- 2026-06-19 пользователь отклонил Go-specific fallback; implementation moved to language-agnostic `VerificationResolver` plus command policy tests.
+
+---
 <!-- LEARNINGS:END -->

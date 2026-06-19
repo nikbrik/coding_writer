@@ -9,7 +9,7 @@
 - в `execution` есть полный `deliverable` с Go-кодом в fenced code block или unified diff;
 - есть разбор примеров, edge cases и сложность;
 - agent verification может взять код из `deliverable`, положить его в scratch package под repo и прогнать `go test`;
-- переход в `done` допускается только через trusted evidence: в основном demo пользователь пишет `Проверь и заверши`, semantic referee подтверждает intent, а приложение само запускает allowlisted command из approved plan/criteria.
+- переход в `done` допускается только через trusted evidence: в основном demo пользователь пишет `Проверь и заверши`, semantic referee подтверждает intent, а приложение само получает exact command через `VerificationResolver` и запускает только locally allowlisted argv command.
 
 ## 0. Общая подготовка
 
@@ -318,7 +318,7 @@ assistant chat
 
 Если после строки `Продолжай с того места...` CLI сразу отвечает `ready for validation` и `/task status` показывает `stage=validation`, это нормальный проход: значит все execution deliverables уже были выданы до pause. В этом случае не нужно повторно просить финальный код в validation stage и не нужно считать `blocked_missing_evidence` багом. Следующий шаг - agent verification ниже.
 
-Если в validation stage ввести `Проверь и заверши`, приложение должно сначала подтвердить intent через semantic referee, затем само найти verification command в approved plan/criteria, запустить allowlisted command и приложить trusted evidence. `--verify` нужен только как explicit debug/override.
+Если в validation stage ввести `Проверь и заверши`, приложение должно сначала подтвердить intent через semantic referee, затем само запустить `VerificationResolver`, получить exact command из task state или strict-JSON planner, запустить allowlisted command и приложить trusted evidence. `--verify` нужен только как explicit debug/override.
 
 ### Acceptance proof на видео
 
@@ -418,7 +418,7 @@ Conflict request:
 Recovery safe request:
 
 ```text
-Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само из approved plan/criteria.
+Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само через VerificationResolver.
 /invariants
 /exit
 ```
@@ -440,7 +440,7 @@ Recovery safe request:
 ```bash
 go test ./manual_scratch/day14_stock_profit
 assistant chat --once --input "А теперь перепиши stock-profit решение на Python и сделай brute force O(n^2)."
-assistant chat --once --input "Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само из approved plan/criteria."
+assistant chat --once --input "Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само через VerificationResolver."
 assistant chat --once --input "Готово к проверке"
 assistant chat --once --input "Проверь и заверши"
 assistant task status
@@ -457,17 +457,20 @@ assistant task status
 - Planning stage использует prompt improvement и planning swarm.
 - Пользовательское approval через chat переводит `planning -> execution`.
 - Execution и validation идут через отдельных microtask agents.
-- Переход `execution -> validation` требует trusted evidence, которое приложение получает через semantic intent signal и auto verification из approved plan/criteria.
+- Переход `execution -> validation` требует trusted evidence, которое приложение получает через semantic intent signal и `VerificationResolver`: exact command из task state или strict-JSON verification planner.
 - Переход `validation -> done` невозможен без accepted validation record.
 - Audit показывает prompt improvement, swarm, approval, executor/reviewer roles и transitions.
 
 ### Задача
 
-Проверить существующий Go package без изменения файлов:
+Решить простую LeetCode-style задачу `Contains Duplicate` на Go:
 
-- package: `manual_scratch/day14_stock_profit`;
-- критерий готовности: `go test ./manual_scratch/day14_stock_profit` проходит;
-- пользователь просит ассистента спланировать проверку, принять план, перейти к проверке и завершить задачу.
+- package: `manual_scratch/day15_contains_duplicate`;
+- функция: `ContainsDuplicate(nums []int) bool`;
+- сложность: `O(n)` по времени через map/set;
+- table tests: empty, single, duplicate positive, duplicate negative, no duplicate;
+- критерий готовности: package `manual_scratch/day15_contains_duplicate` проходит проектную проверку; пользователь не вводит exact command;
+- пользователь просит ассистента спланировать решение, принять план, выполнить задачу, проверить результат и завершить lifecycle.
 
 ### Demo setup
 
@@ -495,18 +498,20 @@ export ASSISTANT_MODEL="fake/model"
 
 ### Demo flow
 
-Основной visible flow только через human chat output. Пользователь не вводит команду проверки: приложение берёт verification из approved plan/criteria, запускает allowlisted command и прикладывает trusted evidence.
+Основной visible flow начинается с одного `assistant chat`; дальше пользователь печатает сообщения внутри REPL. Пользователь не вводит команду проверки: приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
 
 ```bash
-assistant chat --once --input "Нужно проверить существующий Go пакет manual_scratch/day14_stock_profit: убедиться, что пакет проходит стандартные Go-тесты. Не меняй файлы без необходимости; предложи план проверки и критерии готовности."
+assistant chat
+```
 
-assistant chat --once --input "Да, план принят. Приступай к выполнению первого шага."
+Текст, который пользователь вводит внутри chat:
 
-assistant chat --once --input "Готово к проверке: проверь результат."
-
-assistant chat --once --input "Проверь критерии по результатам проверки, но пока не завершай задачу; дай review."
-
-assistant chat --once --input "Проверь критерии и заверши задачу, если проверка подтверждает стандартный Go test."
+```text
+Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии.
+Да, план принят. Приступай к выполнению.
+Готово к проверке: проверь результат.
+Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate.
+/exit
 ```
 
 После visible flow можно показать state/audit как assertions, а не как основные пользовательские шаги:
@@ -521,9 +526,9 @@ assistant process audit --latest --json
 - первый chat request создает task в `planning`;
 - human output после planning показывает pending plan/criteria, а не `execution`;
 - approval фразой переводит `planning -> execution`;
-- `execution -> validation` происходит только после app-issued trusted evidence;
-- validation review создает accepted validation record;
-- финальный chat `Проверь критерии и заверши...` переводит task в `done`;
+- приложение само получает exact verification command через `VerificationResolver`, запускает allowlisted trusted verification и переводит `execution -> validation` без команды от пользователя;
+- если execution уже идёт, `execution -> validation` также может произойти после semantic check intent и app-issued trusted evidence;
+- финальный chat `Проверь критерии и заверши...` создает accepted validation record и переводит task в `done`;
 - post-run `assistant task status --json` показывает `stage=done`, `expected_action=none`, `validation_status=ready_for_done`;
 - пользователь ни разу не использует `/task move`, `/task step`, `/task expect` или прямую правку storage.
 

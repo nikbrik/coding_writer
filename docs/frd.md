@@ -1,8 +1,10 @@
-# FRD: минимальный CLI code assistant
+# FRD: AI coding agent CLI в классе Claude Code / Codex CLI
 
 ## 1. Назначение документа
 
-FRD описывает функциональные требования к MVP CLI code assistant. Документ дополняет `prd.md` и `architect.md`: PRD объясняет цель продукта, architecture описывает устройство системы, FRD фиксирует конкретное поведение функций и проверяемые требования.
+FRD описывает функциональные требования к MVP CLI coding agent. Документ дополняет `prd.md` и `architect.md`: PRD объясняет цель продукта, architecture описывает устройство системы, FRD фиксирует конкретное поведение функций и проверяемые требования.
+
+Product north star: terminal-first AI coding agent в том же классе, что Claude Code и Codex CLI. Пользователь должен воспринимать систему как агента для работы в репозитории: он пишет задачу в chat, агент планирует, читает контекст, применяет изменения через контролируемые tools, запускает проверки, показывает diff/evidence и ведёт lifecycle до результата. P0 реализует control plane для этого поведения; отсутствие полноценного file/shell tool layer в P0 не меняет конечную цель.
 
 Жёсткие критерии приёмки берутся из:
 
@@ -14,7 +16,7 @@ FRD описывает функциональные требования к MVP 
 
 ## 2. Scope MVP
 
-MVP должен реализовать:
+MVP/P0 должен реализовать foundation для coding-agent CLI:
 
 - CLI-интерфейс;
 - подключение к OpenRouter;
@@ -34,24 +36,26 @@ MVP должен реализовать:
 - prompt improvement перед provider call;
 - planning swarm для независимых планов и финального merged plan;
 - microtask agents для execution/review roles;
-- trusted evidence store: app-issued verification evidence создаётся автоматически из approved plan/acceptance criteria after semantic intent signal; `--verify` остаётся explicit override/debug, а в provider уходит только bounded summary/hash.
+- trusted evidence store: app-issued verification evidence создаётся автоматически через language-agnostic `VerificationResolver` after approved-plan approval or semantic intent signal; resolver uses exact approved command first, otherwise asks a structured verification planner/referee for strict JSON, and local command policy/sandbox remain the only execution authority. `--verify` остаётся explicit override/debug, а в provider уходит только bounded summary/hash.
 
 Текущее состояние реализации на 2026-06-19:
 
 - Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, process controller, structural validators, semantic validators, transition gate, lifecycle gate, prompt improver, planning swarm, agent runner, trusted evidence store, audit store.
 - Default storage root: `os.UserConfigDir()/coding-writer-assistant`; repo-local `.assistant/` используется только через explicit `--storage-dir` или `ASSISTANT_STORAGE_DIR`.
 - Acceptance flow проверяется fake provider tests: `TestDay11EndToEndMemoryProposalApplyInfluence`, `TestDay12ProfilesChangePromptAndResponse`, `TestDay13PauseResumeAfterRestartUsesWorkingMemory`.
-- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition, rejected-output no-persistence, approval validation and lifecycle evidence. Day 15 live manual proof описан в `docs/manual-testing-day15.md`; `scripts/manual-day15-user-flow.sh` is deterministic regression smoke.
+- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition, rejected-output no-persistence, approval validation and lifecycle evidence. Day 15 live manual proof описан в `docs/manual-testing-demo.md`; `scripts/manual-day15-user-flow.sh` is deterministic regression smoke.
 
 MVP не должен реализовывать:
 
-- автоматическое редактирование файлов проекта;
-- полноценный IDE agent;
-- RAG по репозиторию;
+- автоматическое редактирование файлов проекта как default path без approval/tool safety layer;
+- полноценный IDE agent с IDE-specific integrations;
+- production-grade RAG по репозиторию;
 - vector database;
 - general-purpose autonomous multi-agent IDE workflow beyond the Day 15 planning/execution/validation orchestration;
 - web UI;
 - silent long-term memory writes.
+
+Эти ограничения относятся только к P0. Для продукта в классе Claude Code / Codex CLI P1/P2 должны добавить repo tools: controlled file read/edit, patch application, shell/test execution, diff review and failure recovery while preserving the same chat-first lifecycle.
 
 ## 3. Термины
 
@@ -139,7 +143,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 
 #### Day 15 lifecycle contract
 
-- The primary task path is chat-driven: user states the goal, approves a plan and asks to check/finish in normal language; a semantic referee classifies check/finish intent with strict JSON, then the application derives trusted verification from approved plan/criteria and drives task creation, stage changes, current step, validation status and done state.
+- The primary task path is chat-driven inside one `assistant chat` REPL session: user states the goal, approves a plan and asks to check/finish in normal language; after approval or strict semantic check/finish intent, the application resolves trusted verification through exact approved commands or a structured verification planner, then drives task creation, stage changes, current step, validation status and done state.
 - `planning -> execution` requires a concrete plan, acceptance criteria and a separate approval-validation record.
 - `execution -> validation` requires accepted execution output plus app-issued trusted evidence when criteria mention tests or verification.
 - `validation -> done` requires accepted validation output and criteria-matched trusted evidence; LLM text alone cannot mark a task done.
@@ -965,7 +969,7 @@ Canonical P0 automation matrix:
 | --- | --- | --- | --- |
 | Human one-shot chat | `assistant chat --once --input <text>` | readable sections: Assistant, Task, Transition, Evidence, Warnings, Memory proposal, Next | yes |
 | JSON one-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
-| Auto verified chat | `assistant chat --once --input "Проверь и заверши"` with approved verification command in task plan/criteria | readable evidence summary, transition summary and task state | yes |
+| Auto verified chat | approved plan or `assistant chat --once --input "Проверь и заверши"`; `VerificationResolver` chooses exact approved command or strict-JSON planner command | readable evidence summary, transition summary and task state | yes |
 | Explicit verification override | `assistant chat --once --input <text> --verify "<argv command>" --json` | JSON answer, trusted evidence hash, stage/audit effects | yes |
 | Render prompt | `assistant chat --once --render-prompt --input <text> --json` | JSON rendered prompt, messages, prompt id | no |
 | Render/inspect memory | `assistant memory list <short|work|long> --json` | JSON records | no |

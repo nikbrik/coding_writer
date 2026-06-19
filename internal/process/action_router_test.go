@@ -22,7 +22,7 @@ func TestResolveActionKindNoTaskPlanningIntentPlansTask(t *testing.T) {
 
 func TestResolveActionKindNoTaskGoalIntentPlansTask(t *testing.T) {
 	cases := []string{
-		"Нужно проверить существующий Go пакет manual_scratch/day14_stock_profit стандартными тестами.",
+		"Спланируй и реши LeetCode-задачу Contains Duplicate на Go с тестами.",
 		"Надо реализовать обработку ошибок в CLI.",
 		"Please verify package behavior before release.",
 	}

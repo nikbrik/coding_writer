@@ -12,16 +12,18 @@ metadata:
 
 ## 1. Goal source of truth
 
-- Treat `goal.md` / `goal.mdc` in the project root or `.kilo/` as the **single source of truth**
-  for the current task.
-- If the goal file exists, read it first and do **not** start coding before you understand:
+- Use a session-scoped goal file named `goal_<session-id>.md` in the project root as the
+  **single source of truth** for the current task.
+  - `<session-id>` must be stable for this agent session/thread and filesystem-safe.
+  - Good examples: `goal_2026-06-19T12-30-00Z.md`, `goal_codex_019edc43.md`.
+- If a matching session goal file exists, read it first and do **not** start coding before you understand:
   - Context of the task.
   - Acceptance criteria (what must be true when we are done).
   - Constraints and forbidden changes.
   - Allowed blast radius (what files/modules you may touch).
-- If no goal file exists:
+- If no matching session goal file exists:
   - Derive it from the user's description.
-  - Create `goal.md` with sections: `Context`, `Acceptance criteria`, `Constraints`, `Blast radius`, `Open questions`.
+  - Create `goal_<session-id>.md` with sections: `Context`, `Acceptance criteria`, `Constraints`, `Blast radius`, `Open questions`.
   - Write acceptance criteria in a way that can be objectively checked (commands, tests, log messages, code conditions).
 
 ## 2. Acceptance criteria and checklist
@@ -76,7 +78,7 @@ Operate in a strict loop:
      report it as a blocker or explicit deferral; do not silently count it as clean.
 7. **Update status**
    - Mark checklist items as done/failed/blocked based on evidence.
-   - Append a short note to `goal.md` (or a dedicated log section) describing:
+   - Append a short note to the session goal file (or a dedicated log section) describing:
      - What you changed.
      - What commands you ran.
      - What passed/failed.
@@ -104,10 +106,17 @@ unresolved findings, you must continue the loop.
 If you hit a **hard blocker** (missing secrets, offline dependency, unknown command, broken environment):
 
 - Stop the loop.
-- Produce a `BLOCKED` report in the answer and, if possible, append it to `goal.md`:
+- Produce a `BLOCKED` report in the answer and, if possible, append it to the session goal file:
   - What you tried.
   - Exact failing commands and outputs.
   - What you need from the user to proceed.
+- Keep the session goal file while blocked so the next session can resume with evidence.
+
+When the goal is complete:
+
+- Delete the session goal file before the final response.
+- Do not commit or leave completed `goal_<session-id>.md` files in the repository.
+- If deletion fails, report the path and reason in the final response.
 
 ## 5. Communication style
 
@@ -144,7 +153,7 @@ If you hit a **hard blocker** (missing secrets, offline dependency, unknown comm
   that supports skills (KiloCode, Codex, Pi, etc.).
 - In KiloCode you can also use the dedicated `goal-runner` agent from `.kilo/agent/goal-runner.md`.
 - To start a goal-driven session:
-  1. Create or open `goal.md` in the project root.
+  1. Create or open `goal_<session-id>.md` in the project root.
   2. Fill `Context`, `Acceptance criteria`, `Constraints`, `Blast radius`.
   3. Select agent `goal-runner` (or invoke this skill) and describe the goal.
 

@@ -1,8 +1,10 @@
-# Architecture: минимальный CLI code assistant
+# Architecture: AI coding agent CLI в классе Claude Code / Codex CLI
 
 ## 1. Архитектурная идея
 
-Ассистент строится как маленький stateful CLI-agent.
+Ассистент строится как terminal-first AI coding agent в том же продуктовом классе, что Claude Code и Codex CLI. Это не generic chat wrapper: целевая система должна работать внутри репозитория, принимать задачу обычным языком, планировать, читать файлы, редактировать код через безопасные tools, запускать проверки, показывать evidence/diff и доводить задачу до завершения в одном chat-driven workflow.
+
+Текущая архитектура P0 реализует control plane такого агента: state, memory, profile, process policy, lifecycle gates, semantic validation, audit and trusted evidence. File/shell tools ограничены текущим этапом, но архитектура должна проектироваться так, чтобы P1 добавил repository context, patch application и command execution без смены продуктовой модели.
 
 Ключевой принцип: LLM не должна сама решать, что помнить, какие правила важны, какой сейчас этап процесса и можно ли переходить дальше. Приложение хранит состояние явно, разделяет memory layers, собирает stage-aware prompt через prompt builder и постепенно добавляет deterministic checks.
 
@@ -638,7 +640,7 @@ Responsibilities:
 - вызвать provider только после hard gates;
 - перед accepted persistence запустить parser and response validators;
 - передать transition proposal в `TransitionGate`, а не применять его из LLM text.
-- для Day 15 trusted verification route сначала получить strict semantic intent signal, затем передать criteria-matched evidence в `LifecycleGate`; reviewer-agent audit обязателен, но final state decision остаётся за application gate.
+- для Day 15 trusted verification route использовать approved-plan execution или strict semantic intent signal, затем `VerificationResolver`: exact safe command из approved task state или strict-JSON verification planner/referee; application code не должен делать language/path inference вроде `Go package path -> go test`. Только после локальной argv/allowlist/path/timeout проверки command превращается в trusted evidence для `LifecycleGate`; reviewer-agent audit обязателен, но final state decision остаётся за application gate.
 
 `StagePolicyRegistry` хранит trusted policies:
 
@@ -1357,7 +1359,7 @@ MVP commands:
 /task resume
 ```
 
-Current command boundary: slash `/task plan` and `/task criteria` plus top-level `assistant task plan|criteria` are implemented and mutate task plan/acceptance criteria through `TaskStateManager`. `/task stage`, `/task decision`, `/task done`, and top-level `assistant task decision|stage|done` are not implemented in current code. Day 15 acceptance must use chat-driven lifecycle with semantic intent signal plus auto verification from approved plan/criteria, not these debug/recovery commands.
+Current command boundary: slash `/task plan` and `/task criteria` plus top-level `assistant task plan|criteria` are implemented and mutate task plan/acceptance criteria through `TaskStateManager`. `/task stage`, `/task decision`, `/task done`, and top-level `assistant task decision|stage|done` are not implemented in current code. Day 15 acceptance must use chat-driven lifecycle with approved-plan or semantic-intent auto verification through `VerificationResolver`, not these debug/recovery commands.
 
 Если пользователь просит запрещённый переход, manager возвращает ошибку и не меняет `current.json`.
 
@@ -1671,10 +1673,13 @@ Current status: items 1-20 are implemented and covered by unit/acceptance tests.
 
 ## 17. Future extensions
 
-После MVP можно добавить:
+После MVP нужно двигаться к полноценному Claude Code / Codex CLI-like агенту. Первые P1/P2 расширения:
 
+- controlled repository file read tools;
+- patch/file edit tools with explicit approval and diff preview;
+- allowlisted shell/test execution with trusted evidence;
+- failure recovery loop for tests, linters and build errors;
 - repository context search;
-- file read/edit tools with explicit approval;
 - vector search over long-term memory;
 - summarization of long sessions;
 - replayable task history;
@@ -1684,4 +1689,4 @@ Current status: items 1-20 are implemented and covered by unit/acceptance tests.
 
 ## 18. Главный архитектурный инвариант
 
-Ассистент не является просто оболочкой вокруг OpenRouter. Его ценность в том, что приложение управляет состоянием: профиль, память, задача, стадии и ограничения существуют вне LLM и подаются в модель контролируемо.
+Ассистент не является просто оболочкой вокруг OpenRouter и не должен превращаться в debug utility для ручного управления FSM. Его ценность в том, что приложение управляет состоянием coding-agent workflow: профиль, память, задача, стадии, repo tools, verification evidence and constraints существуют вне LLM и подаются в модель контролируемо.

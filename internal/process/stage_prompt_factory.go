@@ -115,7 +115,7 @@ If requirements are clear, produce acceptance criteria and a proposed plan.`
 		return `Your job is to execute the approved plan within the current task constraints.
 Do not redefine acceptance criteria unless you return a planning_required signal.
 Do not claim tool results unless provided by the application.
-Because P0 has no file-editing tools, every execution response must include a concrete deliverable for the current step in chat. For code tasks, deliverable must contain a fenced code block or unified diff the user can apply. Use blocker explanation only when genuinely blocked. Do not return only progress metadata.
+Because P0 has no file-editing tools, implementation execution responses must include a concrete deliverable for the current step in chat. For implementation code tasks, deliverable must contain a fenced code block or unified diff the user can apply. For read-only verification tasks, do not invent a code diff; use a blocker when trusted tool evidence is required. Do not return only progress metadata.
 If trusted tool/file evidence is not provided by the application, do not use next_signal=ready_for_validation; keep next_signal=continue_execution until the approved plan is exhausted or a real blocker exists.
 If implementation is complete, propose validation readiness instead of marking the task done.`
 	case app.StageValidation:

@@ -16,18 +16,11 @@ assistant_json() {
   go run ./cmd/assistant --storage-dir "$STORAGE_DIR" --model fake/model --json "$@"
 }
 
-assert_json() {
-  local file="$1"
-  local expr="$2"
-  local message="$3"
-  python3 - "$file" "$expr" "$message" <<'PY'
-import json, sys
-path, expr, message = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, encoding="utf-8") as fh:
-    data = json.load(fh)
-if not eval(expr, {"data": data}):
-    raise SystemExit(message + "\n" + json.dumps(data, ensure_ascii=False, indent=2))
-PY
+assistant_human() {
+  ASSISTANT_PROVIDER=fake \
+  ASSISTANT_LLM_VALIDATION=1 \
+  GOCACHE="$GOCACHE_DIR" \
+  go run ./cmd/assistant --storage-dir "$STORAGE_DIR" --model fake/model "$@"
 }
 
 assert_state() {
@@ -43,25 +36,30 @@ if not eval(expr, {"data": data}):
 PY
 }
 
-assistant_json chat --once --input "Спланируй пользовательскую задачу: проверить существующий Go пакет manual_scratch/day14_stock_profit. Цель: убедиться, что go test ./manual_scratch/day14_stock_profit проходит. Не меняй файлы без отдельной необходимости; предложи план проверки и критерии готовности." > "$OUT_DIR/01-plan.json"
-assert_json "$OUT_DIR/01-plan.json" 'data["ok"] is True and data["transition"]["To"] == "planning"' "planning chat did not create planning task"
-assert_state 'data["stage"] == "planning" and data.get("pending_planning") and "go test ./manual_scratch/day14_stock_profit passes" in data["pending_planning"]["acceptance_criteria"]' "planning proposal missing realistic acceptance criteria"
+{
+  printf '%s\n' "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии."
+  printf '%s\n' "Да, план принят. Приступай к выполнению."
+  printf '%s\n' "Готово к проверке: проверь результат."
+  printf '%s\n' "Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate."
+  printf '%s\n' "/exit"
+} | assistant_human chat > "$OUT_DIR/interactive-chat.txt"
 
-assistant_json chat --once --input "Да, план принят. Приступай к выполнению первого шага." > "$OUT_DIR/02-approve-and-execute.json"
-assert_json "$OUT_DIR/02-approve-and-execute.json" 'data["ok"] is True and data["transition"]["To"] == "execution"' "approval chat did not enter execution"
-assert_state 'data["stage"] == "execution" and data.get("planning_approval_status") == "approved" and len(data.get("microtasks", [])) >= 1' "execution state missing approval or microtasks"
-
-assistant_json chat --once --input "Готово к проверке: прошу перейти к validation на основании trusted evidence." > "$OUT_DIR/03-ready-for-validation.json"
-assert_json "$OUT_DIR/03-ready-for-validation.json" 'data["ok"] is True and data["transition"]["To"] == "validation"' "ready chat did not enter validation"
-assert_state 'data["stage"] == "validation" and data.get("last_accepted_execution_id") and data.get("validation_evidence")' "validation state missing accepted execution/evidence"
-
-assistant_json chat --once --input "Проверь критерии по evidence, но пока не завершай задачу; дай validation review." > "$OUT_DIR/04-validation-review.json"
-assert_json "$OUT_DIR/04-validation-review.json" 'data["ok"] is True and "transition" not in data' "validation review should not finish task"
-assert_state 'data["stage"] == "validation" and data.get("last_validation_id")' "validation review did not persist validation record"
-
-assistant_json chat --once --input "Проверь критерии и заверши задачу, если evidence подтверждает go test." > "$OUT_DIR/05-done.json"
-assert_json "$OUT_DIR/05-done.json" 'data["ok"] is True and data["transition"]["To"] == "done"' "done chat did not finish task"
+grep -q "== Assistant ==" "$OUT_DIR/interactive-chat.txt"
+grep -q "== Task ==" "$OUT_DIR/interactive-chat.txt"
+grep -q "== Transition ==" "$OUT_DIR/interactive-chat.txt"
+grep -q "== Evidence ==" "$OUT_DIR/interactive-chat.txt"
+grep -q "auto verification: go test ./manual_scratch/day15_contains_duplicate" "$OUT_DIR/interactive-chat.txt"
+if grep -q '"stage"' "$OUT_DIR/interactive-chat.txt" || grep -q '"acceptance_criteria"' "$OUT_DIR/interactive-chat.txt"; then
+  echo "human transcript leaked raw stage JSON" >&2
+  exit 1
+fi
+if grep -q "go test commands" "$OUT_DIR/interactive-chat.txt"; then
+  echo "natural-language command fragment leaked into verification" >&2
+  exit 1
+fi
 assert_state 'data["stage"] == "done" and data.get("last_validation_id") and data.get("validation_status") == "ready_for_done"' "done state missing accepted validation"
+assistant_json task status > "$OUT_DIR/final-status.json"
+assistant_json process audit --latest > "$OUT_DIR/latest-audit.json"
 
 python3 - "$STORAGE_DIR/process_audit.jsonl" <<'PY'
 import json, sys

@@ -145,6 +145,13 @@ func TestExecutionRequiresDeliverableWithoutTrustedEvidence(t *testing.T) {
 	}
 }
 
+func TestExecutionAllowsBlockerWithoutDeliverable(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "blocked on trusted evidence", Blockers: []string{"Need app-issued trusted verification evidence."}, CurrentStep: "run tests", Verification: []string{"not run"}, NextSignal: "continue_execution"})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected blocker rejection: %v", errs)
+	}
+}
+
 func TestExecutionStructuralRequiresCodeDeliverableShape(t *testing.T) {
 	errs := validateExecutionStructural(&ExecutionOutput{Summary: "worked", Deliverable: "package main", NextSignal: "continue_execution"})
 	if len(errs) == 0 {

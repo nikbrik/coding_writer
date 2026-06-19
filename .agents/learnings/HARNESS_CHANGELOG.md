@@ -34,4 +34,34 @@
 **Reason**: Captured repeatable lessons from the harness evolution implementation and `/evolve` dry-run.
 
 ---
+## 2026-06-19 | day15 one-repl manual proof
+**Applied**: LEARNING-001
+**Files**: .agents/learnings/LEARNINGS.md
+**Reason**: Captured the Day 15 primary demo contract: one REPL session plus app-owned trusted verification through approved commands or VerificationResolver.
+
+---
+## 2026-06-19 | product north star
+**Applied**: LEARNING-001
+**Files**: .agents/learnings/LEARNINGS.md
+**Reason**: Captured the product target as a Claude Code / Codex CLI-class coding agent, not a generic chat/debug utility.
+
+---
+## 2026-06-19 | verification resolver architecture
+**Applied**: RULE-001, LEARNING-001
+**Files**: .agents/rules/validation.md, .agents/learnings/LEARNINGS.md
+**Reason**: Captured the rule that verification commands must come from exact approved commands or structured planners, not language/path heuristics.
+
+---
+## 2026-06-19 | day15 demo single source
+**Applied**: LEARNING-001
+**Files**: .agents/learnings/LEARNINGS.md
+**Reason**: Captured that Day 15 demo must live only in the common demo doc and use a real LeetCode-style coding task.
+
+---
+## 2026-06-19 | day15 live verification variance
+**Applied**: LEARNING-001
+**Files**: .agents/learnings/LEARNINGS.md
+**Reason**: Captured live-only Day 15 fixes for approved-plan command inference and reviewer variance under app-owned trusted evidence.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

@@ -176,19 +176,86 @@ func TestChatHumanRendererFormatsMultipleStageJSONDocuments(t *testing.T) {
 	}
 }
 
-func TestAutoVerificationSpecializesGoPackagePath(t *testing.T) {
+func TestExplicitTrustedVerificationKeepsExactCommandGeneric(t *testing.T) {
 	task := app.TaskState{
 		ID:        "task_verify",
 		Stage:     app.StageExecution,
 		Status:    app.TaskStatusActive,
 		Objective: "Verify Go package manual_scratch/day14_stock_profit with standard tests.",
 		Plan: []string{
-			"Execute 'go test ./...' to run existing unit tests.",
+			"Execute 'go test -v ./...' to run existing unit tests.",
 		},
 	}
-	got := firstTrustedVerificationCommand(task)
-	if got != "go test ./manual_scratch/day14_stock_profit" {
-		t.Fatalf("want package-specific go test, got %q", got)
+	got := explicitTrustedVerificationCommand(task)
+	if got != "go test -v ./..." {
+		t.Fatalf("exact command must not be specialized from package context, got %q", got)
+	}
+
+	task.Plan = []string{"Run `npm run test:unit -- --runInBand` as trusted verification."}
+	got = explicitTrustedVerificationCommand(task)
+	if got != "npm run test:unit -- --runInBand" {
+		t.Fatalf("generic exact command not extracted, got %q", got)
+	}
+
+	task.Plan = []string{"run go test ./manual_scratch/day15_contains_duplicate as trusted verification"}
+	got = explicitTrustedVerificationCommand(task)
+	if got != "go test ./manual_scratch/day15_contains_duplicate" {
+		t.Fatalf("unquoted command with trailing prose not extracted, got %q", got)
+	}
+}
+
+func TestVerificationPlannerFallbackIsLanguageAgnostic(t *testing.T) {
+	task := app.TaskState{
+		ID:        "task_verify",
+		Stage:     app.StageExecution,
+		Status:    app.TaskStatusActive,
+		Objective: "Implement Contains Duplicate in manual_scratch/day15_contains_duplicate.",
+		AcceptanceCriteria: []string{
+			"ContainsDuplicate uses an O(n) map approach.",
+			"All tests pass successfully within the directory manual_scratch/day15_contains_duplicate.",
+		},
+		Plan: []string{
+			"Verify the implementation by running tests in the directory.",
+		},
+	}
+	fake := providers.NewFakeProvider()
+	rt := &runtime{Config: app.AppConfig{ActiveModel: "fake/model"}, Provider: fake}
+	got, err := resolveTrustedVerificationCommand(context.Background(), rt, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "go test ./manual_scratch/day15_contains_duplicate" {
+		t.Fatalf("planner should choose exact verification command, got %q", got)
+	}
+}
+
+func TestVerificationResolverDoesNotInferFromPathOrNaturalLanguage(t *testing.T) {
+	task := app.TaskState{
+		ID:        "task_verify",
+		Stage:     app.StageExecution,
+		Status:    app.TaskStatusActive,
+		Objective: "Implement Contains Duplicate in manual_scratch/day15_contains_duplicate.",
+		AcceptanceCriteria: []string{
+			"The function 'ContainsDuplicate(nums []int) bool' is implemented in 'manual_scratch/day15_contains_duplicate'.",
+			"Tests pass successfully when executed via standard go test commands.",
+		},
+		Plan: []string{
+			"Create 'contains.go' implementing the function.",
+			"Verify the implementation passes all tests.",
+		},
+	}
+	if got := explicitTrustedVerificationCommand(task); got != "" {
+		t.Fatalf("natural-language command fragment must not execute, got %q", got)
+	}
+	fake := providers.NewFakeProvider()
+	fake.ValidatorResponse = `{"command":"go test commands","confidence":0.99,"reason":"invalid natural language"}`
+	rt := &runtime{Config: app.AppConfig{ActiveModel: "fake/model"}, Provider: fake}
+	got, err := resolveTrustedVerificationCommand(context.Background(), rt, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("invalid planner command must no-op, got %q", got)
 	}
 }
 
@@ -203,7 +270,7 @@ func TestAutoVerificationRequiresSemanticIntent(t *testing.T) {
 	fake := providers.NewFakeProvider()
 	validator := process.NewSemanticValidator(fake, "fake/model")
 	fake.ValidatorResponse = `{"action_kind":"answer_question","transition_signal":"none","confidence":0.93,"reason":"user is asking a question, not requesting validation"}`
-	got, err := autoTrustedVerificationCommand(context.Background(), "session_semantic_auto_verify", "Готово к проверке?", task, false, validator)
+	got, err := autoTrustedVerificationCommand(context.Background(), nil, "session_semantic_auto_verify", "Готово к проверке?", task, false, validator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,12 +278,21 @@ func TestAutoVerificationRequiresSemanticIntent(t *testing.T) {
 		t.Fatalf("semantic validator returned no transition signal; auto verification must not run, got %q", got)
 	}
 
-	got, err = autoTrustedVerificationCommand(context.Background(), "session_fallback_auto_verify", "Готово к проверке?", task, false, nil)
+	got, err = autoTrustedVerificationCommand(context.Background(), nil, "session_fallback_auto_verify", "Готово к проверке?", task, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "" {
 		t.Fatalf("auto verification must not use keyword fallback when semantic validator is unavailable, got %q", got)
+	}
+
+	fake.ValidatorResponse = `{"action_kind":"summarize_execution","transition_signal":"none","confidence":0.91,"reason":"user asks the assistant to check the current result"}`
+	got, err = autoTrustedVerificationCommand(context.Background(), nil, "session_semantic_review_auto_verify", "Проверь результат текущего шага.", task, false, validator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "go test ./manual_scratch/day14_stock_profit" {
+		t.Fatalf("semantic summarize_execution intent should trigger auto verification, got %q", got)
 	}
 }
 
@@ -306,15 +382,15 @@ func TestCLIDay13AgentDrivenFSM(t *testing.T) {
 		t.Fatalf("planning intent did not auto-start task: %+v", plan)
 	}
 	approve := runJSON("chat", "--once", "--input", "Да, план принят. Приступай к выполнению первого шага.")
-	if transition, _ := approve["transition"].(map[string]any); transition["To"] != "execution" {
-		t.Fatalf("approval did not auto-enter execution: %+v", approve)
+	if transition, _ := approve["transition"].(map[string]any); transition["To"] != "validation" {
+		t.Fatalf("approval did not auto-run trusted verification into validation: %+v", approve)
 	}
-	ready := runJSON("chat", "--once", "--input", "Готово к проверке: прошу перейти к validation на основании trusted evidence.")
-	if transition, _ := ready["transition"].(map[string]any); transition["To"] != "validation" {
-		t.Fatalf("execution did not auto-enter validation: %+v", ready)
+	if warnings, _ := approve["warnings"].([]any); len(warnings) == 0 || !strings.Contains(fmt.Sprint(warnings), "auto verification") {
+		t.Fatalf("approval step did not auto-run verification: %+v", approve)
 	}
-	if warnings, _ := ready["warnings"].([]any); len(warnings) == 0 || !strings.Contains(fmt.Sprint(warnings), "auto verification") {
-		t.Fatalf("ready step did not auto-run verification: %+v", ready)
+	ready := runJSON("chat", "--once", "--input", "Готово к проверке: проверь результат.")
+	if _, ok := ready["transition"]; ok {
+		t.Fatalf("validation review should not move lifecycle: %+v", ready)
 	}
 	review := runJSON("chat", "--once", "--input", "Проверь критерии по evidence, но пока не завершай задачу; дай validation review.")
 	if _, ok := review["transition"]; ok {
@@ -358,6 +434,39 @@ func TestTrustedVerificationPolicy(t *testing.T) {
 	}
 	if len(records) != 1 || records[0].Source != "go version" {
 		t.Fatalf("bad trusted evidence record: %+v", records)
+	}
+
+	for _, command := range []string{
+		"go test ./...",
+		"go test ./manual_scratch/day15_contains_duplicate -run TestContainsDuplicate",
+		"npm test",
+		"npm run test:unit -- --runInBand",
+		"python -m pytest",
+		"pytest ./tests -k duplicate",
+		"pytest ./tests",
+		"cargo test",
+		"dotnet test",
+		"mvn test",
+	} {
+		tokens, err := parseTrustedVerificationCommand(command)
+		if err != nil {
+			t.Fatalf("%q should be in trusted verification allowlist: %v", command, err)
+		}
+		if !trustedVerificationCandidateUsable(tokens) {
+			t.Fatalf("%q should be usable as an exact verification command", command)
+		}
+	}
+	for _, command := range []string{
+		"go test",
+		"go test -run TestContainsDuplicate",
+		"go test commands",
+		"pytest commands",
+		"npm run build",
+	} {
+		tokens, err := parseTrustedVerificationCommand(command)
+		if err == nil && trustedVerificationCandidateUsable(tokens) {
+			t.Fatalf("%q must not be usable as trusted auto-verification", command)
+		}
 	}
 
 	if _, err := runTrustedVerification(context.Background(), storageDir, task.ID, sessionID, "go version; printenv OPENROUTER_API_KEY", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {

@@ -24,7 +24,8 @@ Load and follow `.agents/docs/goal-runner.md` as the canonical goal-runner proto
 Kilo-specific adapter notes:
 
 - Respect the permissions in this manifest.
-- Use `goal.md` or `.kilo/goal.md` as the runtime goal source of truth.
+- Use `goal_<session-id>.md` in the project root as the runtime goal source of truth.
+- Delete the session goal file after DONE; keep it only for blocked/incomplete sessions.
 - Respect repo rules from `AGENTS.md`, `.agents/rules/*`, and runtime-specific approval requirements.
 - Keep the final response concise and evidence-based.
 

@@ -86,7 +86,7 @@ func (s *PlanningSwarm) Run(ctx context.Context, sessionID string, task *app.Tas
 				},
 			}, round, "agent_call", "agent_accepted", &review)
 			if err != nil {
-				return PlanningSwarmResult{}, err
+				review = specialistReviewFromError(role, err)
 			}
 			reviews = append(reviews, review)
 		}
@@ -115,11 +115,12 @@ func (s *PlanningSwarm) Run(ctx context.Context, sessionID string, task *app.Tas
 		if err != nil {
 			return PlanningSwarmResult{}, err
 		}
+		specialistFindings := collectPlanFindings(reviews)
 		revalidation, err := s.revalidateMergedPlan(ctx, sessionID, task, roles, res.Raw, round)
 		if err != nil {
 			return PlanningSwarmResult{}, err
 		}
-		latestFindings = collectPlanFindings(revalidation)
+		latestFindings = append(specialistFindings, collectPlanFindings(revalidation)...)
 		reviews = append(reviews, revalidation...)
 		if !hasBlockingPlanFindings(latestFindings) {
 			return PlanningSwarmResult{
@@ -156,7 +157,7 @@ func (s *PlanningSwarm) revalidateMergedPlan(ctx context.Context, sessionID stri
 			},
 		}, round, "agent_revalidation_call", "agent_revalidation_accepted", &review)
 		if err != nil {
-			return nil, err
+			review = specialistReviewFromError(role, err)
 		}
 		reviews = append(reviews, review)
 	}
@@ -192,6 +193,21 @@ func (s *PlanningSwarm) runDecodedAgent(ctx context.Context, input AgentRunInput
 func (s *PlanningSwarm) audit(role AgentRole, microtaskID string, round int, decision string) {
 	if s != nil && s.Audit != nil {
 		s.Audit(role, microtaskID, round, decision)
+	}
+}
+
+func specialistReviewFromError(role AgentRole, err error) SpecialistReview {
+	appErr := app.AsError(err)
+	return SpecialistReview{
+		Role:    PlanningSpecialistRole(role),
+		Summary: "specialist output was unavailable after bounded JSON repair; continuing with final schema validation",
+		Findings: []PlanFinding{{
+			Severity: PlanFindingMedium,
+			Area:     "internal_planning_helper",
+			Problem:  appErr.Code + ": " + appErr.Message,
+			Fix:      "Continue with remaining planning specialists and rely on final strict plan validation.",
+			Evidence: "internal helper output only",
+		}},
 	}
 }
 

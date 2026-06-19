@@ -47,7 +47,7 @@ func validateExecutionStructural(out *ExecutionOutput, trustedEvidence ...string
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
 		errs = append(errs, "execution output missing required summary/next_signal")
 	}
-	if !hasTrustedEvidence(trustedEvidence) && strings.TrimSpace(out.Deliverable) == "" {
+	if !hasTrustedEvidence(trustedEvidence) && strings.TrimSpace(out.Deliverable) == "" && !hasNonEmpty(out.Blockers) {
 		errs = append(errs, "execution deliverable is required without trusted evidence")
 	}
 	if !hasTrustedEvidence(trustedEvidence) && !hasNonEmpty(out.Blockers) && strings.TrimSpace(out.Deliverable) != "" && !looksLikeCodeDeliverable(out.Deliverable) {

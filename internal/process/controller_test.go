@@ -628,6 +628,34 @@ func TestProcessControllerSemanticIntentApprovesPlanningBySignal(t *testing.T) {
 	}
 }
 
+func TestProcessControllerSemanticApprovalWithoutPlanDoesNotTransition(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("verify manual_scratch/day14_stock_profit"); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ChatResponse = `{"stage":"planning","summary":"verify package","assumptions":[],"acceptance_criteria":["go test passes"],"plan":["Run go test ./manual_scratch/day14_stock_profit"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"propose_transition","transition_signal":"approve_planning","confidence":0.93,"reason":"user appears to approve, but no plan is stored"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Да, план принят. Приступай."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("approval without stored plan must not transition: %+v", res.Transition)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StagePlanning || current.PendingPlanning == nil {
+		t.Fatalf("expected recovered planning proposal, got %+v", current)
+	}
+}
+
 func TestProcessControllerSemanticIntentRejectsNegativePlanningTransition(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -759,7 +787,8 @@ func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"answer_question","transition_signal":"ready_for_done","confidence":0.92,"reason":"user asks to finish"}`,
 	}
-	beforeCalls := len(fake.SnapshotCalls())
+	beforeValidatorCalls := validatorCalls(fake.SnapshotCalls())
+	beforeChatCalls := chatCalls(fake.SnapshotCalls())
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: evidence})
 	if err != nil {
 		t.Fatal(err)
@@ -767,8 +796,8 @@ func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 	if res.Transition == nil || res.Transition.To != app.StageDone {
 		t.Fatalf("trusted done signal did not move to done: %+v", res.Transition)
 	}
-	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("trusted done signal should be app-owned, got provider calls: %+v", fake.SnapshotCalls())
+	if validatorCalls(fake.SnapshotCalls()) != beforeValidatorCalls+1 || chatCalls(fake.SnapshotCalls()) != beforeChatCalls {
+		t.Fatalf("trusted done signal should use semantic intent only, got provider calls: %+v", fake.SnapshotCalls())
 	}
 }
 
@@ -800,7 +829,8 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 		`{"action_kind":"answer_question","transition_signal":"ready_for_done","confidence":0.92,"reason":"user asks to finish"}`,
 	}
 	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
-	beforeCalls := len(fake.SnapshotCalls())
+	beforeValidatorCalls := validatorCalls(fake.SnapshotCalls())
+	beforeChatCalls := chatCalls(fake.SnapshotCalls())
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: evidence})
 	if err == nil {
 		t.Fatalf("irrelevant evidence should not finish task: result=%+v", res)
@@ -808,8 +838,8 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 	if app.AsError(err).Code != "transition_precondition_failed" {
 		t.Fatalf("want transition_precondition_failed, got %v", err)
 	}
-	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("irrelevant evidence should be rejected before provider calls: %+v", fake.SnapshotCalls())
+	if validatorCalls(fake.SnapshotCalls()) != beforeValidatorCalls+1 || chatCalls(fake.SnapshotCalls()) != beforeChatCalls {
+		t.Fatalf("irrelevant evidence should be rejected after semantic intent and before chat calls: %+v", fake.SnapshotCalls())
 	}
 	current, currentErr := ctrl.Tasks.Current()
 	if currentErr != nil {
@@ -817,6 +847,49 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 	}
 	if current.Stage != app.StageValidation {
 		t.Fatalf("irrelevant evidence moved stage: %+v", current)
+	}
+}
+
+func TestProcessControllerVerifyCriteriaWithTrustedEvidenceMovesDone(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"go test ./manual_scratch/day15_contains_duplicate"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./manual_scratch/day15_contains_duplicate")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("trusted verification evidence accepted", evidence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"verify_criteria","transition_signal":"none","confidence":0.91,"reason":"user asks criteria verification"}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии и заверши задачу.", TrustedEvidence: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.To != app.StageDone {
+		t.Fatalf("verify criteria with trusted evidence should move to done: %+v", res.Transition)
+	}
+	current, err = ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StageDone || current.ValidationStatus != "ready_for_done" {
+		t.Fatalf("expected done ready_for_done state, got %+v", current)
 	}
 }
 
@@ -847,7 +920,8 @@ func TestProcessControllerValidationReviewWithTrustedEvidenceDoesNotRollback(t *
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"review_output","transition_signal":"none","confidence":0.99,"reason":"should not be called"}`,
 	}
-	beforeCalls := len(fake.SnapshotCalls())
+	beforeValidatorCalls := validatorCalls(fake.SnapshotCalls())
+	beforeChatCalls := chatCalls(fake.SnapshotCalls())
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии по evidence, но пока не завершай задачу; дай review.", TrustedEvidence: evidence})
 	if err != nil {
 		t.Fatal(err)
@@ -865,8 +939,8 @@ func TestProcessControllerValidationReviewWithTrustedEvidenceDoesNotRollback(t *
 	if current.Stage != app.StageValidation || current.ValidationStatus != "ready_for_done" {
 		t.Fatalf("expected validation stage with ready_for_done status, got %+v", current)
 	}
-	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("trusted evidence review should be app-owned, got provider calls: %+v", fake.SnapshotCalls())
+	if validatorCalls(fake.SnapshotCalls()) != beforeValidatorCalls+1 || chatCalls(fake.SnapshotCalls()) != beforeChatCalls {
+		t.Fatalf("trusted evidence review should use semantic intent only, got provider calls: %+v", fake.SnapshotCalls())
 	}
 }
 
@@ -914,6 +988,54 @@ func TestProcessControllerValidationReviewUsesPersistedEvidence(t *testing.T) {
 	}
 	if len(fake.SnapshotCalls()) != beforeCalls+1 {
 		t.Fatalf("only semantic intent call expected, got %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerAcceptedValidationReviewReusesStateWithoutReviewer(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"go test ./manual_scratch/day15_contains_duplicate"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./manual_scratch/day15_contains_duplicate")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("trusted verification evidence accepted", evidence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.RecordAcceptedValidation("ready_for_done", evidence); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	ctrl.AgentRunner = &AgentRunner{Provider: fake, Model: "fake/model"}
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"review_output","transition_signal":"none","confidence":0.97,"reason":"review requested without finishing"}`,
+	}
+	beforeValidatorCalls := validatorCalls(fake.SnapshotCalls())
+	beforeChatCalls := chatCalls(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии по результатам проверки, но пока не завершай задачу; дай review."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("accepted validation review must not transition to done: %+v", res.Transition)
+	}
+	if !strings.Contains(res.Answer, "ready for done") {
+		t.Fatalf("expected persisted ready-for-done review answer, got %q", res.Answer)
+	}
+	if validatorCalls(fake.SnapshotCalls()) != beforeValidatorCalls+1 || chatCalls(fake.SnapshotCalls()) != beforeChatCalls {
+		t.Fatalf("accepted validation review should not run reviewer chat calls: %+v", fake.SnapshotCalls())
 	}
 }
 

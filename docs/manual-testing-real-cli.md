@@ -74,7 +74,7 @@ go test ./...
 
 ## 2. Обязательные первые 5 demo/acceptance cases
 
-Canonical source: `docs/manual-testing-demo.md` plus focused Day 15 live manual doc `docs/manual-testing-day15.md`.
+Canonical source: `docs/manual-testing-demo.md`. Day 15 live scenario is stored only there; do not recreate a second focused demo file.
 
 Эти 5 сценариев нужно прогонять первыми, когда цель - доказать, что требования Day 11, Day 12, Day 13, Day 14, Day 15 полностью выполняются. Каждый demo case теперь решает маленькую LeetCode-style задачу до полного code deliverable, а требование конкретного дня доказывается на фоне нормальной работы coding assistant.
 
@@ -91,7 +91,7 @@ bash scripts/manual-day15-user-flow.sh
 - `TestDay12ProfilesChangePromptAndResponse` проходит;
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит.
-- `DAY15_MANUAL_PASS ...` печатается после deterministic Day 15 regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-day15.md`.
+- `DAY15_MANUAL_PASS ...` печатается после deterministic Day 15 regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-demo.md`.
 
 ### Demo Case 1. Day 11 Memory Layers + Two Sum
 
@@ -146,14 +146,14 @@ Acceptance proof:
 
 ### Demo Case 5. Day 15 Controlled Lifecycle + Planning Swarm
 
-Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 15. Controlled Lifecycle + Planning Swarm`, or focused script doc `docs/manual-testing-day15.md`.
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 15. Controlled Lifecycle + Planning Swarm`.
 
 Acceptance proof:
 
-- основной flow идёт через `assistant chat --once`, а не через `task move`, прямые storage edits или JSON edits;
+- основной flow идёт через один interactive `assistant chat` session, а не через `chat --once`, `task move`, прямые storage edits или JSON edits;
 - natural user request creates `planning` task with plan and criteria;
 - user approval moves to `execution` only through approval validation;
-- обычный chat request creates app-issued trusted evidence from approved plan/criteria and moves to `validation`;
+- обычный chat request creates app-issued trusted evidence through `VerificationResolver` and moves to `validation`;
 - reviewer microagent validates without prematurely marking done;
 - final verified chat moves to `done`;
 - audit contains prompt improvement, planning swarm, specialist roles, executor/reviewer roles, accepted validation and lifecycle transitions.
@@ -167,7 +167,7 @@ Expected real-mode validation:
 - Semantic referee call: `purpose=validator`.
 - Referee payload is separate from main dialogue and redacted before provider call.
 - Referee may reject answers that invent file edits, tool results, test results, task transitions, memory writes, or done status.
-- Trusted completion requires criteria-matched app evidence. For normal product flow, the app derives the verification command from approved plan/criteria when the user asks to check/finish.
+- Trusted completion requires criteria-matched app evidence. For normal product flow, the app resolves the verification command through exact approved task state or a structured verification planner when the user asks to check/finish.
 - Explicit `--verify` is a constrained override/debug surface: argv-only execution, no shell operators/env expansion/redirection, PATH-resolved allowlist only (`go test|go vet|go version`, `git diff|git status`), timeout/output cap, and only a command-output hash is sent as trusted evidence.
 
 ## 4. Supplemental real-cli regression matrix
@@ -386,7 +386,7 @@ Expected:
 
 ### Case 15. Explicit verification override boundaries
 
-This case is a regression/debug boundary test for `--verify`, not the primary Day 15 user flow. The live Day 15 proof must use normal chat input and app-owned auto verification from the approved plan/criteria; see `docs/manual-testing-day15.md`.
+This case is a regression/debug boundary test for `--verify`, not the primary Day 15 user flow. The live Day 15 proof must use normal chat input and app-owned auto verification through `VerificationResolver`; see `docs/manual-testing-demo.md`.
 
 ```bash
 case_dir "case15a-verify-success"

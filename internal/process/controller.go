@@ -164,7 +164,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		stage = taskPtr.Stage
 		action = ResolveActionKind(input.Input, stage, taskPtr.ExpectedAction)
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && len(input.TrustedEvidence) > 0 && isReadyForExecutionReviewIntent(input.Input) {
+	if !input.RenderOnly && c.SemanticValidator == nil && taskPtr != nil && taskPtr.Stage == app.StageExecution && len(input.TrustedEvidence) > 0 && isReadyForExecutionReviewIntent(input.Input) {
 		from := taskPtr.Stage
 		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
 			State:           *taskPtr,
@@ -179,10 +179,14 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &transition.State, from, ActionSummarizeExecution, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForValidation), auditEvidenceRefs(input.TrustedEvidence))
 		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isDoneValidationSignal(input.Input) {
-		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input)
-		if err != nil {
-			return nil, err
+	if !input.RenderOnly && c.SemanticValidator == nil && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isDoneValidationSignal(input.Input) {
+		reviewWarnings := []string{}
+		if !hasAcceptedReadyValidation(taskPtr) {
+			if warnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input); err != nil {
+				reviewWarnings = append(reviewWarnings, "reviewer warning: "+app.AsError(err).Message)
+			} else {
+				reviewWarnings = append(reviewWarnings, warnings...)
+			}
 		}
 		from := taskPtr.Stage
 		parsedValidation := trustedValidationParsed(input.TrustedEvidence)
@@ -200,7 +204,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &transition.State, from, ActionReviewOutput, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(input.TrustedEvidence))
 		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition, Warnings: append(preWarnings, reviewWarnings...)}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isValidationReviewIntent(input.Input) {
+	if !input.RenderOnly && c.SemanticValidator == nil && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isValidationReviewIntent(input.Input) {
 		req := LifecycleTransitionRequest{
 			State:           *taskPtr,
 			Source:          TransitionSourceTrustedVerification,
@@ -211,9 +215,14 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		if !c.lifecycle().trustedEvidenceSatisfiesState(*taskPtr, req) {
 			return nil, app.NewError(app.CategoryValidation, "transition_precondition_failed", "trusted verification does not satisfy acceptance criteria", nil)
 		}
-		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input)
-		if err != nil {
-			return nil, err
+		if hasAcceptedReadyValidation(taskPtr) {
+			return &ExchangeResult{Answer: trustedValidationReviewAnswer(), Model: c.Model, Proposal: noSaveProposal(sessionID), Warnings: preWarnings}, nil
+		}
+		reviewWarnings := []string{}
+		if warnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input); err != nil {
+			reviewWarnings = append(reviewWarnings, "reviewer warning: "+app.AsError(err).Message)
+		} else {
+			reviewWarnings = append(reviewWarnings, warnings...)
 		}
 		state, err := c.Tasks.RecordAcceptedValidation("ready_for_done", input.TrustedEvidence)
 		if err != nil {
@@ -257,14 +266,33 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 					return nil, err
 				}
 			}
+			if stage == app.StagePlanning && action == ActionProposeTransition && taskPtr != nil && taskPtr.PendingPlanning == nil && !hasRunnablePlanningState(*taskPtr) {
+				action = ActionPlanTask
+				semanticSignal = "none"
+			}
 		}
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && semanticSignal != "ready_for_done" && (action == ActionReviewOutput || action == ActionVerifyCriteria) && len(taskPtr.ValidationEvidence) > 0 {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && semanticSignal != "ready_for_done" && action == ActionReviewOutput && len(taskPtr.ValidationEvidence) > 0 {
+		if hasAcceptedReadyValidation(taskPtr) {
+			return &ExchangeResult{Answer: trustedValidationReviewAnswer(), Model: c.Model, Proposal: noSaveProposal(sessionID), Warnings: preWarnings}, nil
+		}
 		reviewInput := input
 		reviewInput.TrustedEvidence = append([]string(nil), taskPtr.ValidationEvidence...)
-		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, reviewInput)
-		if err != nil {
-			return nil, err
+		req := LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForDone,
+			TrustedEvidence: reviewInput.TrustedEvidence,
+			Reason:          sessionID,
+		}
+		if !c.lifecycle().trustedEvidenceSatisfiesState(*taskPtr, req) {
+			return &ExchangeResult{Answer: blockedValidationReviewAnswer(), Model: c.Model, Proposal: noSaveProposal(sessionID), Warnings: preWarnings}, nil
+		}
+		reviewWarnings := []string{}
+		if warnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, reviewInput); err != nil {
+			reviewWarnings = append(reviewWarnings, "reviewer warning: "+app.AsError(err).Message)
+		} else {
+			reviewWarnings = append(reviewWarnings, warnings...)
 		}
 		state, err := c.Tasks.RecordAcceptedValidation("ready_for_done", reviewInput.TrustedEvidence)
 		if err != nil {
@@ -321,7 +349,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceUserApproval), auditTransitionSignal(SignalApprovePlanning))
 		return c.continueAfterPlanningApproval(ctx, input, sessionID, &transition)
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (semanticSignal == "ready_for_validation" || len(input.TrustedEvidence) > 0 && isReadyForExecutionReviewIntent(input.Input)) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (semanticSignal == "ready_for_validation" || len(input.TrustedEvidence) > 0 && c.SemanticValidator != nil) {
 		from := taskPtr.Stage
 		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
 			State:           *taskPtr,
@@ -336,12 +364,16 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForValidation), auditEvidenceRefs(input.TrustedEvidence))
 		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && semanticSignal == "ready_for_done" {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && validationReadyForDoneRequested(input.Input, action, semanticSignal) {
 		from := taskPtr.Stage
+		evidence := append([]string(nil), input.TrustedEvidence...)
+		if len(evidence) == 0 {
+			evidence = append(evidence, taskPtr.ValidationEvidence...)
+		}
 		parsedValidation := &ParsedResponse{
 			Stage:           app.StageValidation,
 			ActionKind:      ActionReviewOutput,
-			TrustedEvidence: append([]string(nil), input.TrustedEvidence...),
+			TrustedEvidence: evidence,
 			Validation: &ValidationOutput{
 				Findings:        []ValidationFinding{},
 				PassedChecks:    []string{"trusted verification evidence available"},
@@ -350,19 +382,22 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 				Verdict:         "ready_for_done",
 			},
 		}
-		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+		req := LifecycleTransitionRequest{
 			State:           *taskPtr,
 			Source:          TransitionSourceTrustedVerification,
 			Signal:          SignalReadyForDone,
 			Parsed:          parsedValidation,
-			TrustedEvidence: input.TrustedEvidence,
+			TrustedEvidence: evidence,
 			Reason:          sessionID,
-		})
-		if err != nil {
-			return nil, err
 		}
-		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(input.TrustedEvidence))
-		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
+		if semanticSignal == "ready_for_done" || c.lifecycle().trustedEvidenceSatisfiesState(*taskPtr, req) {
+			transition, err := c.lifecycle().Apply(req)
+			if err != nil {
+				return nil, err
+			}
+			_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(evidence))
+			return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
+		}
 	}
 	profile, err := c.activeProfile()
 	if err != nil {
@@ -722,7 +757,7 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 	fallback := &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}
 	next := input
 	next.SessionID = sessionID
-	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker. Не возвращай только progress metadata."
+	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks в поле deliverable дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker. Не возвращай только progress metadata."
 	next.RenderOnly = false
 	next.ActionKind = ActionExecutePlanStep
 	next.TrustedEvidence = nil
@@ -745,7 +780,7 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 		if !ok || parsed.NextSignal != "continue_execution" || hasNonEmpty(parsed.Blockers) {
 			break
 		}
-		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker."
+		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks дай код для текущего шага в fenced code block или unified diff. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker."
 		next.ActionKind = ActionExecutePlanStep
 		next.TrustedEvidence = nil
 		more, err := c.RunExchange(ctx, next)
@@ -1103,6 +1138,23 @@ func isValidationReviewIntent(input string) bool {
 	return containsAny(lower, []string{"проверь", "проверить", "критери", "review", "verify", "validate", "evidence"})
 }
 
+func hasAcceptedReadyValidation(task *app.TaskState) bool {
+	return task != nil &&
+		strings.TrimSpace(task.LastValidationID) != "" &&
+		strings.TrimSpace(task.ValidationStatus) == "ready_for_done" &&
+		len(task.ValidationEvidence) > 0
+}
+
+func validationReadyForDoneRequested(input string, action ActionKind, semanticSignal string) bool {
+	if semanticSignal == "ready_for_done" {
+		return true
+	}
+	if hasExplicitTransitionNegation(strings.ToLower(strings.TrimSpace(input))) {
+		return false
+	}
+	return action == ActionVerifyCriteria
+}
+
 func trustedValidationParsed(evidence []string) *ParsedResponse {
 	return &ParsedResponse{
 		Stage:           app.StageValidation,
@@ -1124,6 +1176,15 @@ func trustedValidationReviewAnswer() string {
 		"- trusted verification evidence is bound to the current task and satisfies acceptance criteria.",
 		"- verdict: ready for done.",
 		"- task is not closed yet because the user did not ask to finish in this step.",
+	}, "\n")
+}
+
+func blockedValidationReviewAnswer() string {
+	return strings.Join([]string{
+		"Validation review:",
+		"- trusted verification evidence is not sufficient for the current acceptance criteria.",
+		"- verdict: blocked missing evidence.",
+		"- task is not closed.",
 	}, "\n")
 }
 
