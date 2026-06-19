@@ -115,21 +115,41 @@ function validateConfig() {
   const config = parseJsonc(".kilo/kilo.jsonc");
   if (!config) return;
 
+  const instructions = config.instructions;
+  if (!Array.isArray(instructions)) {
+    fail(".kilo/kilo.jsonc: instructions must be an array");
+  } else if (!instructions.includes(".agents/rules/always.md")) {
+    fail('.kilo/kilo.jsonc: instructions must include ".agents/rules/always.md"');
+  }
+
   const skillPaths = config.skills?.paths;
   if (!Array.isArray(skillPaths)) {
     fail(".kilo/kilo.jsonc: skills.paths must be an array");
     return;
   }
 
-  if (!skillPaths.includes(".kilo/skills")) {
-    fail('.kilo/kilo.jsonc: skills.paths must include ".kilo/skills"');
+  if (new Set(skillPaths).size !== skillPaths.length) {
+    fail(".kilo/kilo.jsonc: skills.paths must not contain duplicates");
+  }
+
+  if (!skillPaths.includes(".agents/skills")) {
+    fail('.kilo/kilo.jsonc: skills.paths must include ".agents/skills"');
   }
 }
 
-function validateSkills() {
-  const skillsDir = relPath(".kilo", "skills");
+function validateContains(relativePath, requiredSnippets) {
+  const text = readText(relativePath);
+  for (const snippet of requiredSnippets) {
+    if (!text.includes(snippet)) {
+      fail(`${relativePath}: missing required reference ${snippet}`);
+    }
+  }
+}
+
+function validateSkillDirectory(skillPath) {
+  const skillsDir = relPath(skillPath);
   if (!fs.existsSync(skillsDir)) {
-    fail(".kilo/skills: missing directory");
+    fail(`${skillPath}: missing directory`);
     return;
   }
 
@@ -140,7 +160,7 @@ function validateSkills() {
     .sort((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of entries) {
-    const relativePath = path.join(".kilo", "skills", entry.name, "SKILL.md");
+    const relativePath = path.join(skillPath, entry.name, "SKILL.md");
     const absolutePath = relPath(relativePath);
     if (!fs.existsSync(absolutePath)) {
       fail(`${relativePath}: missing`);
@@ -190,6 +210,14 @@ function validateSkills() {
   }
 }
 
+function validateSkills() {
+  validateSkillDirectory(".agents/skills");
+
+  if (fs.existsSync(relPath(".kilo", "skills"))) {
+    validateSkillDirectory(".kilo/skills");
+  }
+}
+
 function validateMarkers(relativePath, markers) {
   const text = readText(relativePath);
   for (const marker of markers) {
@@ -199,17 +227,72 @@ function validateMarkers(relativePath, markers) {
   }
 }
 
+function validateMarkersIfExists(relativePath, markers) {
+  if (fs.existsSync(relPath(relativePath))) {
+    validateMarkers(relativePath, markers);
+  }
+}
+
+function validateSharedLayer() {
+  validateContains("AGENTS.md", [".agents/rules/always.md"]);
+  validateContains(".agents/rules/always.md", [
+    ".agents/rules/search.md",
+    ".agents/rules/goal-loop.md",
+    ".agents/rules/harness-evolution.md",
+  ]);
+  validateContains(".kilo/kilo.jsonc", [".agents/rules/always.md", ".agents/skills"]);
+  validateContains(".kilo/rules/ast-index.md", [".agents/rules/search.md"]);
+  validateContains(".kilo/rules/keep_going_until_you_reach_the_goal.md", [
+    ".agents/rules/goal-loop.md",
+  ]);
+  validateContains(".agents/docs/evolve.md", [".agents/skills", ".agents/learnings"]);
+  validateContains(".agents/skills/evolve/SKILL.md", [".agents/docs/evolve.md"]);
+  validateContains(".agents/skills/consensus-orchestrator/SKILL.md", [
+    ".agents/docs/consensus-orchestrator.md",
+  ]);
+  validateContains(".kilo/command/evolve.md", [".agents/docs/evolve.md"]);
+  validateContains(".kilo/command/consensus.md", [".agents/docs/consensus-orchestrator.md"]);
+  validateContains(".kilo/agent/goal-runner.md", [".agents/docs/goal-runner.md"]);
+  validateContains(".kilo/agent/consensus-security.md", [".agents/docs/consensus-roles/security.md"]);
+  validateContains(".kilo/agent/consensus-go-senior.md", [".agents/docs/consensus-roles/go-senior.md"]);
+  validateContains(".kilo/agent/consensus-product-systems-designer.md", [
+    ".agents/docs/consensus-roles/product-systems-designer.md",
+  ]);
+  validateContains(".kilo/agent/consensus-cli-architect.md", [
+    ".agents/docs/consensus-roles/cli-architect.md",
+  ]);
+  validateContains(".kilo/agent/consensus-ai-first.md", [".agents/docs/consensus-roles/ai-first.md"]);
+  validateContains(".kilo/agent/consensus-judge.md", [".agents/docs/consensus-roles/judge.md"]);
+  validateContains(".kilo/skills/evolve/SKILL.md", [".agents/docs/evolve.md"]);
+  validateContains(".kilo/skill/consensus-orchestrator/SKILL.md", [
+    ".agents/docs/consensus-orchestrator.md",
+  ]);
+}
+
 validateConfig();
 validateSkills();
-validateMarkers(".kilo/learnings/LEARNINGS.md", [
+validateSharedLayer();
+validateMarkers(".agents/learnings/LEARNINGS.md", [
   "<!-- LEARNINGS:START -->",
   "<!-- LEARNINGS:END -->",
 ]);
-validateMarkers(".kilo/learnings/ERRORS.md", [
+validateMarkers(".agents/learnings/ERRORS.md", [
   "<!-- ERRORS:START -->",
   "<!-- ERRORS:END -->",
 ]);
-validateMarkers(".kilo/learnings/HARNESS_CHANGELOG.md", [
+validateMarkers(".agents/learnings/HARNESS_CHANGELOG.md", [
+  "<!-- HARNESS-CHANGELOG:START -->",
+  "<!-- HARNESS-CHANGELOG:END -->",
+]);
+validateMarkersIfExists(".kilo/learnings/LEARNINGS.md", [
+  "<!-- LEARNINGS:START -->",
+  "<!-- LEARNINGS:END -->",
+]);
+validateMarkersIfExists(".kilo/learnings/ERRORS.md", [
+  "<!-- ERRORS:START -->",
+  "<!-- ERRORS:END -->",
+]);
+validateMarkersIfExists(".kilo/learnings/HARNESS_CHANGELOG.md", [
   "<!-- HARNESS-CHANGELOG:START -->",
   "<!-- HARNESS-CHANGELOG:END -->",
 ]);

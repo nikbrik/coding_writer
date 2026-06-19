@@ -1,1 +1,4 @@
-always update ast-index before work and then use ast-index for search files and words first
+Load `.agents/rules/search.md` and follow it as the canonical search policy.
+
+Kilo adapter note:
+- Update `ast-index` before work when the local Kilo runtime expects a fresh index.

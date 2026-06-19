@@ -1,1 +1,5 @@
-If you haven't completed the task fully, never stop, ask questions, or wait for approval. Always continue writing code or testing until the task is 100% finished and you output a completion statement.
+Load `.agents/rules/goal-loop.md` and follow it as the canonical persistence policy.
+
+Kilo adapter note:
+- Keep going until the task is complete or clearly blocked.
+- Do not treat this as permission to bypass approval gates, diff-before-write rules, or explicit user confirmations.

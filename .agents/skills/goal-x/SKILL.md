@@ -1,11 +1,6 @@
 ---
 name: goal-x
-description: >
-  Goal-driven execution loop for coding agents. Use this skill when the user defines
-  a goal with explicit acceptance criteria (build, tests, specific behavior in code).
-  Your job is to keep working in iterations until every acceptance criterion is
-  satisfied, verified by commands/tests/logs, and clean after the latest iterative
-  self-review / re-review loop, or until you are hard-blocked.
+description: 'Goal-driven execution loop for coding agents. Use this skill when the user defines a goal with explicit acceptance criteria (build, tests, specific behavior in code). Your job is to keep working in iterations until every acceptance criterion is satisfied, verified by commands/tests/logs, and clean after the latest iterative self-review / re-review loop, or until you are hard-blocked.'
 license: MIT
 compatibility: kilocode, codex, pi
 metadata:

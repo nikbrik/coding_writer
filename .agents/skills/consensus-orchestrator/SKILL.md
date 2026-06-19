@@ -3,15 +3,13 @@ name: consensus-orchestrator
 description: Multi-agent consensus review orchestrator for KiloCode. Use when the user asks for consensus, консенсус, multi-agent review, review by all agents, проверку всеми агентами, or wants a plan, documentation, code, architecture, CLI design, security posture, AI-first workflow, PR, or arbitrary target reviewed by specialized agents with artifacts and a final judge verdict.
 ---
 
-# Consensus Orchestrator - Kilo compatibility adapter
-
-Active shared skill path is `.agents/skills/consensus-orchestrator/SKILL.md`; `.kilo/kilo.jsonc` should point `skills.paths` at `.agents/skills`.
+# Consensus Orchestrator
 
 Load and follow `.agents/docs/consensus-orchestrator.md` as the canonical consensus protocol.
 
-Kilo-specific adapter notes:
+Runtime adapter notes:
 
-- Prefer Kilo-specific reviewer roles `consensus-security`, `consensus-go-senior`, `consensus-product-systems-designer`, `consensus-cli-architect`, `consensus-ai-first`, and `consensus-judge` when available
-- Use `.kilo/agent/<role>.md` prompts as the Kilo fallback surface
+- Shared protocol path: `.agents/docs/consensus-orchestrator.md`
+- Runtime reviewer adapters may exist under `.kilo/agent/*` and other agent-specific directories
 - Keep artifacts under `artifacts/consensus/**`
 - Default mode remains read-only review
