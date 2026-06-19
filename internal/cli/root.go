@@ -464,7 +464,9 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					rt.ensureProvider()
 					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
 				}
+				stopProgress := startAPIProgress(cmd.ErrOrStderr(), !rt.Quiet && !opts.JSON && !chatOpts.RenderPrompt)
 				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, false, chatOpts.Verify)
+				stopProgress()
 				if err != nil {
 					return err
 				}
@@ -502,6 +504,7 @@ type chatResult struct {
 	Messages         []app.ChatMessage           `json:"messages,omitempty"`
 	Proposal         *app.MemoryProposal         `json:"proposal,omitempty"`
 	Transition       *process.TransitionResult   `json:"transition,omitempty"`
+	AppliedArtifacts []string                    `json:"applied_artifacts,omitempty"`
 	Warnings         []string                    `json:"warnings,omitempty"`
 	Task             *app.TaskState              `json:"-"`
 	AuditEvents      []process.ProcessAuditEvent `json:"-"`
@@ -554,9 +557,7 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if materialized, matErr := materializeExecutionDeliverable(procResult, currentTask); matErr != nil {
 		result.Warnings = append(result.Warnings, "artifact materialization skipped: "+app.AsError(matErr).Code)
 	} else {
-		for _, path := range materialized {
-			result.Warnings = append(result.Warnings, "artifact materialized: "+path)
-		}
+		result.AppliedArtifacts = append(result.AppliedArtifacts, materialized...)
 	}
 	if autoVerifyCommand != "" {
 		result.Warnings = append(result.Warnings, "auto verification: "+autoVerifyCommand)
@@ -659,7 +660,10 @@ func materializeExecutionDeliverable(procResult *process.ExchangeResult, task ap
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return written, app.NewError(app.CategoryCLI, "artifact_dir_create_failed", "could not create artifact directory", err)
 		}
-		content := normalizeGoPackageForDirectory(filepath.Dir(target), block.Content)
+		content := block.Content
+		if filepath.Ext(target) == ".go" {
+			content = normalizeGoPackageForDirectory(filepath.Dir(target), content)
+		}
 		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 			return written, app.NewError(app.CategoryCLI, "artifact_write_failed", "could not write execution artifact", err)
 		}
@@ -821,6 +825,9 @@ func runPostApprovalTrustedVerification(ctx context.Context, rt *runtime, pc *pr
 	}
 	evidence, err := runTrustedVerification(ctx, rt.StorageDir, task.ID, sessionID, command, false)
 	if err != nil {
+		if app.AsError(err).Code == "verification_failed" {
+			return &process.ExchangeResult{Warnings: []string{"post-approval verification skipped: " + app.AsError(err).Code}}, command, nil
+		}
 		return nil, command, err
 	}
 	follow, err := pc.RunExchange(ctx, process.ExchangeInput{
@@ -927,6 +934,10 @@ func planTrustedVerificationCommand(ctx context.Context, rt *runtime, task app.T
 	if err != nil || !trustedVerificationCandidateUsable(tokens) {
 		return "", nil
 	}
+	tokens = normalizeTrustedVerificationTokens(tokens)
+	if !trustedVerificationCandidateUsable(tokens) {
+		return "", nil
+	}
 	return strings.Join(tokens, " "), nil
 }
 
@@ -998,8 +1009,11 @@ func explicitTrustedVerificationCommand(task app.TaskState) string {
 	}
 	for _, text := range candidates {
 		for _, command := range trustedVerificationCommandCandidates(text) {
-			if tokens, err := parseTrustedVerificationCommand(command); err == nil && trustedVerificationCandidateUsable(tokens) {
-				return command
+			if tokens, err := parseTrustedVerificationCommand(command); err == nil {
+				tokens = normalizeTrustedVerificationTokens(tokens)
+				if trustedVerificationCandidateUsable(tokens) {
+					return strings.Join(tokens, " ")
+				}
 			}
 		}
 	}
@@ -1052,6 +1066,40 @@ func trustedVerificationCandidateUsable(tokens []string) bool {
 		return false
 	}
 	return true
+}
+
+func normalizeTrustedVerificationTokens(tokens []string) []string {
+	out := append([]string(nil), tokens...)
+	if len(out) < 3 || out[0] != "go" {
+		return out
+	}
+	switch out[1] {
+	case "test", "vet", "build":
+	default:
+		return out
+	}
+	skipFlagValue := false
+	for i := 2; i < len(out); i++ {
+		arg := out[i]
+		if skipFlagValue {
+			skipFlagValue = false
+			continue
+		}
+		if strings.HasPrefix(arg, "-") || arg == "--" {
+			skipFlagValue = verificationFlagMayTakeValue(arg)
+			continue
+		}
+		if !strings.Contains(arg, "/") {
+			continue
+		}
+		arg = strings.TrimSuffix(arg, "/.")
+		arg = strings.TrimRight(arg, "/")
+		if !strings.HasPrefix(arg, "./") {
+			arg = "./" + arg
+		}
+		out[i] = arg
+	}
+	return out
 }
 
 func trustedVerificationBaseArgCount(tokens []string) int {
@@ -1200,7 +1248,9 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		}
 		rt.ensureProvider()
 		ensureProviderDisclosure(diag, rt)
+		stopProgress := startAPIProgress(diag, interactive && !rt.Quiet)
 		result, err := runChatExchange(ctx, rt, sessionID, line, false, true, "")
+		stopProgress()
 		if err != nil {
 			failed = true
 			printError(diag, err, false)
@@ -1220,6 +1270,21 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 	return nil
 }
 
+func startAPIProgress(diag io.Writer, enabled bool) func() {
+	if !enabled || diag == nil {
+		return func() {}
+	}
+	started := time.Now()
+	_, _ = fmt.Fprintln(diag, "[api] запрос к модели...")
+	return func() {
+		elapsed := time.Since(started).Round(time.Second)
+		if elapsed < time.Second {
+			elapsed = time.Second
+		}
+		_, _ = fmt.Fprintf(diag, "[api] ответ получен за %s\n", elapsed)
+	}
+}
+
 func runTrustedVerification(ctx context.Context, storageDir, taskID, sessionID, command string, renderOnly bool) ([]string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" || renderOnly {
@@ -1232,6 +1297,7 @@ func runTrustedVerification(ctx context.Context, storageDir, taskID, sessionID, 
 	if err != nil {
 		return nil, err
 	}
+	tokens = normalizeTrustedVerificationTokens(tokens)
 	verifyCtx, cancel := context.WithTimeout(ctx, trustedVerificationTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(verifyCtx, tokens[0], tokens[1:]...)
@@ -2855,6 +2921,7 @@ func renderChatResult(result chatResult, opts chatRenderOptions) string {
 	if result.Transition != nil {
 		writeTransitionSummary(&b, style, *result.Transition)
 	}
+	writeAppliedArtifactsSummary(&b, style, result.AppliedArtifacts)
 	writeEvidenceAndWarnings(&b, style, result, task)
 	if hasProposalRecords(result.Proposal) {
 		writeProposalSummary(&b, style, *result.Proposal)
@@ -3188,6 +3255,20 @@ func writeTransitionSummary(b *strings.Builder, style chatStyle, transition proc
 	}
 	if transition.State.ExpectedAction != "" {
 		writeKVLine(b, style, "next_expected", string(transition.State.ExpectedAction))
+	}
+}
+
+func writeAppliedArtifactsSummary(b *strings.Builder, style chatStyle, artifacts []string) {
+	if len(artifacts) == 0 {
+		return
+	}
+	writeSectionHeader(b, style, "Files")
+	for _, artifact := range artifacts {
+		b.WriteString("- ")
+		b.WriteString(style.label("applied"))
+		b.WriteString(": ")
+		b.WriteString(safeTerminalText(artifact))
+		b.WriteString("\n")
 	}
 }
 

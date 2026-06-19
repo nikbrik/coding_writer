@@ -117,11 +117,12 @@ func TestChatHumanRendererFormatsStageJSON(t *testing.T) {
 			To:    app.StageValidation,
 			State: state,
 		},
-		Warnings: []string{"auto verification: go test ./pkg", "memory proposal skipped: invalid_json"},
-		Task:     &state,
+		AppliedArtifacts: []string{"manual_scratch/day15_contains_duplicate/contains_duplicate.go"},
+		Warnings:         []string{"auto verification: go test ./pkg", "memory proposal skipped: invalid_json"},
+		Task:             &state,
 	}
 	text := textChatResult(result)
-	for _, want := range []string{"== Assistant ==", "Acceptance criteria:", "1. go test ./pkg passes", "== Task ==", "== Transition ==", "== Evidence ==", "auto verification: go test ./pkg", "== Warnings =="} {
+	for _, want := range []string{"== Assistant ==", "Acceptance criteria:", "1. go test ./pkg passes", "== Task ==", "== Transition ==", "== Files ==", "applied: manual_scratch/day15_contains_duplicate/contains_duplicate.go", "== Evidence ==", "auto verification: go test ./pkg", "== Warnings =="} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
@@ -261,6 +262,11 @@ func TestExplicitTrustedVerificationKeepsExactCommandGeneric(t *testing.T) {
 	if got != "go test ./manual_scratch/day15_contains_duplicate" {
 		t.Fatalf("unquoted command with trailing prose not extracted, got %q", got)
 	}
+
+	tokens := normalizeTrustedVerificationTokens([]string{"go", "test", "-v", "manual_scratch/day15_contains_duplicate/"})
+	if strings.Join(tokens, " ") != "go test -v ./manual_scratch/day15_contains_duplicate" {
+		t.Fatalf("go package command should be normalized, got %q", strings.Join(tokens, " "))
+	}
 }
 
 func TestVerificationPlannerFallbackIsLanguageAgnostic(t *testing.T) {
@@ -278,12 +284,13 @@ func TestVerificationPlannerFallbackIsLanguageAgnostic(t *testing.T) {
 		},
 	}
 	fake := providers.NewFakeProvider()
+	fake.ValidatorResponse = `{"command":"go test -v manual_scratch/day15_contains_duplicate/.","confidence":0.96,"reason":"test package"}`
 	rt := &runtime{Config: app.AppConfig{ActiveModel: "fake/model"}, Provider: fake}
 	got, err := resolveTrustedVerificationCommand(context.Background(), rt, task)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "go test ./manual_scratch/day15_contains_duplicate" {
+	if got != "go test -v ./manual_scratch/day15_contains_duplicate" {
 		t.Fatalf("planner should choose exact verification command, got %q", got)
 	}
 }
@@ -478,6 +485,54 @@ func TestMaterializeExecutionDeliverableNormalizesGoPackageInDirectory(t *testin
 	}
 	if !strings.Contains(string(data), "package containsduplicate") {
 		t.Fatalf("package was not normalized:\n%s", string(data))
+	}
+}
+
+func TestMaterializeExecutionDeliverableDoesNotNormalizeNonGoFiles(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	dir := filepath.Join(cwd, "manual_scratch/day15_contains_duplicate")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "contains_duplicate.go"), []byte("package day15_contains_duplicate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	task := app.TaskState{ID: "task_1", Objective: "Implement in manual_scratch/day15_contains_duplicate."}
+	answer := `{"stage":"execution","summary":"docs","deliverable":"### manual_scratch/day15_contains_duplicate/README.txt\n` + "```text" + `\npackage containsduplicate\n` + "```" + `","current_step":"docs","completed_steps":[],"next_step":"verify","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+
+	written, err := materializeExecutionDeliverable(&process.ExchangeResult{Answer: answer}, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 1 || written[0] != "manual_scratch/day15_contains_duplicate/README.txt" {
+		t.Fatalf("unexpected written paths: %#v", written)
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, written[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "package containsduplicate\n" {
+		t.Fatalf("non-Go artifact was normalized: %q", string(data))
+	}
+}
+
+func TestStartAPIProgressWritesHumanReadableStatus(t *testing.T) {
+	var diag bytes.Buffer
+	stop := startAPIProgress(&diag, true)
+	stop()
+	text := diag.String()
+	if !strings.Contains(text, "[api] запрос к модели") || !strings.Contains(text, "[api] ответ получен") {
+		t.Fatalf("missing progress messages: %q", text)
 	}
 }
 

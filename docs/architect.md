@@ -2,9 +2,9 @@
 
 ## 1. Архитектурная идея
 
-Ассистент строится как terminal-first AI coding agent в том же продуктовом классе, что Claude Code и Codex CLI. Это не generic chat wrapper: целевая система должна работать внутри репозитория, принимать задачу обычным языком, планировать, читать файлы, редактировать код через безопасные tools, запускать проверки, показывать evidence/diff и доводить задачу до завершения в одном chat-driven workflow.
+Ассистент строится как консольный помощник для работы с кодом в том же продуктовом классе, что Claude Code и Codex CLI. Это не обычная обёртка над чатом: целевая система должна работать внутри репозитория, принимать задачу обычным языком, планировать, читать файлы, редактировать код через безопасный слой, запускать проверки, показывать доказательства и diff, доводить задачу до завершения в одном чате.
 
-Текущая архитектура P0 реализует control plane такого агента: state, memory, profile, process policy, lifecycle gates, semantic validation, audit and trusted evidence. File/shell tools ограничены текущим этапом, но архитектура должна проектироваться так, чтобы P1 добавил repository context, patch application и command execution без смены продуктовой модели.
+Текущая архитектура P0 реализует слой управления такого помощника: состояние, память, профиль, правила процесса, переходы этапов, смысловая проверка, журнал и доверенные доказательства проверки. P0 уже применяет файлы из структурированного `execution`-результата через безопасные пути внутри репозитория. Полноценное чтение файлов, diff, подтверждения рискованных изменений и shell-команды должны добавляться в P1 без смены продуктовой модели.
 
 Ключевой принцип: LLM не должна сама решать, что помнить, какие правила важны, какой сейчас этап процесса и можно ли переходить дальше. Приложение хранит состояние явно, разделяет memory layers, собирает stage-aware prompt через prompt builder и постепенно добавляет deterministic checks.
 
@@ -19,7 +19,7 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - `expected_action`: `user_input`, `llm_response`, `user_confirmation`, `none`.
 - terminal completion is `stage=done` and `expected_action=none`.
 - `status=done` is not part of MVP.
-- `tool_result` is not part of P0 because MVP has no tool execution; it is reserved for P1.
+- `tool_result` не входит в P0 как общий инструментальный поток; текущий P0 поддерживает только безопасную материализацию файлов из структурированного `execution.deliverable` и доверенную проверку разрешённых команд.
 
 ### Commands
 
@@ -42,6 +42,7 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - Prompt improver may strengthen task prompts before provider calls, but must preserve the user objective and trusted stage policy.
 - Planning swarm creates role-specific specialist reviews plus one merged final plan before execution approval. Specialist summaries must report concrete verdict/contribution, findings and proposed plan/criteria changes, not merely restate the user task.
 - Microtask agents provide role-scoped execution/review calls with audit roles, not untracked generic provider calls.
+- File materializer applies structured execution artifacts to repo-local safe paths before trusted verification.
 - Trusted evidence store records app-issued verification evidence; provider-visible evidence is bounded and hash-backed.
 
 ### UX hard gate: no internals exposed as required flow

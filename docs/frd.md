@@ -2,9 +2,9 @@
 
 ## 1. Назначение документа
 
-FRD описывает функциональные требования к MVP CLI coding agent. Документ дополняет `prd.md` и `architect.md`: PRD объясняет цель продукта, architecture описывает устройство системы, FRD фиксирует конкретное поведение функций и проверяемые требования.
+FRD описывает функциональные требования к MVP консольного помощника для работы с кодом. Документ дополняет `prd.md` и `architect.md`: PRD объясняет цель продукта, architecture описывает устройство системы, FRD фиксирует конкретное поведение функций и проверяемые требования.
 
-Product north star: terminal-first AI coding agent в том же классе, что Claude Code и Codex CLI. Пользователь должен воспринимать систему как агента для работы в репозитории: он пишет задачу в chat, агент планирует, читает контекст, применяет изменения через контролируемые tools, запускает проверки, показывает diff/evidence и ведёт lifecycle до результата. P0 реализует control plane для этого поведения; отсутствие полноценного file/shell tool layer в P0 не меняет конечную цель.
+Цель продукта: консольный помощник для работы с кодом в том же классе, что Claude Code и Codex CLI. Пользователь должен воспринимать систему как помощника для работы в репозитории: он пишет задачу в чате, помощник планирует, читает контекст, применяет изменения через контролируемый слой безопасности, запускает проверки, показывает diff и доказательства, ведёт задачу до результата. P0 реализует слой управления для этого поведения и уже применяет файлы из структурированного результата `execution`; общего shell/tool layer в P0 ещё нет.
 
 Жёсткие критерии приёмки берутся из:
 
@@ -36,6 +36,7 @@ MVP/P0 должен реализовать foundation для coding-agent CLI:
 - prompt improvement перед provider call;
 - planning swarm для role-specific review планирования и финального merged plan; specialist outputs должны содержать verdict/contribution, findings и proposed plan/criteria changes, а не пересказ исходной задачи;
 - microtask agents для execution/review roles;
+- безопасная материализация файлов из `execution.deliverable`: заголовок файла + fenced code block, путь только внутри репозитория, создание каталога, запись файла, секция `Files` в пользовательском выводе;
 - trusted evidence store: app-issued verification evidence создаётся автоматически через language-agnostic `VerificationResolver` after approved-plan approval or semantic intent signal; resolver uses exact approved command first, otherwise asks a structured verification planner/referee for strict JSON, and local command policy/sandbox remain the only execution authority. `--verify` остаётся explicit override/debug, а в provider уходит только bounded summary/hash.
 
 Текущее состояние реализации на 2026-06-19:
@@ -43,11 +44,11 @@ MVP/P0 должен реализовать foundation для coding-agent CLI:
 - Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, process controller, structural validators, semantic validators, transition gate, lifecycle gate, prompt improver, planning swarm, agent runner, trusted evidence store, audit store.
 - Default storage root: `os.UserConfigDir()/coding-writer-assistant`; repo-local `.assistant/` используется только через explicit `--storage-dir` или `ASSISTANT_STORAGE_DIR`.
 - Acceptance flow проверяется fake provider tests: `TestDay11EndToEndMemoryProposalApplyInfluence`, `TestDay12ProfilesChangePromptAndResponse`, `TestDay13PauseResumeAfterRestartUsesWorkingMemory`.
-- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition, rejected-output no-persistence, approval validation and lifecycle evidence. Day 15 live manual proof описан в `docs/manual-testing-demo.md`; `scripts/manual-day15-user-flow.sh` is deterministic regression smoke.
+- Process-control flow проверяется тестами reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition, rejected-output no-persistence, approval validation, lifecycle evidence и materialized execution artifacts. Day 15 live manual proof описан в `docs/manual-testing-demo.md`; `scripts/day15-demo.sh --fake --auto` является стабильной проверкой регрессий.
 
 MVP не должен реализовывать:
 
-- автоматическое редактирование файлов проекта как default path без approval/tool safety layer;
+- произвольное автоматическое редактирование файлов проекта вне структурированного `execution.deliverable` и безопасного слоя путей;
 - полноценный IDE agent с IDE-specific integrations;
 - production-grade RAG по репозиторию;
 - vector database;
@@ -55,7 +56,7 @@ MVP не должен реализовывать:
 - web UI;
 - silent long-term memory writes.
 
-Эти ограничения относятся только к P0. Для продукта в классе Claude Code / Codex CLI P1/P2 должны добавить repo tools: controlled file read/edit, patch application, shell/test execution, diff review and failure recovery while preserving the same chat-first lifecycle.
+Эти ограничения относятся только к P0. Для продукта в классе Claude Code / Codex CLI P1/P2 должны добавить полноценные инструменты репозитория: чтение файлов, diff, подтверждение рискованных изменений, shell/test execution и восстановление после ошибок с сохранением того же пользовательского пути в чате.
 
 ## 3. Термины
 
@@ -110,7 +111,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - `stage`: `planning`, `execution`, `validation`, `done`.
 - `status`: `active`, `paused`.
 - `expected_action`: `user_input`, `llm_response`, `user_confirmation`, `none`.
-- `tool_result` is out of P0 because MVP has no tool execution; it may return in P1 only with an explicit tool-result lifecycle.
+- `tool_result` не входит в P0 как общий инструментальный поток; текущий P0 поддерживает только безопасную материализацию файлов из `execution.deliverable` и доверенную проверку разрешённых команд.
 - completion is represented by `stage=done` and `expected_action=none`; `status=done` is not part of MVP.
 
 #### Command contract
@@ -146,6 +147,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - The primary task path is chat-driven inside one `assistant chat` REPL session: user states the goal, approves a plan and asks to check/finish in normal language; after approval or strict semantic check/finish intent, the application resolves trusted verification through exact approved commands or a structured verification planner, then drives task creation, stage changes, current step, validation status and done state.
 - `planning -> execution` requires a concrete plan, acceptance criteria and a separate approval-validation record.
 - `execution -> validation` requires accepted execution output plus app-issued trusted evidence when criteria mention tests or verification.
+- Accepted execution output may include materialized files; the app must write only repo-local safe paths extracted from structured `deliverable` blocks and must show applied files in the human output.
 - `validation -> done` requires accepted validation output and criteria-matched trusted evidence; LLM text alone cannot mark a task done.
 - Planning swarm must produce role-specific specialist reviews and one final merged plan; audit and human output must expose specialist roles, concrete verdict/contribution, finding count and proposed changes when present.
 - Execution and review must run through role-scoped microtask agents, not generic untracked provider calls.

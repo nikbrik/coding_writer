@@ -58,7 +58,11 @@ fi
 
 cd "$ROOT_DIR"
 mkdir -p "$ROOT_DIR/.assistant/bin" "$GOCACHE_DIR"
-GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/assistant
+build_output=""
+if ! build_output="$(GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/assistant 2>&1)"; then
+  printf '%s\n' "$build_output" >&2
+  exit 1
+fi
 
 if [[ "$CLEAN" == "1" ]]; then
   case "$STORAGE_DIR" in
@@ -110,44 +114,53 @@ print_demo_messages() {
   cat <<'EOF'
 Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии.
 Да, план принят. Приступай к выполнению.
-Готово к проверке: проверь результат.
 Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate.
 /exit
 EOF
 }
 
 task_is_done() {
-  local status_json
-  if ! status_json="$("$BIN" task status --json 2>/dev/null)"; then
+  local status_file="$STORAGE_DIR/tasks/current.json"
+  if [[ ! -f "$status_file" ]]; then
     return 1
   fi
-  python3 -c 'import json,sys; data=json.loads(sys.argv[1]); task=data.get("task") or {}; sys.exit(0 if task.get("stage") == "done" else 1)' "$status_json"
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if data.get("stage") == "done" else 1)' "$status_file"
 }
 
 task_expected_action() {
-  local status_json
-  if ! status_json="$("$BIN" task status --json 2>/dev/null)"; then
+  local status_file="$STORAGE_DIR/tasks/current.json"
+  if [[ ! -f "$status_file" ]]; then
     return 1
   fi
-  python3 -c 'import json,sys; data=json.loads(sys.argv[1]); task=data.get("task") or {}; print(task.get("expected_action",""))' "$status_json"
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("expected_action",""))' "$status_file"
 }
 
 task_stage() {
-  local status_json
-  if ! status_json="$("$BIN" task status --json 2>/dev/null)"; then
+  local status_file="$STORAGE_DIR/tasks/current.json"
+  if [[ ! -f "$status_file" ]]; then
     return 1
   fi
-  python3 -c 'import json,sys; data=json.loads(sys.argv[1]); task=data.get("task") or {}; print(task.get("stage",""))' "$status_json"
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("stage",""))' "$status_file"
+}
+
+task_updated_at() {
+  local status_file="$STORAGE_DIR/tasks/current.json"
+  if [[ ! -f "$status_file" ]]; then
+    return 1
+  fi
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("updated_at",""))' "$status_file"
 }
 
 wait_for_chat_turn() {
-  local i expected
+  local before_updated="${1:-}"
+  local i expected updated
   for i in {1..180}; do
     if task_is_done; then
       return 0
     fi
     if expected="$(task_expected_action 2>/dev/null)"; then
-      if [[ "$expected" != "llm_response" && "$expected" != "" ]]; then
+      updated="$(task_updated_at 2>/dev/null || true)"
+      if [[ "$updated" != "" && "$updated" != "$before_updated" && "$expected" != "llm_response" && "$expected" != "" ]]; then
         return 0
       fi
     fi
@@ -174,11 +187,13 @@ run_auto_chat() {
       printf '%s\n' "$message" >&3
       break
     fi
-    if [[ "$message" == "Готово к проверке:"* ]] && [[ "$(task_stage 2>/dev/null || true)" == "validation" ]]; then
-      continue
-    fi
+    local before_updated
+    before_updated="$(task_updated_at 2>/dev/null || true)"
     printf '%s\n' "$message" >&3
-    wait_for_chat_turn
+    wait_for_chat_turn "$before_updated"
+    if task_is_done; then
+      break
+    fi
   done < <(print_demo_messages)
   exec 3>&-
   wait "$chat_pid"

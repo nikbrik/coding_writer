@@ -4,11 +4,13 @@
 
 Формат: перед каждым видео используется отдельный `ASSISTANT_STORAGE_DIR`. В видимом demo пользователь работает через `assistant chat` и обычные короткие фразы. Машинные команды `--json`, `--render-prompt`, explicit `--verify` override и scratch-package проверки идут только в отдельном блоке "agent verification" после demo.
 
-Важно: текущий P0 CLI не редактирует файлы сам. Поэтому "решил до конца" для demo означает:
+Важно: текущий P0 CLI уже применяет файлы из структурированного `execution`-ответа. Это не произвольный shell/tool доступ: приложение читает только `deliverable` текущей задачи, извлекает заголовки файлов и fenced code blocks, проверяет безопасный путь внутри репозитория, создаёт каталоги и записывает файлы перед доверенной проверкой.
 
-- в `execution` есть полный `deliverable` с Go-кодом в fenced code block или unified diff;
-- есть разбор примеров, edge cases и сложность;
-- agent verification может взять код из `deliverable`, положить его в scratch package под repo и прогнать `go test`;
+Поэтому для Day 15 "решил до конца" означает:
+
+- в `execution` есть полный `deliverable` с заголовками файлов и Go-кодом в fenced code blocks;
+- CLI показывает секцию `Files` со списком применённых файлов;
+- trusted verification запускается уже по материализованным файлам, а не по старому/отсутствующему workspace;
 - переход в `done` допускается только через trusted evidence: в основном demo пользователь пишет `Проверь и заверши`, semantic referee подтверждает intent, а приложение само получает exact command через `VerificationResolver` и запускает только locally allowlisted argv command.
 
 ## 0. Общая подготовка
@@ -509,8 +511,6 @@ scripts/day15-demo.sh
 
 Да, план принят. Приступай к выполнению.
 
-Готово к проверке: проверь результат.
-
 Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate.
 
 /exit
@@ -535,6 +535,8 @@ scripts/day15-demo.sh --auto
 - после planning видна секция `Planning swarm` с verdict/contribution по specialist roles, количеством findings/proposals и top finding/proposed change при наличии; это должен быть review планирования, а не пересказ исходной задачи;
 - human output после planning показывает pending plan/criteria, а не `execution`;
 - approval фразой переводит `planning -> execution`;
+- после execution видна секция `Files` с применёнными файлами `manual_scratch/day15_contains_duplicate/...`;
+- пакет `manual_scratch/day15_contains_duplicate` реально появляется в workspace до проверки;
 - приложение само получает exact verification command через `VerificationResolver`, запускает allowlisted trusted verification и переводит `execution -> validation` без команды от пользователя;
 - если execution уже идёт, `execution -> validation` также может произойти после semantic check intent и app-issued trusted evidence;
 - финальный chat `Проверь критерии и заверши...` создает accepted validation record и переводит task в `done`;
@@ -546,13 +548,13 @@ scripts/day15-demo.sh --auto
 Можно прогнать тот же сценарий полностью автоматически:
 
 ```bash
-bash scripts/manual-day15-user-flow.sh
+scripts/day15-demo.sh --fake --auto
 ```
 
 Готово, если script печатает:
 
 ```text
-DAY15_MANUAL_PASS ... events=...
+scripted scenario completed.
 ```
 
 Дополнительно можно показать audit:
@@ -569,4 +571,4 @@ Audit должен содержать события `prompt_improvement_call`, 
 - Day 12: Valid Parentheses solved, одинаковый короткий prompt меняет стиль через `student/senior/tester`, profile попадает в prompt автоматически.
 - Day 13: Merge Sorted Arrays solved through planning -> execution -> pause/restart/resume -> validation -> trusted done.
 - Day 14: Stock Profit solved safely, invariants stored/prompted, unsafe Python/brute-force request blocked, safe flow recovers.
-- Day 15: Controlled lifecycle проходит через chat-only flow, planning swarm и microtask agents видны в audit, `done` достигается только после trusted evidence и accepted validation.
+- Day 15: контролируемые этапы проходят внутри одного обычного чата, обсуждение плана и микрозадачи видны в журнале, `done` достигается только после доверенной проверки и принятой validation.
