@@ -83,6 +83,44 @@ func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvide
 	}, fake, dir
 }
 
+func issueTestEvidence(t *testing.T, dir string, task app.TaskState, sessionID, source string) []string {
+	t.Helper()
+	token, _, err := NewTrustedEvidenceStore(dir).Issue(task.ID, sessionID, source, 0, "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{token}
+}
+
+func moveCurrentTaskToValidatedDone(t *testing.T, ctrl *ProcessController) {
+	t.Helper()
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.RecordAcceptedValidation("ready_for_done", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func moveCurrentTaskToExecutionWithApprovedPlan(t *testing.T, ctrl *ProcessController) {
+	t.Helper()
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"first step"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.RecordPlanningApproval("approved", "test setup", 1, "test approval"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.ApproveCurrentPlanning(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestProcessControllerInvariantInputConflictSkipsProvider(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -287,15 +325,7 @@ func TestProcessControllerDoneTaskBlocksMutation(t *testing.T) {
 	if _, err := ctrl.Tasks.Start("done task"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
-		t.Fatal(err)
-	}
+	moveCurrentTaskToValidatedDone(t, ctrl)
 	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "реализуй ещё", ActionKind: ActionExecutePlanStep})
 	if err == nil {
 		t.Fatal("expected error for done task mutation")
@@ -314,15 +344,7 @@ func TestProcessControllerDoneTaskBlocksImplicitMutationQuestion(t *testing.T) {
 	if _, err := ctrl.Tasks.Start("done task"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
-		t.Fatal(err)
-	}
+	moveCurrentTaskToValidatedDone(t, ctrl)
 	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "can you implement X?"})
 	if err == nil || app.AsError(err).Code != "task_done" {
 		t.Fatalf("want task_done, got %v", err)
@@ -645,44 +667,44 @@ func TestPlanningRejectionDoesNotTreatDoNotRepeatAsRejection(t *testing.T) {
 	}
 }
 
-func TestProcessControllerUserReadySignalMovesExecutionToValidation(t *testing.T) {
+func TestProcessControllerUserReadySignalWithoutSemanticDoesNotMoveExecutionToValidation(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
-	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
-		t.Fatal(err)
-	}
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
 	beforeCalls := len(fake.SnapshotCalls())
+	fake.ChatResponse = `{"stage":"execution","summary":"continuing safely","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"first step","completed_steps":[],"next_step":"first step","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Готово к проверке."})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Transition == nil || res.Transition.To != app.StageValidation {
-		t.Fatalf("ready signal did not move to validation: %+v", res.Transition)
+	if res.Transition != nil {
+		t.Fatalf("keyword-only ready signal moved to validation: %+v", res.Transition)
 	}
-	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("ready signal should not require provider call")
+	if len(fake.SnapshotCalls()) == beforeCalls {
+		t.Fatalf("keyword-only path should fall through to provider-backed execution")
 	}
 }
 
 func TestProcessControllerSemanticIntentMovesExecutionToValidation(t *testing.T) {
 	ctx := context.Background()
-	ctrl, fake, _ := newTestController(t)
+	ctrl, fake, dir := newTestController(t)
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
-	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
 		t.Fatal(err)
 	}
-	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./...")
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"answer_question","transition_signal":"ready_for_validation","confidence":0.92,"reason":"user says work is complete and asks for review"}`,
 	}
-	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "The work is complete; please review it now."})
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "The work is complete; please review it now.", TrustedEvidence: evidence})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,10 +719,7 @@ func TestProcessControllerLocalReadySignalDoesNotOverrideSemanticDowngrade(t *te
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
-	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
-		t.Fatal(err)
-	}
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
 	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.92,"reason":"overly conservative fake downgrade"}`,
@@ -717,19 +736,31 @@ func TestProcessControllerLocalReadySignalDoesNotOverrideSemanticDowngrade(t *te
 
 func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 	ctx := context.Background()
-	ctrl, fake, _ := newTestController(t)
+	ctrl, fake, dir := newTestController(t)
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"planning","summary":"build it","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["first step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
-	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask, AutoApproveTransitions: true}); err != nil {
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./...")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("execution accepted", evidence); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ctrl.Tasks.RecordAcceptedValidation("ready_for_done", evidence); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"ready_for_done","confidence":0.92,"reason":"user asks to finish"}`,
+	}
 	beforeCalls := len(fake.SnapshotCalls())
-	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go test ./...", 0, "ok")}})
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: evidence})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,13 +768,13 @@ func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 		t.Fatalf("trusted done signal did not move to done: %+v", res.Transition)
 	}
 	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("trusted done signal should not require provider call")
+		t.Fatalf("trusted done signal should be app-owned, got provider calls: %+v", fake.SnapshotCalls())
 	}
 }
 
 func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 	ctx := context.Background()
-	ctrl, fake, _ := newTestController(t)
+	ctrl, fake, dir := newTestController(t)
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
@@ -756,9 +787,21 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go version")
+	if _, err := ctrl.Tasks.RecordAcceptedValidation("ready_for_done", evidence); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"ready_for_done","confidence":0.92,"reason":"user asks to finish"}`,
+	}
 	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
 	beforeCalls := len(fake.SnapshotCalls())
-	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "go version test")}})
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: evidence})
 	if err == nil {
 		t.Fatalf("irrelevant evidence should not finish task: result=%+v", res)
 	}
@@ -766,7 +809,7 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 		t.Fatalf("want transition_precondition_failed, got %v", err)
 	}
 	if len(fake.SnapshotCalls()) != beforeCalls {
-		t.Fatalf("irrelevant trusted evidence should fail before provider call")
+		t.Fatalf("irrelevant evidence should be rejected before provider calls: %+v", fake.SnapshotCalls())
 	}
 	current, currentErr := ctrl.Tasks.Current()
 	if currentErr != nil {
@@ -774,6 +817,154 @@ func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
 	}
 	if current.Stage != app.StageValidation {
 		t.Fatalf("irrelevant evidence moved stage: %+v", current)
+	}
+}
+
+func TestProcessControllerValidationReviewWithTrustedEvidenceDoesNotRollback(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"go test ./manual_scratch/day14_stock_profit"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./manual_scratch/day14_stock_profit")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("trusted verification evidence accepted", evidence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"review_output","transition_signal":"none","confidence":0.99,"reason":"should not be called"}`,
+	}
+	beforeCalls := len(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии по evidence, но пока не завершай задачу; дай review.", TrustedEvidence: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("review-only request must not transition to done: %+v", res.Transition)
+	}
+	if !strings.Contains(res.Answer, "ready for done") {
+		t.Fatalf("expected ready-for-done review answer, got %q", res.Answer)
+	}
+	current, err = ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StageValidation || current.ValidationStatus != "ready_for_done" {
+		t.Fatalf("expected validation stage with ready_for_done status, got %+v", current)
+	}
+	if len(fake.SnapshotCalls()) != beforeCalls {
+		t.Fatalf("trusted evidence review should be app-owned, got provider calls: %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerValidationReviewUsesPersistedEvidence(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"go test ./manual_scratch/day14_stock_profit"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./manual_scratch/day14_stock_profit")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("trusted verification evidence accepted", evidence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"review_output","transition_signal":"none","confidence":0.97,"reason":"review requested without finishing"}`,
+	}
+	beforeCalls := len(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии по evidence, но пока не завершай задачу; дай review."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("persisted-evidence review must not transition to done: %+v", res.Transition)
+	}
+	current, err = ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.LastValidationID == "" || current.ValidationStatus != "ready_for_done" {
+		t.Fatalf("persisted evidence review did not record accepted validation: %+v", current)
+	}
+	if len(fake.SnapshotCalls()) != beforeCalls+1 {
+		t.Fatalf("only semantic intent call expected, got %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerValidationReviewRunsReviewerAgentWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"go test ./manual_scratch/day14_stock_profit"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, current, "s1", "go test ./manual_scratch/day14_stock_profit")
+	if _, err := ctrl.Tasks.RecordAcceptedExecution("trusted verification evidence accepted", evidence); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.AgentRunner = &AgentRunner{Provider: fake, Model: "fake/model"}
+	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["trusted evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь критерии по evidence, но пока не завершай задачу; дай review.", TrustedEvidence: evidence})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("review-only request must not transition to done: %+v", res.Transition)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 1 {
+		t.Fatalf("expected one reviewer agent call, got %+v", fake.SnapshotCalls())
+	}
+	events, err := ctrl.AuditStore.Latest(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundReviewer := false
+	for _, event := range events {
+		if event.AgentRole == string(AgentRoleReviewer) && event.Decision == "agent_accepted" {
+			foundReviewer = true
+			break
+		}
+	}
+	if !foundReviewer {
+		t.Fatalf("missing accepted reviewer audit event: %+v", events)
 	}
 }
 
@@ -885,6 +1076,14 @@ func TestConstrainSemanticActionMapsExecutionReviewIntent(t *testing.T) {
 	if got != ActionSummarizeExecution {
 		t.Fatalf("want summarize_execution, got %s", got)
 	}
+	got = constrainSemanticActionToContext(app.StageExecution, ActionSummarizeExecution, ActionExecutePlanStep)
+	if got != ActionSummarizeExecution {
+		t.Fatalf("ready-for-validation intent must not be downgraded, got %s", got)
+	}
+	got = constrainSemanticActionToContext(app.StageExecution, ActionSummarizeExecution, ActionAnswerQuestion)
+	if got != ActionSummarizeExecution {
+		t.Fatalf("ready-for-validation intent must not be downgraded to answer_question, got %s", got)
+	}
 	got = constrainSemanticActionToContext(app.StagePlanning, ActionPlanTask, ActionReviewOutput)
 	if got != ActionPlanTask {
 		t.Fatalf("want deterministic planning action, got %s", got)
@@ -971,15 +1170,7 @@ func TestProcessControllerDoneBenignInputIsReadOnlyAnswer(t *testing.T) {
 	if _, err := ctrl.Tasks.Start("done task"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ctrl.Tasks.Move(app.StageDone); err != nil {
-		t.Fatal(err)
-	}
+	moveCurrentTaskToValidatedDone(t, ctrl)
 	fake.ChatResponse = "you are welcome"
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "thanks"})
 	if err != nil {
@@ -1056,6 +1247,51 @@ func TestProcessControllerRejectsEmptyAssistantOutputBeforeMemory(t *testing.T) 
 	records, _ := ctrl.Memory.List(ctx, app.LayerShort, "empty", "")
 	if len(records) != 0 {
 		t.Fatalf("empty output should not save partial exchange: %+v", records)
+	}
+}
+
+func TestProcessControllerPromptImproverFailureFallsBackToOriginal(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.PromptImprover = &PromptImprover{Provider: fake, Model: "fake/model"}
+	fake.ValidatorResponses = []string{"not-json"}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "prompt_improver_fallback", Input: "hello", ActionKind: ActionAnswerQuestion})
+	if err != nil {
+		t.Fatalf("prompt improver failure should not block exchange: %v", err)
+	}
+	if res == nil || !strings.Contains(res.Answer, "fake assistant response") {
+		t.Fatalf("main answer missing after prompt improver fallback: %+v", res)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "prompt improvement skipped") {
+		t.Fatalf("missing prompt improvement warning: %+v", res.Warnings)
+	}
+}
+
+func TestProcessControllerReadyWithTrustedEvidenceTransitionsBeforeProvider(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, dir := newTestController(t)
+	task, err := ctrl.Tasks.Start("verify task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueTestEvidence(t, dir, task, "ready_with_evidence", "go test ./manual_scratch/day14_stock_profit")
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "ready_with_evidence", Input: "Готово к проверке: проверь результат.", TrustedEvidence: evidence})
+	if err != nil {
+		t.Fatalf("ready with trusted evidence should transition before provider: %v", err)
+	}
+	if res.Transition == nil || res.Transition.From != current.Stage || res.Transition.To != app.StageValidation {
+		t.Fatalf("expected execution->validation transition, got %+v", res.Transition)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 0 {
+		t.Fatalf("provider should not be called for app-owned ready transition: %+v", fake.SnapshotCalls())
 	}
 }
 

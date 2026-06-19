@@ -47,3 +47,14 @@ func TestDecodeSemanticJSONExtractsObjectFromProse(t *testing.T) {
 		t.Fatalf("unexpected verdict: %q", out.Verdict)
 	}
 }
+
+func TestDecodeSemanticJSONLooseIgnoresUnknownFields(t *testing.T) {
+	var out SpecialistReview
+	err := decodeSemanticJSONLoose(`{"stage":"planning","role":"requirements_specialist","summary":"ok","findings":[]}`, &out)
+	if err != nil {
+		t.Fatalf("decodeSemanticJSONLoose returned error: %v", err)
+	}
+	if out.Role != PlanningSpecialistRole(AgentRoleRequirementsSpecialist) || out.Summary != "ok" {
+		t.Fatalf("unexpected decoded review: %+v", out)
+	}
+}

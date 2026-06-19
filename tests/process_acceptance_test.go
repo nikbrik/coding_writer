@@ -134,11 +134,15 @@ func TestProcessSuccessfulValidationTransitionsToDone(t *testing.T) {
 	rt := newAcceptanceRuntime(t)
 	state, _ := rt.tasks.Start("validate task")
 	state, _ = rt.tasks.Move(app.StageExecution)
+	evidence, err := issueAcceptanceEvidence(rt, state, "process_done", "go test ./...")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, _ = rt.tasks.RecordAcceptedExecution("execution accepted", evidence)
 	state, _ = rt.tasks.Move(app.StageValidation)
-	_ = state
 	rt.provider.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
 	ctrl := newProcessAcceptanceController(rt)
-	res, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_done", Input: "проверь", ActionKind: process.ActionReviewOutput, TrustedEvidence: []string{process.NewTrustedEvidence("go test ./...", 0, "ok")}})
+	res, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_done", Input: "проверь и заверши", ActionKind: process.ActionReviewOutput, TrustedEvidence: evidence})
 	if err != nil {
 		t.Fatal(err)
 	}

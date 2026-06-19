@@ -20,6 +20,27 @@ func TestResolveActionKindNoTaskPlanningIntentPlansTask(t *testing.T) {
 	}
 }
 
+func TestResolveActionKindNoTaskGoalIntentPlansTask(t *testing.T) {
+	cases := []string{
+		"Нужно проверить существующий Go пакет manual_scratch/day14_stock_profit стандартными тестами.",
+		"Надо реализовать обработку ошибок в CLI.",
+		"Please verify package behavior before release.",
+	}
+	for _, input := range cases {
+		got := ResolveActionKind(input, "", "")
+		if got != ActionPlanTask {
+			t.Fatalf("%q: want plan_task, got %s", input, got)
+		}
+	}
+}
+
+func TestResolveActionKindNoTaskQuestionAboutNeedIsAnswerQuestion(t *testing.T) {
+	got := ResolveActionKind("Нужно ли использовать Cobra для CLI?", "", "")
+	if got != ActionAnswerQuestion {
+		t.Fatalf("want answer_question, got %s", got)
+	}
+}
+
 func TestResolveActionKindExecutionDefaultExecutesStep(t *testing.T) {
 	got := ResolveActionKind("реализуй шаг", app.StageExecution, app.ExpectedLLMResponse)
 	if got != ActionExecutePlanStep {

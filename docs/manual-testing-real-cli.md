@@ -2,10 +2,10 @@
 
 Цель: проверить, что ассистент работает как настоящее CLI-приложение, а не как набор demo-сценариев. Проверка делится на два слоя:
 
-- первые 4 обязательных demo/acceptance сценария Day 11, Day 12, Day 13, Day 14 показывают выполнение учебных документов и записываются как нормальный CLI flow;
+- первые 5 обязательных demo/acceptance сценариев Day 11, Day 12, Day 13, Day 14, Day 15 показывают выполнение учебных документов и записываются как нормальный CLI flow;
 - последующая real-cli regression matrix проверяет edge cases, provider failures, validation boundaries, JSON contract, privacy and recovery. Эти кейсы можно поручать агентам: каждый кейс изолирован через run-scoped `ASSISTANT_STORAGE_DIR`, имеет команды, ожидаемый результат и негативные проверки.
 
-Важно: regression matrix не заменяет Day 11-14 demo. Slash-команды вроде `/task start`, `/task plan`, `/task move` допустимы в regression setup, чтобы изолировать конкретный edge case, но не являются приемочным доказательством Day 11/12/13 happy path. Для Day acceptance основной flow должен выглядеть как обычная работа в CLI, без ручной сборки внутреннего состояния там, где продукт должен сделать это сам.
+Важно: regression matrix не заменяет Day 11-15 demo. Slash-команды вроде `/task start`, `/task plan`, `/task move` допустимы в regression setup, чтобы изолировать конкретный edge case, но не являются приемочным доказательством Day 11/12/13/15 happy path. Для Day acceptance основной flow должен выглядеть как обычная работа в CLI, без ручной сборки внутреннего состояния там, где продукт должен сделать это сам.
 
 ## 0. Ответ на вопрос "real app или demo?"
 
@@ -51,11 +51,13 @@ case_dir() {
 Live mode:
 
 ```bash
-export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
+export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
 unset ASSISTANT_PROVIDER
 unset ASSISTANT_LLM_VALIDATION
 test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 ```
+
+For recorded/manual live demos, do not substitute another model unless the scenario is explicitly updated. The expected OpenRouter-visible model is `google/gemini-3.1-flash-lite`.
 
 Fake CI mode:
 
@@ -70,16 +72,17 @@ Baseline:
 go test ./...
 ```
 
-## 2. Обязательные первые 4 demo/acceptance cases
+## 2. Обязательные первые 5 demo/acceptance cases
 
-Canonical source: `docs/manual-testing-day11-14.md`.
+Canonical source: `docs/manual-testing-demo.md` plus focused Day 15 live manual doc `docs/manual-testing-day15.md`.
 
-Эти 4 сценария нужно прогонять первыми, когда цель - доказать, что требования Day 11, Day 12, Day 13, Day 14 полностью выполняются. Каждый demo case теперь решает маленькую LeetCode-style задачу до полного code deliverable, а требование конкретного дня доказывается на фоне нормальной работы coding assistant.
+Эти 5 сценариев нужно прогонять первыми, когда цель - доказать, что требования Day 11, Day 12, Day 13, Day 14, Day 15 полностью выполняются. Каждый demo case теперь решает маленькую LeetCode-style задачу до полного code deliverable, а требование конкретного дня доказывается на фоне нормальной работы coding assistant.
 
 Preflight:
 
 ```bash
 env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|TestDay12|TestDay13|TestDay14'
+bash scripts/manual-day15-user-flow.sh
 ```
 
 Ожидаемо:
@@ -88,10 +91,11 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|
 - `TestDay12ProfilesChangePromptAndResponse` проходит;
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит.
+- `DAY15_MANUAL_PASS ...` печатается после deterministic Day 15 regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-day15.md`.
 
 ### Demo Case 1. Day 11 Memory Layers + Two Sum
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 11. Memory Layers + Two Sum`.
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 11. Memory Layers + Two Sum`.
 
 Acceptance proof:
 
@@ -105,7 +109,7 @@ Acceptance proof:
 
 ### Demo Case 2. Day 12 Personalization Profiles + Valid Parentheses
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 12. Profiles + Valid Parentheses`.
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 12. Profiles + Valid Parentheses`.
 
 Acceptance proof:
 
@@ -117,7 +121,7 @@ Acceptance proof:
 
 ### Demo Case 3. Day 13 Task State FSM + Merge Sorted Arrays
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 13. Task FSM + Merge Sorted Arrays`.
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 13. Task FSM + Merge Sorted Arrays`.
 
 Acceptance proof:
 
@@ -130,7 +134,7 @@ Acceptance proof:
 
 ### Demo Case 4. Day 14 Invariants + Stock Profit
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 14. Invariants + Best Time to Buy/Sell Stock`.
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 14. Invariants + Best Time to Buy/Sell Stock`.
 
 Acceptance proof:
 
@@ -139,6 +143,20 @@ Acceptance proof:
 - safe Go `MaxProfit` request runs normally and returns complete code/tests/complexity;
 - conflicting Python/brute-force rewrite request is blocked by the out-of-band invariant validator with `invariant_conflict`, invariant ID, and evidence;
 - custom algorithm invariant persists in `invariants/project.jsonl`.
+
+### Demo Case 5. Day 15 Controlled Lifecycle + Planning Swarm
+
+Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 15. Controlled Lifecycle + Planning Swarm`, or focused script doc `docs/manual-testing-day15.md`.
+
+Acceptance proof:
+
+- основной flow идёт через `assistant chat --once`, а не через `task move`, прямые storage edits или JSON edits;
+- natural user request creates `planning` task with plan and criteria;
+- user approval moves to `execution` only through approval validation;
+- обычный chat request creates app-issued trusted evidence from approved plan/criteria and moves to `validation`;
+- reviewer microagent validates without prematurely marking done;
+- final verified chat moves to `done`;
+- audit contains prompt improvement, planning swarm, specialist roles, executor/reviewer roles, accepted validation and lifecycle transitions.
 
 ## 3. Validation model
 
@@ -149,12 +167,12 @@ Expected real-mode validation:
 - Semantic referee call: `purpose=validator`.
 - Referee payload is separate from main dialogue and redacted before provider call.
 - Referee may reject answers that invent file edits, tool results, test results, task transitions, memory writes, or done status.
-- Trusted completion requires criteria-matched app evidence, e.g. `--verify "go test ./..."` for criteria that mention tests.
-- `--verify` policy is intentionally constrained: argv-only execution, no shell operators/env expansion/redirection, PATH-resolved allowlist only (`go test|go vet|go version`, `git diff|git status`), timeout/output cap, and only a command-output hash is sent as trusted evidence.
+- Trusted completion requires criteria-matched app evidence. For normal product flow, the app derives the verification command from approved plan/criteria when the user asks to check/finish.
+- Explicit `--verify` is a constrained override/debug surface: argv-only execution, no shell operators/env expansion/redirection, PATH-resolved allowlist only (`go test|go vet|go version`, `git diff|git status`), timeout/output cap, and only a command-output hash is sent as trusted evidence.
 
 ## 4. Supplemental real-cli regression matrix
 
-These cases are intentionally more mechanical than the Day 11-14 demo scripts. Their job is to pin down narrow behavior: typed failures, recovery, validation boundaries, provider/config precedence, prompt audit, and privacy. When a case uses slash commands to set up state, that setup is not a replacement for product acceptance; it is just test isolation.
+These cases are intentionally more mechanical than the Day 11-15 demo scripts. Their job is to pin down narrow behavior: typed failures, recovery, validation boundaries, provider/config precedence, prompt audit, and privacy. When a case uses slash commands, `--json`, or explicit `--verify`, that setup is not a replacement for product acceptance; it is test isolation/debug coverage.
 
 ### Case 1. Init and privacy disclosure
 
@@ -366,19 +384,21 @@ Expected:
 - Semantic intent classifies the review request and stage moves to `validation`.
 - Pass criteria are observable state/audit only: `stage=validation`, no `done`, no memory apply side effect.
 
-### Case 15. Trusted verification boundaries
+### Case 15. Explicit verification override boundaries
+
+This case is a regression/debug boundary test for `--verify`, not the primary Day 15 user flow. The live Day 15 proof must use normal chat input and app-owned auto verification from the approved plan/criteria; see `docs/manual-testing-day15.md`.
 
 ```bash
 case_dir "case15a-verify-success"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start MemoryManager done smoke' '/task criteria CRUD works for short/work/long JSON storage' '/task criteria secrets are blocked' '/task criteria go test ./... passes' '/task plan implement list/save/delete commands' '/task move execution' 'Готово к проверке.' '/exit' | assistant chat
-assistant chat --once --verify "go test ./..." --input "Проверь и заверши" --json
+assistant chat --once --input "Проверь и заверши" --verify "go test ./..." --json
 assistant task status
 ```
 
 Expected:
 
-- `--verify` runs local command.
+- explicit debug `--verify` runs local command.
 - Trusted evidence is criteria-matched and hashed before validation.
 - Final task status: `stage=done`, `expected_action=none`.
 
@@ -389,7 +409,7 @@ case_dir "case15b-verify-failed"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start MemoryManager failed verify smoke' '/task criteria go test ./... passes' '/task plan implement list/save/delete commands' '/task move execution' 'Готово к проверке.' '/exit' | assistant chat
 set +e
-assistant chat --once --verify "go test ./definitely_missing_package" --input "Проверь и заверши" --json > "$MANUAL_RUN_ROOT/case15b-verify-failed/out.json" 2> "$MANUAL_RUN_ROOT/case15b-verify-failed/err.log"
+assistant chat --once --input "Проверь и заверши" --verify "go test ./definitely_missing_package" --json > "$MANUAL_RUN_ROOT/case15b-verify-failed/out.json" 2> "$MANUAL_RUN_ROOT/case15b-verify-failed/err.log"
 verify_exit=$?
 set -e
 assistant task status
@@ -409,7 +429,7 @@ case_dir "case15c-verify-irrelevant"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start MemoryManager irrelevant verify smoke' '/task criteria go test ./... passes' '/task plan implement list/save/delete commands' '/task move execution' 'Готово к проверке.' '/exit' | assistant chat
 set +e
-assistant chat --once --verify "go version" --input "Проверь и заверши" --json > "$MANUAL_RUN_ROOT/case15c-verify-irrelevant/out.json" 2> "$MANUAL_RUN_ROOT/case15c-verify-irrelevant/err.log"
+assistant chat --once --input "Проверь и заверши" --verify "go version" --json > "$MANUAL_RUN_ROOT/case15c-verify-irrelevant/out.json" 2> "$MANUAL_RUN_ROOT/case15c-verify-irrelevant/err.log"
 irrelevant_exit=$?
 set -e
 assistant task status
@@ -429,7 +449,7 @@ case_dir "case15d-verify-unsafe"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start MemoryManager unsafe verify smoke' '/task criteria go test ./... passes' '/task plan implement list/save/delete commands' '/task move execution' 'Готово к проверке.' '/exit' | assistant chat
 set +e
-assistant chat --once --verify 'go version; printenv OPENROUTER_API_KEY' --input "Проверь и заверши" --json > "$MANUAL_RUN_ROOT/case15d-verify-unsafe/out.json" 2> "$MANUAL_RUN_ROOT/case15d-verify-unsafe/err.log"
+assistant chat --once --input "Проверь и заверши" --verify 'go version; printenv OPENROUTER_API_KEY' --json > "$MANUAL_RUN_ROOT/case15d-verify-unsafe/out.json" 2> "$MANUAL_RUN_ROOT/case15d-verify-unsafe/err.log"
 unsafe_exit=$?
 set -e
 assistant task status
@@ -442,13 +462,15 @@ Expected:
 - Task remains `stage=validation`, not `done`.
 - No env value, command output, or secret-like value appears in provider/audit/memory/task state.
 
-### Case 16. Done task is terminal
+### Case 16. Done task is terminal after explicit override
+
+This is a terminal-state regression after Case 15-style debug verification. It does not replace the chat-only Day 15 demo.
 
 ```bash
 case_dir "case16-done-terminal"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start MemoryManager terminal smoke' '/task criteria go test ./... passes' '/task plan implement list/save/delete commands' '/task move execution' 'Готово к проверке.' '/exit' | assistant chat
-assistant chat --once --verify "go test ./..." --input "Проверь и заверши" --json
+assistant chat --once --input "Проверь и заверши" --verify "go test ./..." --json
 assistant task status
 assistant chat --once --input "доработай done task" --json
 ```
@@ -635,9 +657,9 @@ Expected:
 case_dir "case25-memory-selective-consent"
 assistant init --model "$ASSISTANT_MODEL"
 printf '%s\n' '/task start Memory selective consent smoke' 'Текущая задача: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: коротко на русском. Не сохраняй шум: зеленая кружка.' '/memory propose' '/exit' | assistant chat > "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out"
-proposal_id="$(awk '/^Memory proposal:/ {print $3; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
-long_id="$(awk '/\\[long\\] pending/ {print $1; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
-noise_id="$(awk '/\\[ignore\\] pending|зеленая кружка|зеленая/ {print $1; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
+proposal_id="$(awk '/^id: proposal_/ {print $2; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
+long_id="$(awk '/\\[long\\] pending/ {print $2; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
+noise_id="$(awk '/\\[ignore\\] pending|зеленая кружка|зеленая/ {print $2; exit}' "$MANUAL_RUN_ROOT/case25-memory-selective-consent/propose.out")"
 assistant memory apply --proposal "$proposal_id" --accept "$long_id" --reject "$noise_id" --json
 assistant memory list long > "$MANUAL_RUN_ROOT/case25-memory-selective-consent/long.out"
 assistant memory list work > "$MANUAL_RUN_ROOT/case25-memory-selective-consent/work.out"

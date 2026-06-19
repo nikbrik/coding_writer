@@ -1,12 +1,12 @@
 # Implementation Status And Regression Plan
 
-Назначение: historical implementation status, regression checklist и обзор уже закрытого Day11-14 контракта.
+Назначение: historical implementation status, regression checklist и обзор уже закрытого Day11-15 контракта.
 
 Этот файл не является source of truth для продукта или архитектуры. При конфликте приоритет имеют `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, acceptance tests и актуальные task notes/goal-файлы, если они есть. `day11.md`, `day12.md`, `day13.md`, `day14.md` остаются исходными учебными критериями приёмки.
 
-Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer.
+Ключевой принцип: `day11.md`, `day12.md`, `day13.md`, `day14.md`, `day15.md` являются жёсткими критериями приёмки. Нельзя заменить LLM-классификацию ручным `/save`, нельзя хранить память одним файлом, нельзя подключать профиль только по желанию пользователя, нельзя имитировать pause/resume без сохранённого состояния задачи, нельзя держать инварианты только в статическом prompt text без отдельного storage/enforcement layer, нельзя закрывать Day 15 ручным управлением state или fake-only proof.
 
-Текущее состояние кода на 2026-06-19: базовый MVP, process-control loop и Day14 invariant layer с out-of-band LLM validation реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
+Текущее состояние кода на 2026-06-19: базовый MVP, process-control loop, Day14 invariant layer и Day15 controlled lifecycle реализованы. Этот документ больше не задаёт план работ с нуля; он фиксирует статус и помогает проверять регрессии при будущих изменениях.
 
 ## 1. Текущее Поведение Проекта
 
@@ -26,7 +26,9 @@
 - сообщает LLM текущий stage, роль этапа, allowed actions and forbidden actions перед task-scoped provider call;
 - поддерживает pause/resume задачи на любом рабочем этапе без повторного объяснения контекста;
 - имеет отдельный invariant layer, который хранится вне диалога, рендерится в prompt и блокирует конфликты через out-of-band LLM invariant validator;
-- имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13/14.
+- имеет Day 15 lifecycle gate, prompt improvement, planning swarm, microtask agents и trusted evidence для chat-driven task completion;
+- выводит user-facing chat как human transcript по умолчанию; `--json` остаётся machine/debug mode;
+- имеет deterministic tests и smoke/demo path, закрывающие Day 11/12/13/14, плюс manual chat-driven proof для Day 15.
 
 ## 2. Regression Acceptance Contract
 
@@ -256,22 +258,32 @@ internal/validation/
 internal/process/
   action_kind.go
   action_router.go
+  agent_runner.go
   audit_event.go
   audit_store.go
   controller.go
   execution_validator.go
+  lifecycle_gate.go
+  list_helpers.go
+  permission.go
+  planning_swarm.go
   planning_validator.go
+  prompt_build_input.go
+  prompt_improver.go
   validation_validator.go
   done_validator.go
-  permission.go
-  prompt_build_input.go
   response_parser.go
   retry_controller.go
   result.go
+  semantic_validator.go
+  severity.go
   stage_policy.go
   stage_policy_registry.go
   stage_prompt_factory.go
+  stage_schemas.go
+  text_matchers.go
   transition_gate.go
+  trusted_evidence_store.go
   validator_runner.go
 
 tests/
@@ -282,7 +294,7 @@ tests/
 Примечание по тестам:
 
 - unit tests можно размещать рядом с packages;
-- `tests/*` содержит end-to-end/acceptance-style tests for Day 11/12/13 and process control;
+- `tests/*` содержит end-to-end/acceptance-style tests for Day 11/12/13/14 and process control; Day 15 additionally has deterministic `scripts/manual-day15-user-flow.sh` and live manual proof in `docs/manual-testing-day15.md`;
 - fake provider должен позволять проверить behavior без live API key.
 
 ## 7. Runtime storage layout
@@ -540,6 +552,7 @@ Current command surface is implemented in `internal/cli/root.go`.
 ```text
 assistant init
 assistant chat
+assistant chat --once --input <text>
 assistant chat --once --input <text> --json
 assistant chat --once --render-prompt --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
@@ -571,7 +584,7 @@ P0 must be scriptable:
 - output should be deterministic enough for smoke tests;
 - stdout is primary data;
 - stderr is diagnostics/errors;
-- `--json` is required for acceptance smoke commands.
+- `--json` is required for automation/smoke inspection commands; primary demo and manual user flow use the human transcript without `--json`.
 
 ### 9.2. Slash commands in chat
 
@@ -636,8 +649,9 @@ Status on 2026-06-19:
 | Memory layers, classifier, proposal store, apply accept/reject/edit, audit | Implemented |
 | Prompt builder, untrusted context blocks, rendered prompt inspection | Implemented |
 | ProcessController, stage policies, validators, retry, TransitionGate, audit | Implemented |
-| Acceptance tests for Day 11/12/13 and process control | Implemented |
+| Acceptance tests for Day 11/12/13/14 and process control | Implemented |
 | Day 14 invariant storage, prompt rendering, input/output conflict refusal, CLI inspection | Implemented |
+| Day 15 lifecycle gate, prompt improver, planning swarm, microtask agents, trusted evidence, manual chat-driven proof | Implemented |
 
 The detailed phase list below is a historical regression checklist. Items phrased as "implement" / "реализовать" describe completed historical work unless a current gap is explicitly noted.
 
@@ -1222,7 +1236,8 @@ Done criteria:
 
 Done criteria:
 
-- `go test ./...` подтверждает Day 11/12/13;
+- `go test ./...` подтверждает Day 11/12/13/14 and process regression coverage; `scripts/manual-day15-user-flow.sh` подтверждает deterministic Day 15 regression;
+- live Day 15 proof uses OpenRouter model `google/gemini-3.1-flash-lite`, normal `assistant chat --once --input ...` output, no fake provider, no `--verify`, no `/task move|step|expect`, and no user-supplied exact test command;
 - no test requires live key by default;
 - optional live smoke documented in command output or plan.
 
@@ -1287,12 +1302,13 @@ Expected:
 ```text
 User: Спланируй модуль памяти. Требование: CLI должен поддерживать выбор модели OpenRouter. Я предпочитаю короткие ответы на русском.
 Assistant: <answer>
-Memory proposal:
-  [work] requirement: CLI должен поддерживать выбор модели OpenRouter.
-  [long] preference: Пользователь предпочитает короткие ответы на русском.
-  [short] context: В текущем диалоге планируем модуль памяти.
-  [ignore] smalltalk/noise if any
-/memory apply
+== Memory proposal ==
+- pmem_... [work] pending requirement: CLI должен поддерживать выбор модели OpenRouter.
+- pmem_... [long] pending preference: Пользователь предпочитает короткие ответы на русском.
+- pmem_... [short] pending context: В текущем диалоге планируем модуль памяти.
+- pmem_... [ignore] pending smalltalk/noise if any
+== Next ==
+- CLI: assistant memory apply --proposal proposal_... --accept all
 /memory short
 /memory work
 /memory long
@@ -1397,12 +1413,15 @@ Expected:
 - LLM transition signal does not mutate task state without `TransitionGate`;
 - memory classifier runs only after accepted assistant output, preserving Day 11 flow.
 
-### 13.6. Day 11/12/13 non-regression checks
+### 13.6. Day 11/12/13/14/15 non-regression checks
 
 - ProcessController must not replace `MemoryClassifier -> proposal -> user confirmation -> apply`.
 - Stage-specific prompts must not remove active profile from any prompt.
 - Stage policy must not add `status=done`; completion remains `stage=done` and `expected_action=none`.
 - Validation/review role must not block Day 13 pause/resume and restored context behavior.
+- Invariant validator must keep Day 14 conflict refusal before normal chat and before persistence.
+- Day 15 must remain chat-driven: manual `task move|step|expect`, storage edits and JSON edits cannot be acceptance proof.
+- `done` must require accepted validation plus criteria-matched trusted evidence when criteria mention tests/verification.
 
 ## 14. Implementation sequence with checkpoints
 
@@ -1438,13 +1457,13 @@ Do not implement in P0:
 - repository RAG;
 - vector DB;
 - web UI;
-- multi-agent workflow;
+- general-purpose multi-agent workflow beyond the Day 15 planning/execution/validation control loop;
 - automatic long-term memory writes without confirmation;
 - hidden local API key persistence;
 - commits/git automation;
 - full TUI with Bubble Tea.
 
-These non-goals prevent bypassing Day 11/12/13 by building unrelated functionality.
+These non-goals prevent bypassing Day 11/12/13/14/15 by building unrelated functionality.
 
 ## 16. Main risks and mitigations
 
@@ -1519,4 +1538,4 @@ Implementation is done only when all conditions hold:
 - saved memory affects next prompt/response;
 - secrets are blocked/redacted in manual save, proposal, memory, audit;
 - `.assistant/` is gitignored for demo/test opt-in;
-- no Day 11/12/13 criterion is replaced by a manual-only or future-only flow.
+- no Day 11/12/13/14/15 criterion is replaced by a manual-only or future-only flow.

@@ -67,6 +67,7 @@ func (m *Manager) Start(title string) (app.TaskState, error) {
 		Objective:          strings.TrimSpace(title),
 		AcceptanceCriteria: []string{},
 		Plan:               []string{},
+		Microtasks:         []app.MicrotaskState{},
 		CompletedSteps:     []string{},
 		Decisions:          []string{},
 		OpenQuestions:      []string{},
@@ -175,7 +176,15 @@ func (m *Manager) MoveWithPlanningOutput(summary string, criteria, plan, openQue
 	state.Objective = strings.TrimSpace(summary)
 	state.AcceptanceCriteria = trimNonEmpty(criteria)
 	state.Plan = trimNonEmpty(plan)
+	state.Microtasks = deriveMicrotasks(state.Plan, now)
 	state.OpenQuestions = trimNonEmpty(openQuestions)
+	state.ApprovedPlanID = app.NewID("plan")
+	state.PlanningApprovalID = app.NewID("approval")
+	state.PlanningApprovalStatus = "approved"
+	state.PlanningApprovalReason = "auto-approved planning output"
+	state.PlanningApprovalConfidence = 1
+	state.PlanningApprovalPlanID = state.ApprovedPlanID
+	state.PlanningApprovalAllowedTransition = "planning->execution"
 	state.Stage = next
 	state.ExpectedAction = defaultExpectedAction(next)
 	if len(state.Plan) > 0 {
@@ -245,6 +254,7 @@ func (m *Manager) SetPlanningOutput(summary string, criteria, plan, openQuestion
 		state.Objective = strings.TrimSpace(summary)
 		state.AcceptanceCriteria = trimNonEmpty(criteria)
 		state.Plan = trimNonEmpty(plan)
+		state.Microtasks = deriveMicrotasks(state.Plan, time.Now().UTC())
 		state.OpenQuestions = trimNonEmpty(openQuestions)
 		return nil
 	})
@@ -293,7 +303,17 @@ func (m *Manager) ApprovePendingPlanningProposal() (app.TaskState, error) {
 	state.Objective = pending.Summary
 	state.AcceptanceCriteria = append([]string(nil), pending.AcceptanceCriteria...)
 	state.Plan = append([]string(nil), pending.Plan...)
+	state.Microtasks = deriveMicrotasks(state.Plan, now)
 	state.OpenQuestions = append([]string(nil), pending.OpenQuestions...)
+	state.ApprovedPlanID = pending.ID
+	if strings.TrimSpace(state.PlanningApprovalID) == "" {
+		state.PlanningApprovalID = app.NewID("approval")
+		state.PlanningApprovalStatus = "approved"
+		state.PlanningApprovalReason = "pending planning approved"
+		state.PlanningApprovalConfidence = 1
+		state.PlanningApprovalPlanID = pending.ID
+		state.PlanningApprovalAllowedTransition = "planning->execution"
+	}
 	state.Stage = app.StageExecution
 	state.ExpectedAction = defaultExpectedAction(app.StageExecution)
 	if len(state.Plan) > 0 {
@@ -303,6 +323,89 @@ func (m *Manager) ApprovePendingPlanningProposal() (app.TaskState, error) {
 	state.UpdatedAt = now
 	state.HistoryLog = append(state.HistoryLog, fmt.Sprintf("%s: %s -> %s", now.Format(time.RFC3339), app.StagePlanning, app.StageExecution))
 	return state, m.saveBothIfUnchanged(state, &snapshot)
+}
+
+func (m *Manager) ApproveCurrentPlanning() (app.TaskState, error) {
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StagePlanning {
+			return app.NewError(app.CategoryValidation, "forbidden_transition", "current planning approval requires planning stage", nil)
+		}
+		if len(trimNonEmpty(state.Plan)) == 0 || len(trimNonEmpty(state.AcceptanceCriteria)) == 0 {
+			return app.NewError(app.CategoryValidation, "transition_precondition_failed", "planning is not ready for execution", nil)
+		}
+		state.Stage = app.StageExecution
+		state.ExpectedAction = defaultExpectedAction(app.StageExecution)
+		state.PendingPlanning = nil
+		state.ApprovedPlanID = app.NewID("plan")
+		state.Microtasks = deriveMicrotasks(state.Plan, time.Now().UTC())
+		if strings.TrimSpace(state.PlanningApprovalID) == "" {
+			state.PlanningApprovalID = app.NewID("approval")
+			state.PlanningApprovalStatus = "approved"
+			state.PlanningApprovalReason = "current planning approved"
+			state.PlanningApprovalConfidence = 1
+			state.PlanningApprovalPlanID = state.ApprovedPlanID
+			state.PlanningApprovalAllowedTransition = "planning->execution"
+		}
+		if len(state.Plan) > 0 {
+			state.CurrentStep = state.Plan[0]
+		}
+		return nil
+	})
+}
+
+func (m *Manager) RecordPlanningApproval(status, reason string, confidence float64, originalReply string) (app.TaskState, error) {
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StagePlanning {
+			return app.NewError(app.CategoryValidation, "invalid_stage", "planning approval requires planning stage", nil)
+		}
+		planID := state.ApprovedPlanID
+		if state.PendingPlanning != nil {
+			planID = state.PendingPlanning.ID
+		}
+		state.PlanningApprovalID = app.NewID("approval")
+		state.PlanningApprovalStatus = strings.TrimSpace(status)
+		state.PlanningApprovalReason = strings.TrimSpace(reason)
+		state.PlanningApprovalConfidence = confidence
+		state.PlanningApprovalOriginalReply = strings.TrimSpace(originalReply)
+		state.PlanningApprovalPlanID = planID
+		state.PlanningApprovalAllowedTransition = "planning->execution"
+		return nil
+	})
+}
+
+func (m *Manager) RecordAcceptedExecution(summary string, trustedEvidence []string) (app.TaskState, error) {
+	if validation.HasSecret(summary) || hasSecretIn(trustedEvidence) {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StageExecution {
+			return app.NewError(app.CategoryValidation, "invalid_stage", "accepted execution requires execution stage", nil)
+		}
+		state.LastAcceptedExecutionID = app.NewID("exec")
+		state.ValidationStatus = ""
+		state.ValidationEvidence = trimNonEmpty(trustedEvidence)
+		markCurrentMicrotask(state, "accepted_execution", summary, trustedEvidence)
+		if strings.TrimSpace(summary) != "" {
+			state.Decisions = append(state.Decisions, "accepted_execution: "+strings.TrimSpace(summary))
+		}
+		return nil
+	})
+}
+
+func (m *Manager) RecordAcceptedValidation(status string, trustedEvidence []string) (app.TaskState, error) {
+	if hasSecretIn(trustedEvidence) {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
+	}
+	return m.mutateActive(func(state *app.TaskState) error {
+		if state.Stage != app.StageValidation && state.Stage != app.StageExecution {
+			return app.NewError(app.CategoryValidation, "invalid_stage", "accepted validation requires execution or validation stage", nil)
+		}
+		state.LastValidationID = app.NewID("validation")
+		state.ValidationStatus = strings.TrimSpace(status)
+		state.ValidationEvidence = trimNonEmpty(trustedEvidence)
+		markCurrentMicrotask(state, "accepted_validation", status, trustedEvidence)
+		return nil
+	})
 }
 
 func (m *Manager) RejectPendingPlanningProposal() (app.TaskState, error) {
@@ -353,6 +456,42 @@ func containsString(items []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func deriveMicrotasks(plan []string, now time.Time) []app.MicrotaskState {
+	items := trimNonEmpty(plan)
+	out := make([]app.MicrotaskState, 0, len(items))
+	for _, item := range items {
+		out = append(out, app.MicrotaskState{
+			ID:        app.NewID("microtask"),
+			PlanItem:  item,
+			Status:    "pending",
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+	return out
+}
+
+func markCurrentMicrotask(state *app.TaskState, status, summary string, evidence []string) {
+	if state == nil || len(state.Microtasks) == 0 {
+		return
+	}
+	current := strings.TrimSpace(state.CurrentStep)
+	idx := -1
+	for i := range state.Microtasks {
+		if strings.TrimSpace(state.Microtasks[i].PlanItem) == current {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	state.Microtasks[idx].Status = status
+	state.Microtasks[idx].ResultSummary = strings.TrimSpace(summary)
+	state.Microtasks[idx].EvidenceRefs = trimNonEmpty(evidence)
+	state.Microtasks[idx].UpdatedAt = time.Now().UTC()
 }
 
 func hasSecretIn(items []string) bool {
@@ -453,6 +592,9 @@ func (m *Manager) saveBoth(state app.TaskState) error {
 }
 
 func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnapshot) error {
+	if err := ValidateState(state); err != nil {
+		return err
+	}
 	currentPath, err := m.currentPath()
 	if err != nil {
 		return err

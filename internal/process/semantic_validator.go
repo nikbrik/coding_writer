@@ -48,6 +48,25 @@ type SemanticIntentResult struct {
 	Reason           string
 }
 
+type PlanningApprovalInput struct {
+	SessionID string
+	UserInput string
+	Task      *app.TaskState
+}
+
+type PlanningApprovalResult struct {
+	Verdict    string
+	Confidence float64
+	Reason     string
+}
+
+type PromptEquivalenceInput struct {
+	SessionID string
+	Original  string
+	Improved  string
+	Task      *app.TaskState
+}
+
 type InvariantValidationInput struct {
 	SessionID  string
 	Direction  string
@@ -159,6 +178,70 @@ func (v *SemanticValidator) ValidateResponse(ctx context.Context, input Semantic
 	default:
 		return nil, app.NewError(app.CategoryValidation, "semantic_validator_invalid", "semantic validator returned invalid verdict", nil)
 	}
+}
+
+func (v *SemanticValidator) ValidatePlanningApproval(ctx context.Context, input PlanningApprovalInput) (PlanningApprovalResult, error) {
+	if v == nil || v.Provider == nil {
+		return PlanningApprovalResult{}, app.NewError(app.CategoryInternal, "missing_semantic_validator", "semantic validator is required", nil)
+	}
+	payload, err := semanticJSON(map[string]any{
+		"session_id": input.SessionID,
+		"user_input": input.UserInput,
+		"task":       input.Task,
+	})
+	if err != nil {
+		return PlanningApprovalResult{}, err
+	}
+	var parsed struct {
+		Verdict    string  `json:"verdict"`
+		Confidence float64 `json:"confidence"`
+		Reason     string  `json:"reason"`
+	}
+	if err := v.completeDecoded(ctx, planningApprovalSystemPrompt(), payload, &parsed); err != nil {
+		return PlanningApprovalResult{}, err
+	}
+	switch parsed.Verdict {
+	case "approved", "rejected", "ambiguous":
+	default:
+		return PlanningApprovalResult{}, app.NewError(app.CategoryValidation, "planning_approval_invalid", "planning approval validator returned invalid verdict", nil)
+	}
+	if parsed.Confidence < 0 {
+		parsed.Confidence = 0
+	}
+	if parsed.Confidence > 1 {
+		parsed.Confidence = 1
+	}
+	return PlanningApprovalResult{Verdict: parsed.Verdict, Confidence: parsed.Confidence, Reason: strings.TrimSpace(parsed.Reason)}, nil
+}
+
+func (v *SemanticValidator) ValidatePromptImprovement(ctx context.Context, input PromptEquivalenceInput) error {
+	if v == nil || v.Provider == nil {
+		return app.NewError(app.CategoryInternal, "missing_semantic_validator", "semantic validator is required", nil)
+	}
+	payload, err := semanticJSON(map[string]any{
+		"session_id": input.SessionID,
+		"original":   input.Original,
+		"improved":   input.Improved,
+		"task":       input.Task,
+	})
+	if err != nil {
+		return err
+	}
+	var parsed struct {
+		Verdict string `json:"verdict"`
+		Reason  string `json:"reason"`
+	}
+	if err := v.completeDecoded(ctx, promptEquivalenceSystemPrompt(), payload, &parsed); err != nil {
+		return err
+	}
+	if parsed.Verdict != "pass" {
+		reason := strings.TrimSpace(parsed.Reason)
+		if reason == "" {
+			reason = "prompt improvement changed user intent"
+		}
+		return app.NewError(app.CategoryValidation, "prompt_improvement_failed", reason, nil)
+	}
+	return nil
 }
 
 func (v *SemanticValidator) ValidateInvariants(ctx context.Context, input InvariantValidationInput) ([]app.InvariantViolation, error) {
@@ -319,6 +402,29 @@ func decodeSemanticJSONObject(raw string, out any) error {
 	return nil
 }
 
+func decodeSemanticJSONLoose(raw string, out any) error {
+	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
+	if err := decodeSemanticJSONObjectLoose(cleaned, out); err == nil {
+		return nil
+	}
+	extracted := extractFirstJSONObject(cleaned)
+	if extracted == "" || extracted == cleaned {
+		return decodeSemanticJSONObjectLoose(cleaned, out)
+	}
+	return decodeSemanticJSONObjectLoose(extracted, out)
+}
+
+func decodeSemanticJSONObjectLoose(raw string, out any) error {
+	dec := json.NewDecoder(bytes.NewReader([]byte(strings.TrimSpace(raw))))
+	if err := dec.Decode(out); err != nil {
+		return app.NewError(app.CategoryValidation, "semantic_validator_invalid_json", "semantic validator returned invalid JSON: "+err.Error(), err)
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		return app.NewError(app.CategoryValidation, "semantic_validator_invalid_json", "semantic validator returned trailing JSON data", err)
+	}
+	return nil
+}
+
 func extractFirstJSONObject(raw string) string {
 	start := strings.Index(raw, "{")
 	if start < 0 {
@@ -363,6 +469,21 @@ func semanticIntentSystemPrompt() string {
 Return strict JSON only: {"action_kind":"answer_question|plan_task|ask_clarification|execute_plan_step|summarize_execution|review_output|verify_criteria|summarize_done|propose_transition","transition_signal":"none|approve_planning|reject_planning|ready_for_validation|ready_for_done","confidence":0.0,"reason":"..."}.
 Classify the user's intent from meaning, not exact words. Prefer the deterministic action only when it is consistent with the user's intent and current stage. Never invent task state.
 If the user is negating, delaying, questioning, correcting, or making a conditional/ambiguous statement about a transition, do not approve or advance the workflow. Examples of meaning, not a closed phrase list: "not yet", "do not proceed", "not ready for validation", "не продолжай", "пока нет". For planning rejection use transition_signal="reject_planning"; for other stages use transition_signal="none" and a read-only or clarifying action.`
+}
+
+func planningApprovalSystemPrompt() string {
+	return `You are the planning approval referee for a controlled lifecycle coding assistant.
+Return strict JSON only: {"verdict":"approved|rejected|ambiguous","confidence":0.0,"reason":"..."}.
+Approve only when the user's current reply clearly authorizes starting execution of the pending/current plan.
+Reject when the user declines, changes requirements, asks a question, or requests plan changes.
+Use ambiguous when consent is unclear. Never infer approval from silence or unrelated text.`
+}
+
+func promptEquivalenceSystemPrompt() string {
+	return `You are an independent prompt-improvement equivalence referee.
+Return strict JSON only: {"verdict":"pass|fail","reason":"..."}.
+Pass only if the improved prompt preserves the original user's meaning and does not add requirements, files, tools, permissions, lifecycle transitions, policy changes, or completion claims.
+Fail if the rewrite changes scope, asks for stronger/weaker work, or introduces operational directives absent from the original.`
 }
 
 func semanticValidationSystemPrompt() string {

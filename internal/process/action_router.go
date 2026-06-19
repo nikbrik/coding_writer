@@ -7,13 +7,13 @@ import (
 	"github.com/nikbrik/coding_writer/internal/app"
 )
 
-var explicitTransitionNegationPattern = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(do\s+not\s+(proceed|continue|move)|don['’]t\s+(proceed|continue|move)|not\s+yet|not\s+ready|no\s+transition|не\s+(продолжай|переходи|запускай|реализуй|выполняй|готово?)|пока\s+нет|ещ[её]\s+не)([^\p{L}\p{N}_]|$)`)
+var explicitTransitionNegationPattern = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(do\s+not\s+(proceed|continue|move|finish|complete)|don['’]t\s+(proceed|continue|move|finish|complete)|not\s+yet|not\s+ready|no\s+transition|не\s+(продолжай|переходи|запускай|реализуй|выполняй|готово?|завершай|закрывай)|пока\s+нет|ещ[её]\s+не)([^\p{L}\p{N}_]|$)`)
 
 // ResolveActionKind maps user input and current stage to a deterministic ActionKind.
 func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.ExpectedAction) ActionKind {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if stage == "" {
-		if isPlanningIntent(normalized) {
+		if isNewTaskPlanningIntent(normalized) {
 			return ActionPlanTask
 		}
 		return ActionAnswerQuestion
@@ -26,7 +26,7 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 
 	switch stage {
 	case app.StagePlanning:
-		if isPlanningIntent(normalized) {
+		if isNewTaskPlanningIntent(normalized) {
 			return ActionPlanTask
 		}
 		if looksLikeClarification(normalized) {
@@ -96,11 +96,35 @@ func isPlanningIntent(normalized string) bool {
 	return strings.HasPrefix(normalized, "plan ") || normalized == "plan"
 }
 
+func isNewTaskPlanningIntent(normalized string) bool {
+	if isPlanningIntent(normalized) {
+		return true
+	}
+	if strings.HasPrefix(normalized, "нужно ли") || strings.HasPrefix(normalized, "надо ли") {
+		return false
+	}
+	if startsWithAny(normalized, []string{"нужно ", "надо ", "необходимо ", "требуется ", "хочу ", "сделай ", "реализуй ", "проверь ", "please ", "need to ", "we need to "}) &&
+		containsAny(normalized, []string{"провер", "реализ", "сдел", "исправ", "добав", "обнов", "go пакет", "package", "verify", "implement", "fix", "add", "update"}) {
+		return true
+	}
+	return false
+}
+
+func startsWithAny(text string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func looksLikeClarification(normalized string) bool {
 	return containsAny(normalized, []string{"?", "что", "как", "почему", "какой", "какие", "объясни", "расскажи", "what", "how", "why", "which", "explain"})
 }
 
 func isReadyForExecutionReviewIntent(normalized string) bool {
+	normalized = strings.ToLower(strings.TrimSpace(normalized))
 	if hasExplicitTransitionNegation(normalized) {
 		return false
 	}

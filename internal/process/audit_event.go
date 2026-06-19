@@ -23,6 +23,11 @@ type ProcessAuditEvent struct {
 	TransitionFrom   string        `json:"transition_from,omitempty"`
 	TransitionTo     string        `json:"transition_to,omitempty"`
 	TransitionReason string        `json:"transition_reason,omitempty"`
+	TransitionSource string        `json:"transition_source,omitempty"`
+	TransitionSignal string        `json:"transition_signal,omitempty"`
+	AgentRole        string        `json:"agent_role,omitempty"`
+	MicrotaskID      string        `json:"microtask_id,omitempty"`
+	EvidenceRefs     []string      `json:"evidence_refs,omitempty"`
 	Model            string        `json:"model,omitempty"`
 	CreatedAt        time.Time     `json:"created_at"`
 }

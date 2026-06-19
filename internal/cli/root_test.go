@@ -27,6 +27,9 @@ func moveRuntimeTaskToDone(t *testing.T, rt *runtime) app.TaskState {
 	if _, err := rt.Tasks.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := rt.Tasks.RecordAcceptedValidation("ready_for_done", nil); err != nil {
+		t.Fatal(err)
+	}
 	state, err := rt.Tasks.Move(app.StageDone)
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +74,149 @@ func TestChatOnceJSONDoesNotExposeRawPromptByDefault(t *testing.T) {
 	}
 	if parsed["rendered_prompt_id"] == nil || parsed["rendered_prompt"] != nil || parsed["messages"] != nil {
 		t.Fatalf("raw prompt leaked in default JSON: %s", out.String())
+	}
+}
+
+func TestChatOnceHumanOutputIsNotJSON(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "chat", "--once", "--input", "Объясни memory layers"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute failed: %v output=%s", err, out.String())
+	}
+	if json.Valid(out.Bytes()) {
+		t.Fatalf("human output must not be raw JSON: %s", out.String())
+	}
+	text := out.String()
+	if !strings.Contains(text, "== Assistant ==") {
+		t.Fatalf("missing readable assistant section: %s", text)
+	}
+	if strings.ContainsRune(text, rune(0x1b)) {
+		t.Fatalf("non-TTY test output must not contain ANSI escapes: %q", text)
+	}
+}
+
+func TestChatHumanRendererFormatsStageJSON(t *testing.T) {
+	state := app.TaskState{
+		ID:                 "task_demo",
+		Stage:              app.StageValidation,
+		ExpectedAction:     app.ExpectedUserInput,
+		Status:             app.TaskStatusActive,
+		CurrentStep:        "проверить критерии",
+		ValidationEvidence: []string{"app:evidence:v2:demo"},
+	}
+	result := chatResult{
+		OK:     true,
+		Answer: `{"stage":"planning","summary":"Проверить пакет.","assumptions":["пакет уже существует"],"acceptance_criteria":["go test ./pkg passes"],"plan":["Запустить проверку"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`,
+		Transition: &process.TransitionResult{
+			Moved: true,
+			From:  app.StagePlanning,
+			To:    app.StageValidation,
+			State: state,
+		},
+		Warnings: []string{"auto verification: go test ./pkg", "memory proposal skipped: invalid_json"},
+		Task:     &state,
+	}
+	text := textChatResult(result)
+	for _, want := range []string{"== Assistant ==", "Acceptance criteria:", "1. go test ./pkg passes", "== Task ==", "== Transition ==", "== Evidence ==", "auto verification: go test ./pkg", "== Warnings =="} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `"stage"`) || strings.Contains(text, `"acceptance_criteria"`) {
+		t.Fatalf("human renderer leaked raw schema JSON:\n%s", text)
+	}
+}
+
+func TestChatHumanRendererColorModeHighlightsSectionsAndLabels(t *testing.T) {
+	state := app.TaskState{
+		ID:             "task_demo",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedUserInput,
+		Status:         app.TaskStatusActive,
+		CurrentStep:    "run tests",
+	}
+	text := renderChatResult(chatResult{
+		OK:       true,
+		Answer:   `{"stage":"execution","summary":"ready","deliverable":"checked","current_step":"run tests","completed_steps":[],"next_step":"review","changed_artifacts":[],"verification":["go test"],"blockers":[],"next_signal":"ready_for_validation"}`,
+		Task:     &state,
+		Warnings: []string{"auto verification: go test ./pkg"},
+	}, chatRenderOptions{Color: true})
+	for _, want := range []string{
+		"\x1b[1;36m== Assistant ==\x1b[0m",
+		"\x1b[1mSummary\x1b[0m",
+		"\x1b[1;36m== Task ==\x1b[0m",
+		"\x1b[1mstage\x1b[0m",
+		"\x1b[1;36m== Evidence ==\x1b[0m",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("color renderer missing %q in:\n%q", want, text)
+		}
+	}
+}
+
+func TestChatHumanRendererFormatsMultipleStageJSONDocuments(t *testing.T) {
+	result := chatResult{
+		OK: true,
+		Answer: `{"stage":"execution","summary":"step one","deliverable":"first","current_step":"one","completed_steps":[],"next_step":"two","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}
+
+{"stage":"execution","summary":"step two","deliverable":"second","current_step":"two","completed_steps":["one"],"next_step":"verify","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`,
+	}
+	text := textChatResult(result)
+	for _, want := range []string{"Stage output 1:", "Summary: step one", "Stage output 2:", "Summary: step two", "Deliverable:"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, `"stage"`) || strings.Contains(text, `"next_signal"`) {
+		t.Fatalf("human renderer leaked raw multi-json schema:\n%s", text)
+	}
+}
+
+func TestAutoVerificationSpecializesGoPackagePath(t *testing.T) {
+	task := app.TaskState{
+		ID:        "task_verify",
+		Stage:     app.StageExecution,
+		Status:    app.TaskStatusActive,
+		Objective: "Verify Go package manual_scratch/day14_stock_profit with standard tests.",
+		Plan: []string{
+			"Execute 'go test ./...' to run existing unit tests.",
+		},
+	}
+	got := firstTrustedVerificationCommand(task)
+	if got != "go test ./manual_scratch/day14_stock_profit" {
+		t.Fatalf("want package-specific go test, got %q", got)
+	}
+}
+
+func TestAutoVerificationRequiresSemanticIntent(t *testing.T) {
+	task := app.TaskState{
+		ID:             "task_verify",
+		Stage:          app.StageExecution,
+		Status:         app.TaskStatusActive,
+		ExpectedAction: app.ExpectedUserInput,
+		Plan:           []string{"Run `go test ./manual_scratch/day14_stock_profit`."},
+	}
+	fake := providers.NewFakeProvider()
+	validator := process.NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponse = `{"action_kind":"answer_question","transition_signal":"none","confidence":0.93,"reason":"user is asking a question, not requesting validation"}`
+	got, err := autoTrustedVerificationCommand(context.Background(), "session_semantic_auto_verify", "Готово к проверке?", task, false, validator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("semantic validator returned no transition signal; auto verification must not run, got %q", got)
+	}
+
+	got, err = autoTrustedVerificationCommand(context.Background(), "session_fallback_auto_verify", "Готово к проверке?", task, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("auto verification must not use keyword fallback when semantic validator is unavailable, got %q", got)
 	}
 }
 
@@ -123,6 +269,8 @@ func TestCLIP0DayFlowsUseScriptableCommands(t *testing.T) {
 	}
 
 	runJSON("task", "step", "реализовать MemoryManager")
+	runJSON("task", "plan", "реализовать MemoryManager")
+	runJSON("task", "criteria", "state persists")
 	runJSON("task", "expect", "llm_response")
 	runJSON("task", "move", "execution")
 	runJSON("task", "pause")
@@ -134,6 +282,7 @@ func TestCLIP0DayFlowsUseScriptableCommands(t *testing.T) {
 
 func TestCLIDay13AgentDrivenFSM(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "1")
 	storageDir := t.TempDir()
 	runJSON := func(args ...string) map[string]any {
 		t.Helper()
@@ -152,19 +301,26 @@ func TestCLIDay13AgentDrivenFSM(t *testing.T) {
 		return parsed
 	}
 
-	plan := runJSON("chat", "--once", "--input", "Спланируй задачу: реализовать MemoryManager")
+	plan := runJSON("chat", "--once", "--input", "Спланируй пользовательскую задачу: проверить команду go version. Цель: убедиться, что go version проходит. Предложи план проверки и критерии готовности.")
 	if transition, _ := plan["transition"].(map[string]any); transition["To"] != "planning" {
 		t.Fatalf("planning intent did not auto-start task: %+v", plan)
 	}
-	approve := runJSON("chat", "--once", "--input", "Продолжай задачу")
+	approve := runJSON("chat", "--once", "--input", "Да, план принят. Приступай к выполнению первого шага.")
 	if transition, _ := approve["transition"].(map[string]any); transition["To"] != "execution" {
 		t.Fatalf("approval did not auto-enter execution: %+v", approve)
 	}
-	ready := runJSON("chat", "--once", "--input", "Готово к проверке")
+	ready := runJSON("chat", "--once", "--input", "Готово к проверке: прошу перейти к validation на основании trusted evidence.")
 	if transition, _ := ready["transition"].(map[string]any); transition["To"] != "validation" {
 		t.Fatalf("execution did not auto-enter validation: %+v", ready)
 	}
-	done := runJSON("chat", "--once", "--verify", "go version", "--input", "Проверь и заверши")
+	if warnings, _ := ready["warnings"].([]any); len(warnings) == 0 || !strings.Contains(fmt.Sprint(warnings), "auto verification") {
+		t.Fatalf("ready step did not auto-run verification: %+v", ready)
+	}
+	review := runJSON("chat", "--once", "--input", "Проверь критерии по evidence, но пока не завершай задачу; дай validation review.")
+	if _, ok := review["transition"]; ok {
+		t.Fatalf("validation review should not finish task: %+v", review)
+	}
+	done := runJSON("chat", "--once", "--input", "Проверь критерии и заверши задачу, если evidence подтверждает go test.")
 	if transition, _ := done["transition"].(map[string]any); transition["To"] != "done" {
 		t.Fatalf("trusted validation did not auto-finish task: %+v", done)
 	}
@@ -179,21 +335,38 @@ func TestChatVerifyRequiresOnce(t *testing.T) {
 }
 
 func TestTrustedVerificationPolicy(t *testing.T) {
-	evidence, err := runTrustedVerification(context.Background(), "go version", false)
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := rt.Tasks.Start("verify task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionID := "session_verify_policy"
+	evidence, err := runTrustedVerification(context.Background(), storageDir, task.ID, sessionID, "go version", false)
 	if err != nil {
 		t.Fatalf("go version should be trusted verification: %v", err)
 	}
-	if len(evidence) != 1 || !strings.Contains(evidence[0], "source=go version") {
+	if len(evidence) != 1 || !strings.HasPrefix(evidence[0], "app:evidence:v2:") {
 		t.Fatalf("bad trusted evidence: %+v", evidence)
 	}
+	records, err := process.NewTrustedEvidenceStore(storageDir).Validate(task.ID, sessionID, evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].Source != "go version" {
+		t.Fatalf("bad trusted evidence record: %+v", records)
+	}
 
-	if _, err := runTrustedVerification(context.Background(), "go version; printenv OPENROUTER_API_KEY", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
+	if _, err := runTrustedVerification(context.Background(), storageDir, task.ID, sessionID, "go version; printenv OPENROUTER_API_KEY", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
 		t.Fatalf("want unsafe_verification_command for shell syntax, got %v", err)
 	}
-	if _, err := runTrustedVerification(context.Background(), "sh -c 'go version'", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
+	if _, err := runTrustedVerification(context.Background(), storageDir, task.ID, sessionID, "sh -c 'go version'", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
 		t.Fatalf("want unsafe_verification_command for shell executable, got %v", err)
 	}
-	if _, err := runTrustedVerification(context.Background(), "go test ./definitely_missing_package", false); err == nil || app.AsError(err).Code != "verification_failed" {
+	if _, err := runTrustedVerification(context.Background(), storageDir, task.ID, sessionID, "go test ./definitely_missing_package", false); err == nil || app.AsError(err).Code != "verification_failed" {
 		t.Fatalf("want verification_failed for non-zero command, got %v", err)
 	}
 }
@@ -385,6 +558,8 @@ func TestPausedTaskAllowsSafeQuestionAndBlocksMutations(t *testing.T) {
 	args := [][]string{
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "start", "CLI assistant MVP"},
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "step", "реализовать MemoryManager"},
+		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "plan", "реализовать MemoryManager"},
+		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "criteria", "state persists"},
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "expect", "llm_response"},
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "move", "execution"},
 		{"--storage-dir", storageDir, "--model", "fake/model", "--json", "task", "pause"},
@@ -583,7 +758,7 @@ func TestSecretInputHardGateBeforeProviderValidation(t *testing.T) {
 	}
 }
 
-func TestTopLevelTaskPlanCriteriaCommandsAreNotP0(t *testing.T) {
+func TestTopLevelTaskPlanCriteriaCommandsPersistState(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()
 	cmd := newRootCommand(&globalOptions{})
@@ -597,8 +772,8 @@ func TestTopLevelTaskPlanCriteriaCommandsAreNotP0(t *testing.T) {
 	} {
 		cmd := newRootCommand(&globalOptions{})
 		cmd.SetArgs(arg)
-		if err := cmd.Execute(); err == nil {
-			t.Fatalf("P1 top-level command should be absent: %v", arg)
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("top-level task plan/criteria command failed: %v err=%v", arg, err)
 		}
 	}
 }
@@ -613,7 +788,7 @@ func TestChatTextShowsProposalRecords(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Memory proposal:") || !strings.Contains(out.String(), "[work] pending") || !strings.Contains(out.String(), "Next: assistant memory apply") {
+	if !strings.Contains(out.String(), "== Memory proposal ==") || !strings.Contains(out.String(), "[work] pending") || !strings.Contains(out.String(), "== Next ==") || !strings.Contains(out.String(), "assistant memory apply --proposal") {
 		t.Fatalf("proposal records not visible: %s", out.String())
 	}
 	matches, err := filepath.Glob(filepath.Join(storageDir, "sessions", "*", "prompts.jsonl"))
@@ -682,7 +857,7 @@ func TestRunChatExchangeRejectsRawTrustedEvidence(t *testing.T) {
 	}
 	pc := rt.attachProviderToProcess()
 	_, err = pc.RunExchange(context.Background(), process.ExchangeInput{SessionID: "session_validation_done", Input: "проверь", TrustedEvidence: []string{"go test ./... passed"}, RequireMemoryProposal: true})
-	if err == nil || app.AsError(err).Code != "validation_failed" {
+	if err == nil || app.AsError(err).Code != "transition_precondition_failed" {
 		t.Fatalf("raw trusted evidence should not pass validation: %v", err)
 	}
 
@@ -691,11 +866,11 @@ func TestRunChatExchangeRejectsRawTrustedEvidence(t *testing.T) {
 	rt.Provider = fake
 	pc = rt.attachProviderToProcess()
 	result, err := pc.RunExchange(context.Background(), process.ExchangeInput{SessionID: "session_validation_done_2", Input: "проверь", TrustedEvidence: []string{process.NewTrustedEvidence("go test ./...", 0, "ok")}, RequireMemoryProposal: true})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatalf("forgeable structured trusted evidence should not finish task: %+v", result)
 	}
-	if result.Transition == nil || result.Transition.To != app.StageDone {
-		t.Fatalf("structured trusted evidence was not passed to transition gate: %+v", result.Transition)
+	if app.AsError(err).Code != "validation_failed" && app.AsError(err).Code != "transition_precondition_failed" {
+		t.Fatalf("want trusted evidence rejection, got %v", err)
 	}
 }
 

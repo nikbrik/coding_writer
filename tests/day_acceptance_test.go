@@ -177,20 +177,44 @@ func TestDay13PauseResumeAfterRestartUsesWorkingMemory(t *testing.T) {
 		t.Fatalf("fake provider did not see resumed execution: %s", res.Message.Content)
 	}
 	ctrl.Tasks = restartedTasks
-	ready, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_ready", Input: "Готово к проверке"})
+	resumed, err = ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readyEvidence, err := issueAcceptanceEvidence(rt, resumed, "session_day13_ready", "go version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_ready", Input: "Готово к проверке", TrustedEvidence: readyEvidence})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ready.Transition == nil || ready.Transition.To != app.StageValidation {
 		t.Fatalf("agent flow did not enter validation: %+v", ready.Transition)
 	}
-	done, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_done", Input: "Проверь и заверши", TrustedEvidence: []string{process.NewTrustedEvidence("go version", 0, "go version test")}})
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneEvidence, err := issueAcceptanceEvidence(rt, current, "session_day13_done", "go version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "session_day13_done", Input: "Проверь и заверши", TrustedEvidence: doneEvidence})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if done.Transition == nil || done.Transition.To != app.StageDone {
 		t.Fatalf("agent flow did not finish with trusted evidence: %+v", done.Transition)
 	}
+}
+
+func issueAcceptanceEvidence(rt acceptanceRuntime, state app.TaskState, sessionID, source string) ([]string, error) {
+	token, _, err := process.NewTrustedEvidenceStore(rt.dir).Issue(state.ID, sessionID, source, 0, "ok")
+	if err != nil {
+		return nil, err
+	}
+	return []string{token}, nil
 }
 
 type acceptanceRuntime struct {

@@ -162,8 +162,38 @@ func defaultChatAnswer(prompt string) string {
 
 func defaultStructuredChatAnswer(prompt string) string {
 	lower := strings.ToLower(prompt)
+	if strings.Contains(lower, "agent role: requirements_specialist") {
+		return `{"role":"requirements_specialist","summary":"requirements reviewed","findings":[],"proposed_plan":["clarify scope","implement change"],"proposed_acceptance_criteria":["criteria captured"]}`
+	}
+	if strings.Contains(lower, "agent role: code_research_specialist") {
+		return `{"role":"code_research_specialist","summary":"code surface reviewed","findings":[],"proposed_plan":["inspect current modules","integrate changes"],"proposed_acceptance_criteria":["code path identified"]}`
+	}
+	if strings.Contains(lower, "agent role: architecture_specialist") {
+		return `{"role":"architecture_specialist","summary":"architecture reviewed","findings":[],"proposed_plan":["preserve current architecture"],"proposed_acceptance_criteria":["no layering regressions"]}`
+	}
+	if strings.Contains(lower, "agent role: test_validation_specialist") {
+		return `{"role":"test_validation_specialist","summary":"tests reviewed","findings":[],"proposed_plan":["add tests"],"proposed_acceptance_criteria":["go test ./... passes"]}`
+	}
+	if strings.Contains(lower, "agent role: risk_regression_specialist") {
+		return `{"role":"risk_regression_specialist","summary":"risks reviewed","findings":[],"proposed_plan":["verify days 11-14"],"proposed_acceptance_criteria":["no regressions"]}`
+	}
+	if strings.Contains(lower, "agent role: planning_orchestrator") {
+		if strings.Contains(lower, "manual_scratch/day14_stock_profit") {
+			return `{"stage":"planning","summary":"verify manual_scratch/day14_stock_profit with go test","assumptions":[],"acceptance_criteria":["go test ./manual_scratch/day14_stock_profit passes"],"plan":["inspect the existing package goal","run go test ./manual_scratch/day14_stock_profit as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
+		if strings.Contains(lower, "go version") {
+			return `{"stage":"planning","summary":"verify go version with trusted evidence","assumptions":[],"acceptance_criteria":["go version passes"],"plan":["run go version as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
+		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	}
 	switch {
 	case strings.Contains(lower, "current stage: planning"):
+		if strings.Contains(lower, "manual_scratch/day14_stock_profit") {
+			return `{"stage":"planning","summary":"verify manual_scratch/day14_stock_profit with go test","assumptions":[],"acceptance_criteria":["go test ./manual_scratch/day14_stock_profit passes"],"plan":["inspect the existing package goal","run go test ./manual_scratch/day14_stock_profit as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
+		if strings.Contains(lower, "go version") {
+			return `{"stage":"planning","summary":"verify go version with trusted evidence","assumptions":[],"acceptance_criteria":["go version passes"],"plan":["run go version as trusted verification","review evidence and finish only if checks pass"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+		}
 		if strings.Contains(lower, "реализовать memorymanager") || strings.Contains(lower, "memorymanager") {
 			return `{"stage":"planning","summary":"реализовать MemoryManager","assumptions":[],"acceptance_criteria":["task state persists across restart"],"plan":["реализовать MemoryManager"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
 		}
@@ -174,7 +204,7 @@ func defaultStructuredChatAnswer(prompt string) string {
 		}
 		return `{"stage":"execution","summary":"fake execution response","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
 	case strings.Contains(lower, "current stage: validation"):
-		if strings.Contains(lower, "проверь и заверши") || strings.Contains(lower, "verify and finish") {
+		if strings.Contains(lower, "проверь и заверши") || strings.Contains(lower, "проверь критерии и заверши") || strings.Contains(lower, "заверши") || strings.Contains(lower, "verify and finish") {
 			return `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
 		}
 		return `{"stage":"validation","findings":[],"passed_checks":[],"missing_evidence":["no tool evidence provided"],"residual_risks":[],"verdict":"blocked_missing_evidence"}`
@@ -194,12 +224,21 @@ func defaultClassifierJSON(prompt string) string {
 
 func defaultValidatorJSON(prompt string) string {
 	lower := strings.ToLower(prompt)
+	if strings.Contains(lower, "you improve user prompts for an internal orchestrator") {
+		return `{"improved_prompt":"` + escapeJSON(promptImproverOriginalFromPrompt(prompt)) + `","preserved_intent":true,"added_requirements":[],"removed_requirements":[],"clarifications":[],"rationale":"fake prompt improvement"}`
+	}
+	if strings.Contains(lower, "planning approval referee") {
+		return `{"verdict":"approved","confidence":0.9,"reason":"fake approval"}`
+	}
+	if strings.Contains(lower, "prompt-improvement equivalence referee") {
+		return `{"verdict":"pass","reason":"fake equivalent"}`
+	}
 	if strings.Contains(lower, "out-of-band invariant policy referee") {
 		text := strings.ToLower(invariantTextFromPrompt(prompt))
 		if (strings.Contains(text, "brute force") || strings.Contains(text, "o(n^2)")) && strings.Contains(prompt, "algorithm.no_bruteforce") {
 			return `{"violations":[{"invariant_id":"algorithm.no_bruteforce","severity":"block","problem":"text asks for brute-force stock-profit behavior forbidden by the algorithm invariant","evidence":"semantic conflict"}]}`
 		}
-		if strings.Contains(text, "python") || strings.Contains(text, "node") || strings.Contains(text, "rust") || strings.Contains(text, "brute force") || strings.Contains(text, "o(n^2)") {
+		if containsStackForbiddenTerm(text) || strings.Contains(text, "brute force") || strings.Contains(text, "o(n^2)") {
 			return `{"violations":[{"invariant_id":"stack.go","severity":"block","problem":"text asks for behavior that conflicts with the Go MVP stack invariant","evidence":"semantic conflict"}]}`
 		}
 		return `{"violations":[]}`
@@ -214,15 +253,74 @@ func defaultValidatorJSON(prompt string) string {
 		}
 		userInput := strings.ToLower(semanticUserInputFromPrompt(prompt))
 		signal := "none"
-		if strings.Contains(userInput, "ready for validation") || strings.Contains(userInput, "ready to validate") || strings.Contains(userInput, "готово к проверке") || strings.Contains(userInput, "work is complete") || strings.Contains(userInput, "please review it now") {
-			signal = "ready_for_validation"
-		}
-		if strings.Contains(userInput, "verify and finish") || strings.Contains(userInput, "verify and complete") || strings.Contains(userInput, "проверь и заверши") {
-			signal = "ready_for_done"
+		if fakeIntentNegatesTransition(userInput) {
+			signal = "none"
+			if fakeValidationReviewIntent(userInput) {
+				action = "review_output"
+			}
+		} else {
+			if strings.Contains(userInput, "ready for validation") || strings.Contains(userInput, "ready to validate") || strings.Contains(userInput, "готово к проверке") || strings.Contains(userInput, "work is complete") || strings.Contains(userInput, "please review it now") {
+				signal = "ready_for_validation"
+			}
+			if strings.Contains(userInput, "verify and finish") || strings.Contains(userInput, "verify and complete") || strings.Contains(userInput, "finish") || strings.Contains(userInput, "complete") || strings.Contains(userInput, "проверь и заверши") || strings.Contains(userInput, "заверши") {
+				signal = "ready_for_done"
+			}
 		}
 		return `{"action_kind":"` + action + `","transition_signal":"` + signal + `","confidence":0.8,"reason":"fake deterministic intent"}`
 	}
 	return `{"verdict":"pass","findings":[]}`
+}
+
+func fakeIntentNegatesTransition(userInput string) bool {
+	for _, phrase := range []string{
+		"not yet",
+		"do not finish",
+		"don't finish",
+		"do not complete",
+		"don't complete",
+		"but do not finish",
+		"пока не завершай",
+		"не завершай",
+		"не закрывай",
+		"пока не закрывай",
+	} {
+		if strings.Contains(userInput, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func fakeValidationReviewIntent(userInput string) bool {
+	for _, phrase := range []string{"review", "validation review", "verify criteria", "проверь", "проверить", "критери"} {
+		if strings.Contains(userInput, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func promptImproverOriginalFromPrompt(prompt string) string {
+	idx := strings.LastIndex(prompt, `"original":`)
+	if idx < 0 {
+		return "improved prompt"
+	}
+	payload := prompt[idx:]
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte("{"+strings.TrimLeft(payload, "{")), &decoded); err == nil {
+		if original, ok := decoded["original"].(string); ok && strings.TrimSpace(original) != "" {
+			return original
+		}
+	}
+	return "improved prompt"
+}
+
+func escapeJSON(s string) string {
+	data, _ := json.Marshal(s)
+	if len(data) >= 2 {
+		return string(data[1 : len(data)-1])
+	}
+	return s
 }
 
 func invariantTextFromPrompt(prompt string) string {
@@ -242,6 +340,17 @@ func invariantTextFromPrompt(prompt string) string {
 		return value
 	}
 	return ""
+}
+
+func containsStackForbiddenTerm(text string) bool {
+	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ", "/", " ", "\\", " ", "-", " ", "_", " ")
+	for _, token := range strings.Fields(replacer.Replace(strings.ToLower(text))) {
+		switch token {
+		case "python", "node", "rust":
+			return true
+		}
+	}
+	return false
 }
 
 func semanticUserInputFromPrompt(prompt string) string {

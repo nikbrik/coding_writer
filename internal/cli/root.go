@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -292,6 +293,7 @@ func (rt *runtime) ensureProcessController() *process.ProcessController {
 	rt.Process.Builder = rt.ensureBuilder()
 	rt.Process.PolicyRegistry = rt.PolicyRegistry
 	rt.Process.TransitionGate = rt.TransitionGate
+	rt.Process.LifecycleGate = &process.LifecycleGate{Tasks: rt.Tasks}
 	rt.Process.RetryController = rt.RetryController
 	rt.Process.AuditStore = rt.AuditStore
 	return rt.Process
@@ -307,6 +309,15 @@ func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 	pc.Provider = provider
 	pc.Classifier = rt.ensureClassifier()
 	if semanticValidationEnabled(provider) {
+		pc.PromptImprover = &process.PromptImprover{Provider: provider, Model: rt.Config.ActiveModel}
+		pc.AgentRunner = &process.AgentRunner{Provider: provider, Model: rt.Config.ActiveModel, Factory: process.NewStagePromptFactory(rt.PolicyRegistry)}
+		pc.PlanningSwarm = &process.PlanningSwarm{Runner: pc.AgentRunner}
+	} else {
+		pc.PromptImprover = nil
+		pc.AgentRunner = nil
+		pc.PlanningSwarm = nil
+	}
+	if semanticValidationEnabled(provider) {
 		model := rt.Config.MemoryModel
 		if model == "" {
 			model = rt.Config.ActiveModel
@@ -318,6 +329,41 @@ func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 		pc.InvariantValidator = nil
 	}
 	return pc
+}
+
+func applyTaskMove(rt *runtime, stage app.TaskStage) (app.TaskState, error) {
+	current, err := rt.Tasks.Current()
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	gate := &process.LifecycleGate{Tasks: rt.Tasks}
+	var signal process.TransitionSignal
+	switch {
+	case current.Stage == app.StagePlanning && stage == app.StageExecution:
+		signal = process.SignalApprovePlanning
+	case current.Stage == app.StageExecution && stage == app.StageValidation:
+		signal = process.SignalReadyForValidation
+	case current.Stage == app.StageExecution && stage == app.StagePlanning:
+		signal = process.SignalPlanningRequired
+	case current.Stage == app.StageValidation && stage == app.StageExecution:
+		signal = process.SignalNeedsExecutionFixes
+	case current.Stage == app.StageValidation && stage == app.StageDone:
+		signal = process.SignalReadyForDone
+	default:
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "forbidden_transition", "unsupported task move command", nil)
+	}
+	res, err := gate.Apply(process.LifecycleTransitionRequest{
+		State:           current,
+		Source:          process.TransitionSourceRecoveryDebug,
+		Signal:          signal,
+		RecoveryDebug:   true,
+		TrustedEvidence: current.ValidationEvidence,
+		Reason:          current.LastSessionID,
+	})
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	return res.State, nil
 }
 
 func chooseProvider(cfg app.AppConfig) providers.LLMProvider {
@@ -428,12 +474,12 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 					result.RenderedPrompt = ""
 					result.Messages = nil
 				}
-				if !rt.Quiet {
+				if !rt.Quiet && opts.JSON {
 					for _, warning := range result.Warnings {
 						_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
 					}
 				}
-				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, textChatResult(result))
+				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, renderChatResult(result, chatRenderOptions{Color: terminalColorEnabled(cmd.OutOrStdout())}))
 			}
 			return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
 		},
@@ -456,6 +502,7 @@ type chatResult struct {
 	Proposal         *app.MemoryProposal       `json:"proposal,omitempty"`
 	Transition       *process.TransitionResult `json:"transition,omitempty"`
 	Warnings         []string                  `json:"warnings,omitempty"`
+	Task             *app.TaskState            `json:"-"`
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
@@ -474,7 +521,17 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	trustedEvidence, err := runTrustedVerification(ctx, verifyCommand, renderOnly)
+	currentTask, _ := rt.Tasks.Current()
+	autoVerifyCommand := ""
+	if strings.TrimSpace(verifyCommand) == "" {
+		var autoErr error
+		autoVerifyCommand, autoErr = autoTrustedVerificationCommand(ctx, sessionID, input, currentTask, renderOnly, pc.SemanticValidator)
+		if autoErr != nil {
+			return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, autoErr
+		}
+		verifyCommand = autoVerifyCommand
+	}
+	trustedEvidence, err := runTrustedVerification(ctx, rt.StorageDir, currentTask.ID, sessionID, verifyCommand, renderOnly)
 	if err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -492,11 +549,229 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		result.Transition = procResult.Transition
 		result.Warnings = procResult.Warnings
 	}
+	if autoVerifyCommand != "" {
+		result.Warnings = append(result.Warnings, "auto verification: "+autoVerifyCommand)
+	}
 	if err != nil {
 		result.OK = false
+		if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+			result.Task = &task
+		}
 		return result, err
 	}
+	if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+		result.Task = &task
+	}
 	return result, nil
+}
+
+func autoTrustedVerificationCommand(ctx context.Context, sessionID, input string, task app.TaskState, renderOnly bool, semanticValidator *process.SemanticValidator) (string, error) {
+	if renderOnly || strings.TrimSpace(task.ID) == "" || task.Status == app.TaskStatusPaused || task.Stage == app.StageDone {
+		return "", nil
+	}
+	if semanticValidator != nil {
+		intent, err := semanticValidator.ResolveIntent(ctx, process.SemanticIntentInput{
+			SessionID:      sessionID,
+			UserInput:      input,
+			Stage:          task.Stage,
+			ExpectedAction: task.ExpectedAction,
+			ActionKind:     process.ResolveActionKind(input, task.Stage, task.ExpectedAction),
+			Task:           &task,
+		})
+		if err != nil {
+			return "", err
+		}
+		if !semanticAutoVerificationIntent(intent, task.Stage) {
+			return "", nil
+		}
+		return firstTrustedVerificationCommand(task), nil
+	}
+	return "", nil
+}
+
+func semanticAutoVerificationIntent(intent process.SemanticIntentResult, stage app.TaskStage) bool {
+	if intent.Confidence < 0.65 {
+		return false
+	}
+	switch stage {
+	case app.StageExecution:
+		return intent.TransitionSignal == "ready_for_validation"
+	case app.StageValidation:
+		return intent.TransitionSignal == "ready_for_done"
+	default:
+		return false
+	}
+}
+
+func firstTrustedVerificationCommand(task app.TaskState) string {
+	candidates := []string{}
+	candidates = append(candidates, task.AcceptanceCriteria...)
+	candidates = append(candidates, task.Plan...)
+	candidates = append(candidates, task.CurrentStep, task.Objective)
+	for _, microtask := range task.Microtasks {
+		candidates = append(candidates, microtask.PlanItem)
+	}
+	for _, text := range candidates {
+		for _, command := range trustedVerificationCommandCandidates(text) {
+			command = specializeTrustedVerificationCommand(command, task)
+			if _, err := parseTrustedVerificationCommand(command); err == nil {
+				return command
+			}
+		}
+	}
+	return ""
+}
+
+var (
+	quotedVerificationCommandPattern = regexp.MustCompile("[`\"']([^`\"']+)[`\"']")
+	verificationPrefixPattern        = regexp.MustCompile(`(?i)\b(go)\s+(test|vet|version)\b|\b(git)\s+(diff|status)\b`)
+	goPackagePathPattern             = regexp.MustCompile("(^|[[:space:]'\"`])((\\./)?[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+)")
+)
+
+func trustedVerificationCommandCandidates(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	out := []string{}
+	for _, match := range quotedVerificationCommandPattern.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			out = append(out, strings.TrimSpace(match[1]))
+		}
+	}
+	prefixMatches := verificationPrefixPattern.FindAllStringIndex(text, -1)
+	for _, loc := range prefixMatches {
+		out = append(out, scanVerificationCommand(text[loc[0]:]))
+	}
+	return out
+}
+
+func scanVerificationCommand(text string) string {
+	fields := strings.Fields(text)
+	if len(fields) < 2 {
+		return strings.TrimSpace(text)
+	}
+	tokens := []string{cleanVerificationToken(fields[0]), cleanVerificationToken(fields[1])}
+	for _, raw := range fields[2:] {
+		token := cleanVerificationToken(raw)
+		if token == "" || isVerificationStopWord(token) || !isVerificationArgToken(token) {
+			break
+		}
+		tokens = append(tokens, token)
+	}
+	return strings.Join(tokens, " ")
+}
+
+func cleanVerificationToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, "`\"'()[]{}")
+	token = strings.TrimRight(token, ",;:")
+	if strings.HasSuffix(token, ".") && !strings.HasSuffix(token, "...") {
+		token = strings.TrimRight(token, ".")
+	}
+	return token
+}
+
+func specializeTrustedVerificationCommand(command string, task app.TaskState) string {
+	tokens, err := parseTrustedVerificationCommand(command)
+	if err != nil || len(tokens) < 2 || tokens[0] != "go" {
+		return command
+	}
+	if tokens[1] != "test" && tokens[1] != "vet" && tokens[1] != "build" {
+		return command
+	}
+	if len(tokens) > 3 || len(tokens) == 3 && tokens[2] != "./..." {
+		return command
+	}
+	pkg := taskGoPackagePath(task)
+	if pkg == "" {
+		return command
+	}
+	return strings.Join([]string{tokens[0], tokens[1], pkg}, " ")
+}
+
+func taskGoPackagePath(task app.TaskState) string {
+	candidates := []string{task.Title, task.Objective, task.CurrentStep}
+	candidates = append(candidates, task.AcceptanceCriteria...)
+	candidates = append(candidates, task.Plan...)
+	for _, microtask := range task.Microtasks {
+		candidates = append(candidates, microtask.PlanItem, microtask.ResultSummary)
+	}
+	for _, text := range candidates {
+		for _, match := range goPackagePathPattern.FindAllStringSubmatch(text, -1) {
+			if len(match) < 3 {
+				continue
+			}
+			path := strings.TrimSpace(match[2])
+			if path == "" || strings.Contains(path, "..") {
+				continue
+			}
+			if !strings.HasPrefix(path, "./") {
+				path = "./" + path
+			}
+			clean := filepath.Clean(path)
+			if hasParentPathSegment(clean) || !directoryHasGoFiles(clean) {
+				continue
+			}
+			if !strings.HasPrefix(clean, ".") {
+				clean = "./" + clean
+			}
+			return clean
+		}
+	}
+	return ""
+}
+
+func directoryHasGoFiles(path string) bool {
+	cwd, err := os.Getwd()
+	if err != nil {
+		cwd = "."
+	}
+	for {
+		candidate := filepath.Join(cwd, path)
+		info, err := os.Stat(candidate)
+		if err == nil && info.IsDir() {
+			matches, err := filepath.Glob(filepath.Join(candidate, "*.go"))
+			if err == nil && len(matches) > 0 {
+				return true
+			}
+		}
+		parent := filepath.Dir(cwd)
+		if parent == cwd {
+			return false
+		}
+		cwd = parent
+	}
+}
+
+func isVerificationStopWord(token string) bool {
+	switch strings.ToLower(strings.TrimSpace(token)) {
+	case "pass", "passes", "passed", "complete", "completes", "successfully", "succeeds", "без", "успешно", "проходит", "прошла", "прошли", "должен", "должна", "должно", "and", "or", "then", "to":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVerificationArgToken(token string) bool {
+	if strings.ContainsAny(token, "\x00\n\r;&|<>`$") || strings.Contains(token, "$(") || strings.Contains(token, "${") {
+		return false
+	}
+	if hasParentPathSegment(token) || strings.HasPrefix(token, "/") {
+		return false
+	}
+	for _, r := range token {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			continue
+		}
+		switch r {
+		case '.', '/', '_', '-', '=', ':':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, rt *runtime) error {
@@ -536,18 +811,7 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 			printError(diag, err, false)
 			continue
 		}
-		if !rt.Quiet {
-			for _, warning := range result.Warnings {
-				_, _ = fmt.Fprintln(diag, warning)
-			}
-		}
-		_, _ = fmt.Fprintln(out, safeTerminalText(result.Answer))
-		if result.Proposal != nil {
-			_, _ = fmt.Fprint(out, proposalText(*result.Proposal))
-		}
-		if result.Transition != nil {
-			_, _ = fmt.Fprintf(out, "transition: %s -> %s\n", result.Transition.From, result.Transition.To)
-		}
+		_, _ = fmt.Fprint(out, renderChatResult(result, chatRenderOptions{Color: terminalColorEnabled(out)}))
 		if err := recordRenderedPrompt(rt.StorageDir, sessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil && !rt.Quiet {
 			_, _ = fmt.Fprintln(diag, "prompt audit skipped: "+app.AsError(err).Code)
 		}
@@ -561,10 +825,13 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 	return nil
 }
 
-func runTrustedVerification(ctx context.Context, command string, renderOnly bool) ([]string, error) {
+func runTrustedVerification(ctx context.Context, storageDir, taskID, sessionID, command string, renderOnly bool) ([]string, error) {
 	command = strings.TrimSpace(command)
 	if command == "" || renderOnly {
 		return nil, nil
+	}
+	if strings.TrimSpace(taskID) == "" {
+		return nil, app.NewError(app.CategoryValidation, "missing_task", "trusted verification requires a current task", nil)
 	}
 	tokens, err := parseTrustedVerificationCommand(command)
 	if err != nil {
@@ -594,7 +861,11 @@ func runTrustedVerification(ctx context.Context, command string, renderOnly bool
 	if exitCode != 0 {
 		return nil, app.NewError(app.CategoryValidation, "verification_failed", "verification command exited non-zero", nil)
 	}
-	return []string{process.NewTrustedEvidence(strings.Join(tokens, " "), exitCode, output.String())}, nil
+	token, _, err := process.NewTrustedEvidenceStore(storageDir).Issue(taskID, sessionID, strings.Join(tokens, " "), exitCode, output.String())
+	if err != nil {
+		return nil, err
+	}
+	return []string{token}, nil
 }
 
 type boundedVerificationOutput struct {
@@ -1076,7 +1347,7 @@ func invariantsAddCommand(opts *globalOptions) *cobra.Command {
 }
 
 func taskCommand(opts *globalOptions) *cobra.Command {
-	cmd := &cobra.Command{Use: "task", Short: "Task state commands", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "task", Short: "Task state commands", Long: lifecycleHelpText(), RunE: func(cmd *cobra.Command, args []string) error {
 		return app.NewError(app.CategoryCLI, "unknown_task_command", "unknown task command", nil)
 	}}
 	cmd.AddCommand(&cobra.Command{
@@ -1110,7 +1381,7 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
 		},
 	})
-	cmd.AddCommand(&cobra.Command{
+	moveCmd := &cobra.Command{
 		Use:   "move <stage>",
 		Short: "Move current task stage",
 		Args:  cobra.ExactArgs(1),
@@ -1119,13 +1390,14 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			state, err := rt.Tasks.Move(app.TaskStage(args[0]))
+			state, err := applyTaskMove(rt, app.TaskStage(args[0]))
 			if err != nil {
 				return err
 			}
 			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
 		},
-	})
+	}
+	cmd.AddCommand(moveCmd)
 	cmd.AddCommand(&cobra.Command{
 		Use:   "step <text>",
 		Short: "Set current task step",
@@ -1136,6 +1408,38 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			state, err := rt.Tasks.SetStep(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "plan <text>",
+		Short: "Add current task plan item",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.AddPlanItem(strings.Join(args, " "))
+			if err != nil {
+				return err
+			}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "task": state, "allowed_next_stages": tasks.AllowedNext(state.Stage)}, taskText(state))
+		},
+	})
+	cmd.AddCommand(&cobra.Command{
+		Use:   "criteria <text>",
+		Short: "Add current task acceptance criterion",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			state, err := rt.Tasks.AddCriteria(strings.Join(args, " "))
 			if err != nil {
 				return err
 			}
@@ -1191,6 +1495,21 @@ func taskCommand(opts *globalOptions) *cobra.Command {
 		},
 	})
 	return cmd
+}
+
+func lifecycleHelpText() string {
+	return `Task lifecycle:
+  planning -> execution -> validation -> done
+  execution can return to planning; validation can return to execution.
+
+Rules:
+  execution requires approved planning and approved plan items become microtasks.
+  validation requires accepted execution or app-issued --verify evidence bound to task/session.
+  done requires an accepted validation record with validation_status=ready_for_done.
+  lifecycle-changing chat intent is decided by structured semantic validation in provider-backed paths.
+  task move is lifecycle-gated recovery/debug; it cannot bypass done validation invariants.
+  pause/resume preserves current step, plan, criteria, microtasks, and expected action.
+  planning swarm audit appears in process audit with role, microtask_id, rounds, and summary.`
 }
 
 func processCommand(opts *globalOptions) *cobra.Command {
@@ -1381,6 +1700,8 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
   /task plan <text>              add plan item
   /task criteria <text>          add acceptance criterion
   /task pause|resume             pause or resume task
+  lifecycle                      planning->execution->validation->done; done requires accepted validation
+  --verify <argv>                records app-issued evidence bound to current task/session
   /save <short|work|long> <text> save memory to layer
   /memory <short|work|long>      list memory layer
   /memory propose                propose memory from latest exchange
@@ -1646,7 +1967,7 @@ func handleTaskSlash(out io.Writer, rt *runtime, parts []string, rest string) er
 		if len(parts) < 3 {
 			return app.NewError(app.CategoryCLI, "missing_stage", "stage required", nil)
 		}
-		state, err := rt.Tasks.Move(app.TaskStage(parts[2]))
+		state, err := applyTaskMove(rt, app.TaskStage(parts[2]))
 		if err != nil {
 			return err
 		}
@@ -2068,18 +2389,434 @@ func printError(w io.Writer, err error, asJSON bool) {
 	}
 }
 
+type chatRenderOptions struct {
+	Color bool
+}
+
+type chatStyle struct {
+	color bool
+}
+
 func textChatResult(result chatResult) string {
-	if result.Answer == "" {
-		return safeTerminalText(result.RenderedPrompt)
+	return renderChatResult(result, chatRenderOptions{})
+}
+
+func renderChatResult(result chatResult, opts chatRenderOptions) string {
+	style := chatStyle{color: opts.Color}
+	var b strings.Builder
+	if strings.TrimSpace(result.Answer) == "" && strings.TrimSpace(result.RenderedPrompt) != "" {
+		writeSectionHeader(&b, style, "Rendered prompt")
+		b.WriteString(safeTerminalText(strings.TrimSpace(result.RenderedPrompt)))
+		b.WriteString("\n")
+		return b.String()
 	}
-	text := safeTerminalText(result.Answer) + "\n"
-	if result.Proposal != nil {
-		text += proposalText(*result.Proposal)
+
+	writeSectionHeader(&b, style, "Assistant")
+	b.WriteString(renderAssistantAnswer(result.Answer, style))
+
+	task := displayTask(result)
+	if task != nil {
+		writeTaskSummary(&b, style, *task)
 	}
 	if result.Transition != nil {
-		text += fmt.Sprintf("transition: %s -> %s\n", result.Transition.From, result.Transition.To)
+		writeTransitionSummary(&b, style, *result.Transition)
 	}
-	return text
+	writeEvidenceAndWarnings(&b, style, result, task)
+	if hasProposalRecords(result.Proposal) {
+		writeProposalSummary(&b, style, *result.Proposal)
+	}
+	return b.String()
+}
+
+func renderAssistantAnswer(answer string, style chatStyle) string {
+	answer = strings.TrimSpace(answer)
+	if answer == "" {
+		return style.dim("(no assistant answer)") + "\n"
+	}
+	if text, ok := renderStructuredStageAnswer(answer, style); ok {
+		return text
+	}
+	return safeTerminalText(answer) + "\n"
+}
+
+func renderStructuredStageAnswer(answer string, style chatStyle) (string, bool) {
+	cleaned := cleanStructuredAnswer(answer)
+	if cleaned == "" {
+		return "", false
+	}
+	chunks, ok := structuredJSONChunks(cleaned)
+	if !ok || len(chunks) == 0 {
+		return "", false
+	}
+	if len(chunks) == 1 {
+		return renderStructuredStageJSON(chunks[0], style)
+	}
+	var b strings.Builder
+	rendered := 0
+	for i, chunk := range chunks {
+		text, ok := renderStructuredStageJSON(chunk, style)
+		if !ok {
+			return "", false
+		}
+		if rendered > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(style.label(fmt.Sprintf("Stage output %d", i+1)))
+		b.WriteString(":\n")
+		b.WriteString(text)
+		rendered++
+	}
+	return b.String(), rendered > 0
+}
+
+func structuredJSONChunks(cleaned string) ([]string, bool) {
+	decoder := json.NewDecoder(strings.NewReader(cleaned))
+	chunks := []string{}
+	for {
+		var raw json.RawMessage
+		err := decoder.Decode(&raw)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, false
+		}
+		chunks = append(chunks, string(raw))
+	}
+	return chunks, len(chunks) > 0
+}
+
+func renderStructuredStageJSON(cleaned string, style chatStyle) (string, bool) {
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" || !strings.HasPrefix(cleaned, "{") {
+		return "", false
+	}
+	var stageField struct {
+		Stage string `json:"stage"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &stageField); err != nil || stageField.Stage == "" {
+		return "", false
+	}
+	var b strings.Builder
+	switch app.TaskStage(stageField.Stage) {
+	case app.StagePlanning:
+		var out process.PlanningOutput
+		if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+			return "", false
+		}
+		writeField(&b, style, "Summary", out.Summary)
+		writeListBlock(&b, style, "Assumptions", out.Assumptions, 8)
+		writeListBlock(&b, style, "Acceptance criteria", out.AcceptanceCriteria, 12)
+		writeListBlock(&b, style, "Plan", out.Plan, 12)
+		writeListBlock(&b, style, "Open questions", out.OpenQuestions, 8)
+		writeField(&b, style, "Readiness", out.Readiness)
+	case app.StageExecution:
+		var out process.ExecutionOutput
+		if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+			return "", false
+		}
+		writeField(&b, style, "Summary", out.Summary)
+		writeBlock(&b, style, "Deliverable", out.Deliverable)
+		writeField(&b, style, "Current step", out.CurrentStep)
+		writeListBlock(&b, style, "Completed steps", out.CompletedSteps, 8)
+		writeField(&b, style, "Next step", out.NextStep)
+		writeListBlock(&b, style, "Changed artifacts", out.ChangedArtifacts, 8)
+		writeListBlock(&b, style, "Verification", out.Verification, 8)
+		writeListBlock(&b, style, "Blockers", out.Blockers, 8)
+		writeField(&b, style, "Next signal", out.NextSignal)
+	case app.StageValidation:
+		var out process.ValidationOutput
+		if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+			return "", false
+		}
+		writeFindingsBlock(&b, style, out.Findings)
+		writeListBlock(&b, style, "Passed checks", out.PassedChecks, 10)
+		writeListBlock(&b, style, "Missing evidence", out.MissingEvidence, 10)
+		writeListBlock(&b, style, "Residual risks", out.ResidualRisks, 10)
+		writeField(&b, style, "Verdict", out.Verdict)
+	case app.StageDone:
+		var out process.DoneOutput
+		if err := json.Unmarshal([]byte(cleaned), &out); err != nil {
+			return "", false
+		}
+		writeField(&b, style, "Summary", out.Summary)
+		writeListBlock(&b, style, "Acceptance status", out.AcceptanceStatus, 12)
+		writeListBlock(&b, style, "Validation evidence", out.ValidationEvidence, 12)
+		writeListBlock(&b, style, "Follow-up tasks", out.FollowUpTaskProposals, 8)
+	default:
+		return "", false
+	}
+	if b.Len() == 0 {
+		return "", false
+	}
+	return b.String(), true
+}
+
+func cleanStructuredAnswer(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "```") {
+		text = strings.TrimPrefix(text, "```")
+		if firstLine, rest, ok := strings.Cut(text, "\n"); ok && !strings.HasPrefix(strings.TrimSpace(firstLine), "{") {
+			text = rest
+		}
+		text = strings.TrimSpace(text)
+		text = strings.TrimSuffix(text, "```")
+	}
+	return strings.TrimSpace(text)
+}
+
+func displayTask(result chatResult) *app.TaskState {
+	if result.Task != nil {
+		return result.Task
+	}
+	if result.Transition != nil && strings.TrimSpace(result.Transition.State.ID) != "" {
+		return &result.Transition.State
+	}
+	return nil
+}
+
+func writeTaskSummary(b *strings.Builder, style chatStyle, state app.TaskState) {
+	writeSectionHeader(b, style, "Task")
+	writeKVLine(b, style, "id", state.ID)
+	writeKVLine(b, style, "stage", string(state.Stage))
+	writeKVLine(b, style, "expected", string(state.ExpectedAction))
+	writeKVLine(b, style, "status", string(state.Status))
+	writeKVLine(b, style, "current_step", state.CurrentStep)
+	if state.ValidationStatus != "" {
+		writeKVLine(b, style, "validation", state.ValidationStatus)
+	}
+	if len(state.Microtasks) > 0 {
+		done := 0
+		for _, mt := range state.Microtasks {
+			if strings.EqualFold(mt.Status, "done") || strings.EqualFold(mt.Status, "completed") || strings.TrimSpace(mt.ResultSummary) != "" {
+				done++
+			}
+		}
+		writeKVLine(b, style, "microtasks", fmt.Sprintf("%d/%d with results", done, len(state.Microtasks)))
+	}
+	if len(state.Plan) > 0 {
+		writeListBlock(b, style, "Plan", state.Plan, 5)
+	}
+	if len(state.AcceptanceCriteria) > 0 {
+		writeListBlock(b, style, "Acceptance criteria", state.AcceptanceCriteria, 5)
+	}
+}
+
+func writeTransitionSummary(b *strings.Builder, style chatStyle, transition process.TransitionResult) {
+	writeSectionHeader(b, style, "Transition")
+	from := string(transition.From)
+	if strings.TrimSpace(from) == "" {
+		from = "new_task"
+	}
+	writeKVLine(b, style, "move", fmt.Sprintf("%s -> %s", from, transition.To))
+	if transition.Reason != "" {
+		writeKVLine(b, style, "reason", transition.Reason)
+	}
+	if transition.State.ExpectedAction != "" {
+		writeKVLine(b, style, "next_expected", string(transition.State.ExpectedAction))
+	}
+}
+
+func writeEvidenceAndWarnings(b *strings.Builder, style chatStyle, result chatResult, task *app.TaskState) {
+	evidenceWarnings := []string{}
+	otherWarnings := []string{}
+	for _, warning := range result.Warnings {
+		if strings.HasPrefix(warning, "auto verification:") {
+			evidenceWarnings = append(evidenceWarnings, warning)
+			continue
+		}
+		otherWarnings = append(otherWarnings, warning)
+	}
+	evidenceRefs := []string{}
+	if task != nil {
+		evidenceRefs = append(evidenceRefs, task.ValidationEvidence...)
+	}
+	if len(evidenceRefs) == 0 && result.Transition != nil {
+		evidenceRefs = append(evidenceRefs, result.Transition.State.ValidationEvidence...)
+	}
+	if len(evidenceRefs) > 0 || len(evidenceWarnings) > 0 {
+		writeSectionHeader(b, style, "Evidence")
+		if len(evidenceRefs) > 0 {
+			writeKVLine(b, style, "trusted_refs", strconv.Itoa(len(evidenceRefs)))
+		}
+		for _, warning := range evidenceWarnings {
+			b.WriteString("- ")
+			b.WriteString(safeTerminalText(warning))
+			b.WriteString("\n")
+		}
+	}
+	if len(otherWarnings) > 0 {
+		writeSectionHeader(b, style, "Warnings")
+		for _, warning := range otherWarnings {
+			b.WriteString("- ")
+			b.WriteString(safeTerminalText(warning))
+			b.WriteString("\n")
+		}
+	}
+}
+
+func hasProposalRecords(proposal *app.MemoryProposal) bool {
+	return proposal != nil && len(proposal.Records) > 0
+}
+
+func writeProposalSummary(b *strings.Builder, style chatStyle, proposal app.MemoryProposal) {
+	writeSectionHeader(b, style, "Memory proposal")
+	writeKVLine(b, style, "id", proposal.ID)
+	for _, record := range proposal.Records {
+		b.WriteString("- ")
+		b.WriteString(record.ID)
+		b.WriteString(" [")
+		b.WriteString(string(record.Layer))
+		b.WriteString("] ")
+		b.WriteString(string(record.Status))
+		if record.Kind != "" {
+			b.WriteString(" ")
+			b.WriteString(record.Kind)
+		}
+		b.WriteString(": ")
+		b.WriteString(safeTerminalText(record.Content))
+		if record.BlockReason != "" {
+			b.WriteString(" (blocked: ")
+			b.WriteString(safeTerminalText(record.BlockReason))
+			b.WriteString(")")
+		}
+		b.WriteString("\n")
+	}
+	writeSectionHeader(b, style, "Next")
+	b.WriteString("- Review memory proposal; apply it only if these records should be saved.\n")
+	b.WriteString("- CLI: assistant memory apply --proposal ")
+	b.WriteString(proposal.ID)
+	b.WriteString(" --accept all\n")
+	b.WriteString("- REPL: /memory apply --proposal ")
+	b.WriteString(proposal.ID)
+	b.WriteString(" --accept all\n")
+}
+
+func writeSectionHeader(b *strings.Builder, style chatStyle, title string) {
+	if b.Len() > 0 && !strings.HasSuffix(b.String(), "\n\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString(style.header("== " + title + " =="))
+	b.WriteString("\n")
+}
+
+func writeField(b *strings.Builder, style chatStyle, label, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	b.WriteString(style.label(label))
+	b.WriteString(": ")
+	b.WriteString(safeTerminalText(value))
+	b.WriteString("\n")
+}
+
+func writeKVLine(b *strings.Builder, style chatStyle, key, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	b.WriteString(style.label(key))
+	b.WriteString(": ")
+	b.WriteString(safeTerminalText(value))
+	b.WriteString("\n")
+}
+
+func writeBlock(b *strings.Builder, style chatStyle, title, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	b.WriteString(style.label(title))
+	b.WriteString(":\n")
+	b.WriteString(safeTerminalText(value))
+	b.WriteString("\n")
+}
+
+func writeListBlock(b *strings.Builder, style chatStyle, title string, items []string, limit int) {
+	if len(items) == 0 {
+		return
+	}
+	b.WriteString(style.label(title))
+	b.WriteString(":\n")
+	visible := len(items)
+	if limit > 0 && visible > limit {
+		visible = limit
+	}
+	for i := 0; i < visible; i++ {
+		item := strings.TrimSpace(items[i])
+		if item == "" {
+			continue
+		}
+		b.WriteString(fmt.Sprintf("%d. %s\n", i+1, safeTerminalText(item)))
+	}
+	if visible < len(items) {
+		b.WriteString(fmt.Sprintf("... %d more\n", len(items)-visible))
+	}
+}
+
+func writeFindingsBlock(b *strings.Builder, style chatStyle, findings []process.ValidationFinding) {
+	b.WriteString(style.label("Findings"))
+	b.WriteString(":\n")
+	if len(findings) == 0 {
+		b.WriteString("- none\n")
+		return
+	}
+	for _, finding := range findings {
+		severity := strings.TrimSpace(finding.Severity)
+		if severity == "" {
+			severity = "finding"
+		}
+		b.WriteString("- ")
+		b.WriteString(safeTerminalText(severity))
+		if finding.Location != "" {
+			b.WriteString(" at ")
+			b.WriteString(safeTerminalText(finding.Location))
+		}
+		if finding.Problem != "" {
+			b.WriteString(": ")
+			b.WriteString(safeTerminalText(finding.Problem))
+		}
+		if finding.Fix != "" {
+			b.WriteString(" fix: ")
+			b.WriteString(safeTerminalText(finding.Fix))
+		}
+		b.WriteString("\n")
+	}
+}
+
+func terminalColorEnabled(w io.Writer) bool {
+	if os.Getenv("NO_COLOR") != "" || os.Getenv("ASSISTANT_NO_COLOR") != "" || os.Getenv("TERM") == "dumb" {
+		return false
+	}
+	file, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+func (s chatStyle) header(text string) string {
+	return s.paint("1;36", text)
+}
+
+func (s chatStyle) label(text string) string {
+	return s.paint("1", text)
+}
+
+func (s chatStyle) dim(text string) string {
+	return s.paint("2", text)
+}
+
+func (s chatStyle) paint(code, text string) string {
+	if !s.color {
+		return text
+	}
+	return "\x1b[" + code + "m" + text + "\x1b[0m"
 }
 
 func profileListText(items []app.UserProfile, active string) string {
@@ -2187,10 +2924,12 @@ func memoryText(records []app.MemoryRecord) string {
 
 func proposalText(proposal app.MemoryProposal) string {
 	var b strings.Builder
-	b.WriteString("Memory proposal: ")
+	b.WriteString("== Memory proposal ==\n")
+	b.WriteString("id: ")
 	b.WriteString(proposal.ID)
 	b.WriteByte('\n')
 	for _, record := range proposal.Records {
+		b.WriteString("- ")
 		b.WriteString(record.ID)
 		b.WriteString(" ")
 		b.WriteString("[")
@@ -2303,13 +3042,20 @@ func safeTerminalText(text string) string {
 }
 
 func taskText(state app.TaskState) string {
-	return fmt.Sprintf("task=%s title=%s objective=%s stage=%s current_step=%s expected_action=%s status=%s plan=%v acceptance_criteria=%v decisions=%v open_questions=%v allowed=%v\n", state.ID, safeTerminalText(state.Title), safeTerminalText(state.Objective), state.Stage, safeTerminalText(state.CurrentStep), state.ExpectedAction, state.Status, safeStringSlice(state.Plan), safeStringSlice(state.AcceptanceCriteria), safeStringSlice(state.Decisions), safeStringSlice(state.OpenQuestions), tasks.AllowedNext(state.Stage))
-}
-
-func safeStringSlice(items []string) []string {
-	out := make([]string, len(items))
-	for i, item := range items {
-		out[i] = safeTerminalText(item)
+	var b strings.Builder
+	style := chatStyle{}
+	writeTaskSummary(&b, style, state)
+	writeField(&b, style, "Title", state.Title)
+	writeField(&b, style, "Objective", state.Objective)
+	writeListBlock(&b, style, "Decisions", state.Decisions, 10)
+	writeListBlock(&b, style, "Open questions", state.OpenQuestions, 10)
+	allowed := tasks.AllowedNext(state.Stage)
+	if len(allowed) > 0 {
+		items := make([]string, 0, len(allowed))
+		for _, stage := range allowed {
+			items = append(items, string(stage))
+		}
+		writeListBlock(&b, style, "Allowed next stages", items, 10)
 	}
-	return out
+	return b.String()
 }

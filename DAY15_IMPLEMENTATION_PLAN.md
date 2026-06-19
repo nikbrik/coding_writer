@@ -2,7 +2,17 @@
 
 Дата анализа: 2026-06-19.
 
-Цель этого файла: дать следующей, более слабой LLM, подробный и безопасный план реализации Day 15. Сейчас код менять не нужно. Планировать нужно только дополнительный функционал, который еще не реализован.
+Статус на 2026-06-19: реализовано. Этот файл теперь historical planning/reference material. Актуальный продуктовый контракт живёт в `docs/prd.md`, `docs/frd.md`, `docs/architect.md`, а live/manual proof описан в `docs/manual-testing-day15.md` и `docs/manual-testing-demo.md`.
+
+Финальный итог реализации:
+
+- primary Day 15 flow is chat-first and human-readable by default;
+- live proof uses OpenRouter model `google/gemini-3.1-flash-lite`;
+- no primary Day 15 step requires `/task move`, `/task step`, `/task expect`, direct storage edits, `--verify`, raw JSON inspection, fake provider, or a user-supplied exact test command;
+- application-owned gates control task state, auto verification, validation status and `done`;
+- audit must show prompt improvement, planning swarm specialists, orchestrator, executor, reviewer and lifecycle transitions.
+
+Исходная цель этого файла: дать следующей, более слабой LLM, подробный и безопасный план реализации Day 15. После реализации использовать файл только как audit trail: при конфликте доверять текущим docs, tests и коду.
 
 ## 1. Acceptance Day 15
 
@@ -25,7 +35,7 @@
 - Не переписывать память, профили, invariants, OpenRouter provider и базовый CLI.
 - Не менять `day11.md`, `day12.md` и `03-memory-state-notes.md`, если пользователь отдельно не попросит. Это локальное repo rule.
 - Не превращать debug slash commands в required happy path. Acceptance demo должен идти через обычный `assistant chat` и естественные фразы пользователя.
-- Не добавлять новые keyword/regex semantic validators для product real mode. Смысловые решения должны идти через `SemanticValidator` и structured JSON. Keyword fallback допустим только для fake/debug/offline режима.
+- Не добавлять новые keyword/regex semantic validators для product real mode. Смысловые решения должны идти через `SemanticValidator` и structured JSON. Trigger-word fallback не должен решать intent/readiness/acceptance.
 - Текущий MVP не редактирует файлы сам. Day 15 можно закрыть через read-only code deliverables + trusted verification, как в Day 11-14. Если добавлять tool writes, это отдельная P1 задача.
 
 ## 3. Baseline check
@@ -328,7 +338,7 @@ Use this table as implementation source of truth.
 | validation | done | `ready_for_done` | task active; accepted validation record exists; missing evidence empty; no blocker/high findings; passed checks non-empty; trusted evidence exists and satisfies acceptance criteria |
 | done | any | none | forbidden |
 
-Do not rely on user text alone for semantic signal in real provider mode. Use `SemanticValidator.ResolveIntent`. Local keyword helpers can remain fake/offline fallbacks only.
+Do not rely on user text alone for semantic signal. Use `SemanticValidator.ResolveIntent`; local keyword helpers must not decide intent/readiness/acceptance.
 
 ### 6.4. Prompt-improvement contract
 
@@ -1150,7 +1160,7 @@ Files to update:
 - `docs/prd.md`;
 - `docs/frd.md`;
 - `docs/architect.md`;
-- `docs/manual-testing-day11-14.md`;
+- `docs/manual-testing-demo.md`;
 - add `docs/manual-testing-day15.md`;
 - maybe update `docs/implementation-status-regression-plan.md` if it is still maintained as current status.
 
@@ -1465,49 +1475,22 @@ Run:
 go test ./manual_scratch/day15_contains_duplicate
 ```
 
-### 10.9. Move to validation
+### 10.9. Move to validation and finish
 
-Recommended final Day 15 flow should use trusted evidence for ready-for-validation:
-
-```bash
-assistant chat --once --verify "go test ./manual_scratch/day15_contains_duplicate" --input "Готово к проверке" --json
-assistant task status --json
-```
-
-Expected:
-
-- `execution -> validation` happens only if lifecycle preconditions pass;
-- trusted evidence is recorded;
-- stage is `validation`.
-
-### 10.10. Negative check: validation without evidence cannot finish
-
-Run without `--verify`:
+Final implemented Day 15 flow must use semantic intent signal plus auto verification from approved plan/criteria. The user does not type `--verify` and does not type the exact command:
 
 ```bash
-assistant chat --once --input "Проверь и заверши" --json
-assistant task status --json
-```
-
-Expected:
-
-- done transition rejected;
-- stage remains `validation`;
-- error is `transition_precondition_failed` or validation result is `blocked_missing_evidence`;
-- no accepted short memory is saved for rejected finalization.
-
-### 10.11. Finish with trusted validation
-
-Run:
-
-```bash
-assistant chat --once --verify "go test ./manual_scratch/day15_contains_duplicate" --input "Проверь и заверши" --json
+assistant chat --once --input "Готово к проверке: проверь результат."
+assistant chat --once --input "Проверь критерии по результатам проверки, но пока не завершай задачу; дай review."
+assistant chat --once --input "Проверь критерии и заверши задачу, если проверка подтверждает стандартный Go test."
 assistant task status --json
 assistant process audit --limit 20 --json
 ```
 
 Expected:
 
+- `execution -> validation` happens after normal-language review/check request and accepted execution/evidence preconditions;
+- `validation -> done` happens only after app-issued trusted evidence and accepted validation;
 - reviewer agent validates output;
 - lifecycle gate moves `validation -> done`;
 - final task status:
@@ -1634,14 +1617,14 @@ Update future sections:
 - `Future tool execution model` remains future;
 - microtask LLM orchestration is now MVP Day 15, but file write tools remain future.
 
-### 11.5. `docs/manual-testing-day11-14.md`
+### 11.5. `docs/manual-testing-demo.md`
 
 Keep old days stable.
 
 Minimal update:
 
 - add note at top: Day 15 has separate manual doc;
-- if execution->validation now requires `--verify`, update old "agent verification" blocks carefully;
+- keep "agent verification" blocks clearly separated from the primary user demo; they may use `--json` or explicit overrides only as deterministic regression/debug tools;
 - do not require re-recording Day 11-14 unless acceptance commands changed.
 
 ### 11.6. Add `docs/manual-testing-day15.md`
@@ -1681,7 +1664,7 @@ Protect these behaviors:
 
 Likely friction:
 
-- If execution->validation becomes stricter and requires `--verify`, old manual docs may need small updates.
+- If execution->validation changes again, preserve the implemented product contract: primary docs must not require `--verify` or user-supplied exact commands in the Day 15 happy path.
 - If CLI `/task move` becomes gated, some CLI tests may need `--force` or should move to manager-level tests.
 - If `TaskState` validation requires new fields for done, old test fixtures need migration/backfill.
 

@@ -7,6 +7,15 @@ import (
 	"github.com/nikbrik/coding_writer/internal/tasks"
 )
 
+func issueGateEvidence(t *testing.T, dir string, state app.TaskState, sessionID, source string) []string {
+	t.Helper()
+	token, _, err := NewTrustedEvidenceStore(dir).Issue(state.ID, sessionID, source, 0, "ok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return []string{token}
+}
+
 func TestTransitionGatePlanningRequiresAutoApprove(t *testing.T) {
 	dir := t.TempDir()
 	mgr := tasks.NewManager(dir)
@@ -33,7 +42,7 @@ func TestTransitionGatePlanningRequiresAutoApprove(t *testing.T) {
 	}
 }
 
-func TestTransitionGateValidPlanningMoveUsesTaskManager(t *testing.T) {
+func TestTransitionGateModelPlanningNeverAutoApproves(t *testing.T) {
 	dir := t.TempDir()
 	mgr := tasks.NewManager(dir)
 	state, err := mgr.Start("task")
@@ -46,19 +55,16 @@ func TestTransitionGateValidPlanningMoveUsesTaskManager(t *testing.T) {
 		Plan:               []string{"p"},
 		Readiness:          "ready_for_execution_proposal",
 	}}
-	res, err := gate.Apply(state, parsed, TransitionOptions{AutoApprovePlanning: true})
+	res, err := gate.Apply(state, parsed, TransitionOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.Moved || res.To != app.StageExecution {
-		t.Fatalf("expected move to execution: %+v", res)
+	if res.Moved || res.To != app.StagePlanning {
+		t.Fatalf("model planning output must stay pending user approval: %+v", res)
 	}
 	current, _ := mgr.Current()
-	if current.Stage != app.StageExecution || current.ExpectedAction != app.ExpectedLLMResponse {
-		t.Fatalf("manager did not persist transition: %+v", current)
-	}
-	if len(current.Plan) != 1 || current.Plan[0] != "p" || len(current.AcceptanceCriteria) != 1 || current.AcceptanceCriteria[0] != "c" {
-		t.Fatalf("planning output not persisted: %+v", current)
+	if current.Stage != app.StagePlanning {
+		t.Fatalf("state moved unexpectedly: %+v", current)
 	}
 }
 
@@ -71,7 +77,7 @@ func TestTransitionGateRejectsStageMismatch(t *testing.T) {
 	}
 	gate := &TransitionGate{Tasks: mgr}
 	parsed := ParsedResponse{Stage: app.StageExecution, Planning: &PlanningOutput{AcceptanceCriteria: []string{"c"}, Plan: []string{"p"}, Readiness: "ready_for_execution_proposal"}}
-	_, err = gate.Apply(state, parsed, TransitionOptions{AutoApprovePlanning: true})
+	_, err = gate.Apply(state, parsed, TransitionOptions{})
 	if err == nil || app.AsError(err).Code != "stage_mismatch" {
 		t.Fatalf("want stage_mismatch, got %v", err)
 	}
@@ -80,16 +86,21 @@ func TestTransitionGateRejectsStageMismatch(t *testing.T) {
 func TestTransitionGateRejectsStaleTaskStateBeforeApply(t *testing.T) {
 	dir := t.TempDir()
 	mgr := tasks.NewManager(dir)
-	stale, err := mgr.Start("task")
+	_, err := mgr.Start("task")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := mgr.Move(app.StageExecution); err != nil {
+	stale, err := mgr.Move(app.StageExecution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := issueGateEvidence(t, dir, stale, "session_test", "go test ./...")
+	if _, err := mgr.SetStep("changed concurrently"); err != nil {
 		t.Fatal(err)
 	}
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StagePlanning, Planning: &PlanningOutput{Summary: "s", AcceptanceCriteria: []string{"c"}, Plan: []string{"p"}, Readiness: "ready_for_execution_proposal"}}
-	_, err = gate.Apply(stale, parsed, TransitionOptions{AutoApprovePlanning: true})
+	parsed := ParsedResponse{Stage: app.StageExecution, TrustedEvidence: evidence, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"go test ./..."}, NextSignal: "ready_for_validation"}}
+	_, err = gate.Apply(stale, parsed, TransitionOptions{SessionID: "session_test"})
 	if err == nil || app.AsError(err).Code != "task_changed_before_transition" {
 		t.Fatalf("want task_changed_before_transition, got %v", err)
 	}
@@ -104,9 +115,12 @@ func TestTransitionGateForbiddenProposalPreservesState(t *testing.T) {
 	}
 	gate := &TransitionGate{Tasks: mgr}
 	parsed := ParsedResponse{Stage: app.StagePlanning, Planning: &PlanningOutput{Readiness: "ready_for_execution_proposal"}}
-	_, err = gate.Apply(state, parsed, TransitionOptions{AutoApprovePlanning: true})
-	if err == nil {
-		t.Fatal("expected precondition error")
+	res, err := gate.Apply(state, parsed, TransitionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Moved {
+		t.Fatal("model planning output must not move without user approval")
 	}
 	current, _ := mgr.Current()
 	if current.Stage != app.StagePlanning {
@@ -120,8 +134,9 @@ func TestTransitionGateExecutionToValidation(t *testing.T) {
 	state, _ := mgr.Start("task")
 	state, _ = mgr.Move(app.StageExecution)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageExecution, TrustedEvidence: []string{NewTrustedEvidence("go test ./...", 0, "ok")}, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"not run"}, NextSignal: "ready_for_validation"}}
-	res, err := gate.Apply(state, parsed, TransitionOptions{})
+	evidence := issueGateEvidence(t, dir, state, "session_test", "go test ./...")
+	parsed := ParsedResponse{Stage: app.StageExecution, TrustedEvidence: evidence, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"not run"}, NextSignal: "ready_for_validation"}}
+	res, err := gate.Apply(state, parsed, TransitionOptions{SessionID: "session_test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +150,16 @@ func TestTransitionGateValidationToDone(t *testing.T) {
 	mgr := tasks.NewManager(dir)
 	state, _ := mgr.Start("task")
 	state, _ = mgr.Move(app.StageExecution)
+	evidence := issueGateEvidence(t, dir, state, "session_test", "go test ./...")
+	state, _ = mgr.RecordAcceptedExecution("execution accepted", evidence)
 	state, _ = mgr.Move(app.StageValidation)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: []string{NewTrustedEvidence("go test ./...", 0, "ok")}, Validation: &ValidationOutput{
+	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: evidence, Validation: &ValidationOutput{
 		Findings:     []ValidationFinding{},
 		PassedChecks: []string{"tool evidence available"},
 		Verdict:      "ready_for_done",
 	}}
-	res, err := gate.Apply(state, parsed, TransitionOptions{})
+	res, err := gate.Apply(state, parsed, TransitionOptions{SessionID: "session_test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,14 +174,16 @@ func TestTransitionGateValidationToDoneRequiresCriteriaMatchedEvidence(t *testin
 	state, _ := mgr.Start("task")
 	state, _ = mgr.AddCriteria("go test ./... passes")
 	state, _ = mgr.Move(app.StageExecution)
+	evidence := issueGateEvidence(t, dir, state, "session_test", "go version")
+	state, _ = mgr.RecordAcceptedExecution("execution accepted", evidence)
 	state, _ = mgr.Move(app.StageValidation)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "ok")}, Validation: &ValidationOutput{
+	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: evidence, Validation: &ValidationOutput{
 		Findings:     []ValidationFinding{},
 		PassedChecks: []string{"tool evidence available"},
 		Verdict:      "ready_for_done",
 	}}
-	_, err := gate.Apply(state, parsed, TransitionOptions{})
+	_, err := gate.Apply(state, parsed, TransitionOptions{SessionID: "session_test"})
 	if err == nil || app.AsError(err).Code != "transition_precondition_failed" {
 		t.Fatalf("want transition_precondition_failed, got %v", err)
 	}

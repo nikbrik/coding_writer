@@ -110,6 +110,9 @@ func TestDoneStageUsesExpectedNoneNoStatusDone(t *testing.T) {
 	if _, err := mgr.Move(app.StageValidation); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := mgr.RecordAcceptedValidation("ready_for_done", nil); err != nil {
+		t.Fatal(err)
+	}
 	state, err := mgr.Move(app.StageDone)
 	if err != nil {
 		t.Fatal(err)

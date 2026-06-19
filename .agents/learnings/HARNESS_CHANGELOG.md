@@ -4,6 +4,18 @@
 > Правило: только append-only записи между маркерами.
 
 <!-- HARNESS-CHANGELOG:START -->
+## 2026-06-19 | semantic intent routing rule
+**Applied**: RULE-001, LEARNING-001
+**Files**: .agents/rules/validation.md, .agents/learnings/LEARNINGS.md
+**Reason**: User correction exposed `autoVerificationIntent` keyword routing; product free-text intent/readiness decisions must use structured semantic validation.
+
+---
+## 2026-06-19 | live scenario provider rule
+**Applied**: RULE-001
+**Files**: .agents/rules/validation.md
+**Reason**: Prevent fake-provider or wrong-model substitutions when the user requests a real live/manual scenario.
+
+---
 ## 2026-06-19 | semantic validation rule
 **Applied**: RULE-001
 **Files**: .agents/rules/always.md, .agents/rules/validation.md

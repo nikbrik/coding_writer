@@ -8,7 +8,7 @@
 
 ## 1.1. Canonical contract
 
-Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, Day 13, and Day 14.
+Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, Day 13, Day 14, and Day 15.
 
 ### Task state
 
@@ -22,7 +22,7 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 ### Commands
 
 - top-level and slash commands must describe one canonical command tree;
-- P0 includes only commands needed for the mandatory Day 11/12/13 demo path and smoke tests.
+- P0 includes only commands needed for the mandatory Day 11/12/13/14/15 demo path and smoke tests.
 
 ### Memory layers
 
@@ -36,13 +36,18 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - `planning` uses planner role, `execution` uses implementer role, `validation` uses strict reviewer/QA role, `done` uses terminal summarizer role.
 - LLM may propose signals, findings or transition readiness, but application code owns state mutation.
 - Deterministic process control must not bypass Day 11 memory proposal confirmation or Day 12 profile attachment.
+- Lifecycle gate owns Day 15 stage admission: planning approval, accepted execution, trusted evidence, accepted validation and terminal done.
+- Prompt improver may strengthen task prompts before provider calls, but must preserve the user objective and trusted stage policy.
+- Planning swarm creates specialist proposals plus one merged final plan before execution approval.
+- Microtask agents provide role-scoped execution/review calls with audit roles, not untracked generic provider calls.
+- Trusted evidence store records app-issued verification evidence; provider-visible evidence is bounded and hash-backed.
 
 ### UX hard gate: no internals exposed as required flow
 
 - User-facing demo and normal product flows MUST be intent-driven: the user states the goal, and application code creates tasks, picks `ActionKind`, advances stages, persists current step, and applies validated transitions.
 - Required manual control of internal state is forbidden. A feature is not accepted if the happy path requires commands such as `/task start`, `/task move`, `/task step`, `/task expect`, storage edits, raw JSON edits, direct memory file edits, or other implementation-detail manipulation.
 - Internal/debug/admin commands may exist only as optional inspection, recovery, or deterministic test helpers. They MUST NOT be the only way to complete a user-facing scenario.
-- Every Day 11/12/13/14 acceptance scenario MUST have a modern scriptable path using natural user intent plus explicit user confirmations where product semantics require them, for example memory apply or trusted verification evidence.
+- Every Day 11/12/13/14/15 acceptance scenario MUST have a modern scriptable path using natural user intent plus explicit user confirmations where product semantics require them, for example memory apply or trusted verification evidence.
 - Tests and manual docs MUST fail/reject scenarios that prove only manual FSM manipulation instead of agent-driven behavior.
 
 ### Invariant control
@@ -56,11 +61,12 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - Semantic policy decisions use out-of-band LLM structured validation; keyword lists or simple regexes are not acceptable final validators for invariant conflicts.
 - Custom/user invariants are privileged local policy data with source/provenance labels, bounded lengths/counts, and provider-visible disclosure.
 
-Implementation status on 2026-06-19: this architecture is implemented in the current Go codebase. The normal chat path goes through `internal/process.ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, structural validators, semantic validators, bounded retry, `TransitionGate`, `ProcessAuditStore`, `internal/prompting.Builder`, `internal/memory.Classifier`, and `internal/providers.OpenRouterProvider` or `FakeProvider`.
+Implementation status on 2026-06-19: this architecture is implemented in the current Go codebase. The normal chat path goes through `internal/process.ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, structural validators, semantic validators, bounded retry, `TransitionGate`, `LifecycleGate`, prompt improver, planning swarm, microtask agent runner, trusted evidence store, `ProcessAuditStore`, `internal/prompting.Builder`, `internal/memory.Classifier`, and `internal/providers.OpenRouterProvider` or `FakeProvider`. User-facing chat renders a human transcript by default; raw stage JSON is reserved for `--json` automation/debug output.
 
 Главные блоки:
 
 - CLI interface;
+- human chat renderer;
 - OpenRouter provider;
 - memory manager;
 - memory classifier;
@@ -71,6 +77,11 @@ Implementation status on 2026-06-19: this architecture is implemented in the cur
 - prompt builder;
 - response validator;
 - transition gate;
+- lifecycle gate;
+- prompt improver;
+- planning swarm;
+- microtask agent runner;
+- trusted evidence store;
 - response loop;
 - invariant checker;
 - invariant manager.
@@ -153,9 +164,13 @@ internal/process/
   action_router.go
   audit_event.go
   audit_store.go
+  agent_runner.go
   controller.go
   execution_validator.go
+  lifecycle_gate.go
   planning_validator.go
+  planning_swarm.go
+  prompt_improver.go
   validation_validator.go
   done_validator.go
   response_parser.go
@@ -165,6 +180,7 @@ internal/process/
   stage_policy_registry.go
   stage_prompt_factory.go
   transition_gate.go
+  trusted_evidence_store.go
   validator_runner.go
 
 internal/prompting/
@@ -622,6 +638,7 @@ Responsibilities:
 - вызвать provider только после hard gates;
 - перед accepted persistence запустить parser and response validators;
 - передать transition proposal в `TransitionGate`, а не применять его из LLM text.
+- для Day 15 trusted verification route сначала получить strict semantic intent signal, затем передать criteria-matched evidence в `LifecycleGate`; reviewer-agent audit обязателен, но final state decision остаётся за application gate.
 
 `StagePolicyRegistry` хранит trusted policies:
 
@@ -1197,13 +1214,14 @@ Latest exchange
 Пример proposal:
 
 ```text
-Memory proposal:
-1. [work] requirement: CLI должен поддерживать выбор модели OpenRouter.
-   reason: требование текущей задачи
-2. [long] preference: Пользователь предпочитает Go для MVP.
-   reason: стабильное техническое предпочтение
-3. [ignore] smalltalk: Пользователь сказал "спасибо".
-   reason: не влияет на будущие ответы
+== Memory proposal ==
+id: proposal_...
+- pmem_... [work] pending requirement: CLI должен поддерживать выбор модели OpenRouter.
+- pmem_... [long] pending preference: Пользователь предпочитает Go для MVP.
+- pmem_... [ignore] pending smalltalk: Пользователь сказал "спасибо".
+
+== Next ==
+- CLI: assistant memory apply --proposal proposal_... --accept all
 ```
 
 Это основной механизм Day 11. Так можно проверить не только итоговые файлы памяти, но и сам выбор: что LLM решила сохранить, куда и почему.
@@ -1339,7 +1357,7 @@ MVP commands:
 /task resume
 ```
 
-Current command boundary: slash `/task plan` and `/task criteria` are implemented and mutate task plan/acceptance criteria through `TaskStateManager`. `/task stage`, `/task decision`, `/task done`, and top-level `assistant task plan|criteria|decision|stage|done` are not implemented in current code.
+Current command boundary: slash `/task plan` and `/task criteria` plus top-level `assistant task plan|criteria` are implemented and mutate task plan/acceptance criteria through `TaskStateManager`. `/task stage`, `/task decision`, `/task done`, and top-level `assistant task decision|stage|done` are not implemented in current code. Day 15 acceptance must use chat-driven lifecycle with semantic intent signal plus auto verification from approved plan/criteria, not these debug/recovery commands.
 
 Если пользователь просит запрещённый переход, manager возвращает ошибку и не меняет `current.json`.
 
@@ -1609,7 +1627,7 @@ Additional P0 tests:
 - `TestProcessSuccessfulValidationTransitionsToDone`;
 - `TestProcessRejectedOutputDoesNotSaveAcceptedShortMemory`.
 
-Day 11/12/13 are mandatory acceptance criteria and may not be bypassed.
+Day 11/12/13/14/15 are mandatory acceptance criteria and may not be bypassed.
 
 ## 16. Definition of ready
 
@@ -1619,7 +1637,7 @@ Historical pre-implementation readiness is satisfied in current code. The contra
 - explicit P0 vertical slice;
 - env-only API key rule for MVP;
 - storage/privacy/gatekeeper policies;
-- deterministic test matrix for Day 11/12/13.
+- deterministic test matrix for Day 11/12/13/14 plus Day 15 manual chat-driven proof.
 
 Security tests:
 
@@ -1629,7 +1647,7 @@ Security tests:
 
 ## 16. Implementation order
 
-Current status: items 1-20 are implemented and covered by unit/acceptance tests. Fake-provider CLI smoke is covered by `TestCLIP0DayFlowsUseScriptableCommands`; live OpenRouter smoke remains manual because it needs `OPENROUTER_API_KEY`.
+Current status: items 1-20 are implemented and covered by unit/acceptance tests. Fake-provider CLI smoke is covered by deterministic tests; live Day 15 proof remains manual because it needs `OPENROUTER_API_KEY`, and the recorded successful scenario uses OpenRouter model `google/gemini-3.1-flash-lite` with chat-first human output.
 
 1. Project skeleton, config loading, and storage-root/permission policy.
 2. Safe storage primitives: path validation, symlink rejection, atomic JSON writes, locked JSONL append.
@@ -1647,8 +1665,9 @@ Current status: items 1-20 are implemented and covered by unit/acceptance tests.
 14. Long-term memory from accepted `[long]` proposals.
 15. Model selection UI and `/model` command.
 16. Non-interactive/JSON smoke commands and exit-code contract.
-17. Tests for Day 11, Day 12, Day 13 acceptance criteria.
+17. Tests for Day 11, Day 12, Day 13, and Day 14 acceptance criteria.
 18. Deterministic process-control loop: ProcessController, StagePolicyRegistry, stage-specific prompts, ResponseValidator, TransitionGate and audit events.
+19. Day 15 lifecycle gate, prompt improver, planning swarm, microtask agent runner, trusted evidence store and manual chat-driven proof.
 
 ## 17. Future extensions
 

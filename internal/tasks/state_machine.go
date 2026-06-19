@@ -64,8 +64,17 @@ func ValidateState(state app.TaskState) error {
 	if state.Stage == app.StageDone && state.Status != app.TaskStatusActive {
 		return app.NewError(app.CategoryValidation, "invalid_task_state", "done task must remain active terminal state", nil)
 	}
+	if state.Stage == app.StageDone && strings.TrimSpace(state.LastValidationID) == "" {
+		return app.NewError(app.CategoryValidation, "invalid_task_state", "done task requires accepted validation record", nil)
+	}
+	if state.Stage == app.StageDone && strings.TrimSpace(state.ValidationStatus) != "ready_for_done" {
+		return app.NewError(app.CategoryValidation, "invalid_task_state", "done task requires ready_for_done validation status", nil)
+	}
 	if state.Stage != app.StageDone && state.ExpectedAction == app.ExpectedNone {
 		return app.NewError(app.CategoryValidation, "invalid_task_state", "expected_action none is only valid for done task", nil)
+	}
+	if state.Stage == app.StageExecution && strings.TrimSpace(state.ValidationStatus) != "" && strings.TrimSpace(state.ValidationStatus) != "needs_execution_fixes" {
+		return app.NewError(app.CategoryValidation, "invalid_task_state", "execution task has invalid validation status", nil)
 	}
 	return nil
 }

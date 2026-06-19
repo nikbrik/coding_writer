@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,22 +30,26 @@ type ProcessController struct {
 	Builder            PromptBuilder
 	PolicyRegistry     *StagePolicyRegistry
 	TransitionGate     *TransitionGate
+	LifecycleGate      *LifecycleGate
 	RetryController    *RetryController
 	AuditStore         *AuditStore
 	SemanticValidator  *SemanticValidator
 	InvariantValidator *SemanticValidator
+	PromptImprover     *PromptImprover
+	PlanningSwarm      *PlanningSwarm
+	AgentRunner        *AgentRunner
 }
 
 // ExchangeInput controls a single process-controlled exchange.
 type ExchangeInput struct {
-	SessionID              string
-	Input                  string
-	RenderOnly             bool
-	ActionKind             ActionKind
-	AutoApproveTransitions bool
-	TrustedEvidence        []string
-	RequireMemoryProposal  bool
-	SkipSemanticIntent     bool
+	SessionID             string
+	Input                 string
+	RenderOnly            bool
+	ActionKind            ActionKind
+	TrustedEvidence       []string
+	RequireMemoryProposal bool
+	SkipSemanticIntent    bool
+	SkipPromptImprovement bool
 }
 
 // RunExchange executes the gated process loop.
@@ -56,7 +61,8 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if sessionID == "" {
 		sessionID = app.NewID("session")
 	}
-	if validation.HasSecret(input.Input) {
+	originalInput := input.Input
+	if validation.HasSecret(originalInput) {
 		_ = c.saveAudit(sessionID, nil, "", ActionAnswerQuestion, "rejected", []string{"secret-like input blocked"}, "", "", c.Model)
 		return nil, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like input cannot be sent to provider", nil)
 	}
@@ -79,9 +85,22 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	taskPtr := preflight.Task
 	stage := preflight.Stage
 	action := preflight.Action
+	improvedPrompt := ""
+	preWarnings := []string{}
+	if !input.RenderOnly && !input.SkipPromptImprovement && strings.TrimSpace(originalInput) != "" {
+		improved, err := c.improvePrompt(ctx, sessionID, originalInput, taskPtr)
+		if err != nil {
+			_ = c.saveAudit(sessionID, taskPtr, stage, action, "prompt_improvement_skipped", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
+			preWarnings = append(preWarnings, "prompt improvement skipped: "+app.AsError(err).Code)
+		} else {
+			improvedPrompt = improved
+		}
+	} else if input.SkipPromptImprovement {
+		_ = c.saveAudit(sessionID, taskPtr, stage, action, "prompt_improvement_skipped", []string{"explicit internal skip"}, "", "", c.Model)
+	}
 	semanticSignal := "none"
 	if c.Invariants != nil {
-		violations, err := c.checkInvariantPolicy(ctx, sessionID, "input", input.Input, taskPtr, stage, action, !input.RenderOnly)
+		violations, err := c.checkInvariantPolicy(ctx, sessionID, "input", originalInput, taskPtr, stage, action, !input.RenderOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -89,6 +108,17 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			invErr := invariants.Error(violations)
 			_ = c.saveAudit(sessionID, taskPtr, stage, action, "rejected", invariantAuditMessages(violations), "", "", c.Model)
 			return nil, invErr
+		}
+		if strings.TrimSpace(input.Input) != strings.TrimSpace(originalInput) {
+			violations, err = c.checkInvariantPolicy(ctx, sessionID, "input", input.Input, taskPtr, stage, action, !input.RenderOnly)
+			if err != nil {
+				return nil, err
+			}
+			if len(violations) > 0 {
+				invErr := invariants.Error(violations)
+				_ = c.saveAudit(sessionID, taskPtr, stage, action, "rejected", invariantAuditMessages(violations), "", "", c.Model)
+				return nil, invErr
+			}
 		}
 	}
 	var autoTransition *TransitionResult
@@ -112,14 +142,19 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if taskPtr != nil && preflight.AutoStage != "" {
 		from := taskPtr.Stage
 		if !input.RenderOnly {
-			moved, err := c.Tasks.Move(preflight.AutoStage)
+			movedRes, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+				State:  *taskPtr,
+				Source: TransitionSourceSystemReplan,
+				Signal: SignalPlanningRequired,
+				Reason: preflight.AutoReason,
+			})
 			if err != nil {
 				_ = c.saveAudit(sessionID, taskPtr, from, action, "transition_failed", nil, from, preflight.AutoStage, c.Model, auditError(err), auditTransitionReason(preflight.AutoReason))
 				return nil, err
 			}
-			autoTransition = &TransitionResult{Moved: true, From: from, To: moved.Stage, Reason: preflight.AutoReason, State: moved}
-			_ = c.saveAudit(sessionID, taskPtr, from, action, "transitioned", nil, from, moved.Stage, c.Model, auditTransitionReason(preflight.AutoReason))
-			taskPtr = &moved
+			autoTransition = &movedRes
+			_ = c.saveAudit(sessionID, taskPtr, from, action, "transitioned", nil, from, movedRes.State.Stage, c.Model, auditTransitionReason(preflight.AutoReason), auditTransitionSource(TransitionSourceSystemReplan), auditTransitionSignal(SignalPlanningRequired))
+			taskPtr = &movedRes.State
 		} else {
 			virtual := *taskPtr
 			virtual.Stage = preflight.AutoStage
@@ -128,6 +163,64 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		stage = taskPtr.Stage
 		action = ResolveActionKind(input.Input, stage, taskPtr.ExpectedAction)
+	}
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && len(input.TrustedEvidence) > 0 && isReadyForExecutionReviewIntent(input.Input) {
+		from := taskPtr.Stage
+		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForValidation,
+			TrustedEvidence: input.TrustedEvidence,
+			Reason:          sessionID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		_ = c.saveAudit(sessionID, &transition.State, from, ActionSummarizeExecution, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForValidation), auditEvidenceRefs(input.TrustedEvidence))
+		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
+	}
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isDoneValidationSignal(input.Input) {
+		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input)
+		if err != nil {
+			return nil, err
+		}
+		from := taskPtr.Stage
+		parsedValidation := trustedValidationParsed(input.TrustedEvidence)
+		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForDone,
+			Parsed:          parsedValidation,
+			TrustedEvidence: input.TrustedEvidence,
+			Reason:          sessionID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		_ = c.saveAudit(sessionID, &transition.State, from, ActionReviewOutput, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(input.TrustedEvidence))
+		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition, Warnings: append(preWarnings, reviewWarnings...)}, nil
+	}
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && len(input.TrustedEvidence) > 0 && isValidationReviewIntent(input.Input) {
+		req := LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForDone,
+			TrustedEvidence: input.TrustedEvidence,
+			Reason:          sessionID,
+		}
+		if !c.lifecycle().trustedEvidenceSatisfiesState(*taskPtr, req) {
+			return nil, app.NewError(app.CategoryValidation, "transition_precondition_failed", "trusted verification does not satisfy acceptance criteria", nil)
+		}
+		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, input)
+		if err != nil {
+			return nil, err
+		}
+		state, err := c.Tasks.RecordAcceptedValidation("ready_for_done", input.TrustedEvidence)
+		if err != nil {
+			return nil, err
+		}
+		_ = c.saveAudit(sessionID, &state, app.StageValidation, ActionReviewOutput, "accepted", nil, "", "", c.Model, auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(input.TrustedEvidence))
+		return &ExchangeResult{Answer: trustedValidationReviewAnswer(), Model: c.Model, Proposal: noSaveProposal(sessionID), Warnings: append(preWarnings, reviewWarnings...)}, nil
 	}
 	if !input.RenderOnly && c.SemanticValidator != nil && !input.SkipSemanticIntent {
 		deterministicAction := action
@@ -166,6 +259,20 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			}
 		}
 	}
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && semanticSignal != "ready_for_done" && (action == ActionReviewOutput || action == ActionVerifyCriteria) && len(taskPtr.ValidationEvidence) > 0 {
+		reviewInput := input
+		reviewInput.TrustedEvidence = append([]string(nil), taskPtr.ValidationEvidence...)
+		reviewWarnings, err := c.runTrustedEvidenceReviewer(ctx, sessionID, taskPtr, reviewInput)
+		if err != nil {
+			return nil, err
+		}
+		state, err := c.Tasks.RecordAcceptedValidation("ready_for_done", reviewInput.TrustedEvidence)
+		if err != nil {
+			return nil, err
+		}
+		_ = c.saveAudit(sessionID, &state, app.StageValidation, ActionReviewOutput, "accepted", nil, "", "", c.Model, auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(reviewInput.TrustedEvidence))
+		return &ExchangeResult{Answer: trustedValidationReviewAnswer(), Model: c.Model, Proposal: noSaveProposal(sessionID), Warnings: append(preWarnings, reviewWarnings...)}, nil
+	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.PendingPlanning != nil {
 		if semanticSignal == "reject_planning" || c.SemanticValidator == nil && isPlanningRejection(input.Input) {
 			state, err := c.Tasks.RejectPendingPlanningProposal()
@@ -177,51 +284,86 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		if action == ActionProposeTransition {
 			from := taskPtr.Stage
-			state, err := c.Tasks.ApprovePendingPlanningProposal()
+			approvedState, err := c.acceptPlanningApproval(ctx, sessionID, originalInput, taskPtr)
 			if err != nil {
 				return nil, err
 			}
-			transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "pending planning approved", State: state}
-			_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-			return c.continueAfterPlanningApproval(ctx, input, sessionID, transition)
+			taskPtr = &approvedState
+			transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+				State:           *taskPtr,
+				Source:          TransitionSourceUserApproval,
+				Signal:          SignalApprovePlanning,
+				TrustedEvidence: input.TrustedEvidence,
+			})
+			if err != nil {
+				return nil, err
+			}
+			_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceUserApproval), auditTransitionSignal(SignalApprovePlanning))
+			return c.continueAfterPlanningApproval(ctx, input, sessionID, &transition)
 		}
 	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StagePlanning && taskPtr.PendingPlanning == nil && action == ActionProposeTransition && hasRunnablePlanningState(*taskPtr) {
 		from := taskPtr.Stage
-		state, err := c.Tasks.MoveWithPlanningOutput(taskPtr.Objective, taskPtr.AcceptanceCriteria, taskPtr.Plan, taskPtr.OpenQuestions, app.StageExecution)
+		approvedState, err := c.acceptPlanningApproval(ctx, sessionID, originalInput, taskPtr)
 		if err != nil {
 			return nil, err
 		}
-		transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "current planning approved", State: state}
-		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-		return c.continueAfterPlanningApproval(ctx, input, sessionID, transition)
+		taskPtr = &approvedState
+		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+			State:  *taskPtr,
+			Source: TransitionSourceUserApproval,
+			Signal: SignalApprovePlanning,
+			Reason: "current planning approved",
+		})
+		if err != nil {
+			return nil, err
+		}
+		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceUserApproval), auditTransitionSignal(SignalApprovePlanning))
+		return c.continueAfterPlanningApproval(ctx, input, sessionID, &transition)
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (semanticSignal == "ready_for_validation" || c.SemanticValidator == nil && isReadyForValidationSignal(input.Input)) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (semanticSignal == "ready_for_validation" || len(input.TrustedEvidence) > 0 && isReadyForExecutionReviewIntent(input.Input)) {
 		from := taskPtr.Stage
-		state, err := c.Tasks.Move(app.StageValidation)
+		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForValidation,
+			TrustedEvidence: input.TrustedEvidence,
+			Reason:          sessionID,
+		})
 		if err != nil {
 			return nil, err
 		}
-		transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "user signaled ready for validation", State: state}
-		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForValidation), auditEvidenceRefs(input.TrustedEvidence))
+		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (semanticSignal == "ready_for_done" || c.SemanticValidator == nil && isDoneValidationSignal(input.Input)) && trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && semanticSignal == "ready_for_done" {
 		from := taskPtr.Stage
-		state, err := c.Tasks.Move(app.StageDone)
+		parsedValidation := &ParsedResponse{
+			Stage:           app.StageValidation,
+			ActionKind:      ActionReviewOutput,
+			TrustedEvidence: append([]string(nil), input.TrustedEvidence...),
+			Validation: &ValidationOutput{
+				Findings:        []ValidationFinding{},
+				PassedChecks:    []string{"trusted verification evidence available"},
+				MissingEvidence: []string{},
+				ResidualRisks:   []string{},
+				Verdict:         "ready_for_done",
+			},
+		}
+		transition, err := c.lifecycle().Apply(LifecycleTransitionRequest{
+			State:           *taskPtr,
+			Source:          TransitionSourceTrustedVerification,
+			Signal:          SignalReadyForDone,
+			Parsed:          parsedValidation,
+			TrustedEvidence: input.TrustedEvidence,
+			Reason:          sessionID,
+		})
 		if err != nil {
 			return nil, err
 		}
-		transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "trusted verification completed", State: state}
-		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+		_ = c.saveAudit(sessionID, &transition.State, from, action, "transitioned", nil, from, transition.State.Stage, c.Model, auditTransitionReason(transition.Reason), auditTransitionSource(TransitionSourceTrustedVerification), auditTransitionSignal(SignalReadyForDone), auditEvidenceRefs(input.TrustedEvidence))
+		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: &transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (semanticSignal == "ready_for_done" || c.SemanticValidator == nil && isDoneValidationSignal(input.Input)) && hasTrustedEvidence(input.TrustedEvidence) && !trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
-		err := app.NewError(app.CategoryValidation, "transition_precondition_failed", "trusted verification does not satisfy acceptance criteria", nil)
-		_ = c.saveAudit(sessionID, taskPtr, taskPtr.Stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
-		return nil, err
-	}
-
 	profile, err := c.activeProfile()
 	if err != nil {
 		return nil, err
@@ -283,6 +425,14 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if err != nil {
 		return nil, err
 	}
+	if strings.TrimSpace(improvedPrompt) != "" && strings.TrimSpace(improvedPrompt) != strings.TrimSpace(originalInput) {
+		messages = append(messages, app.ChatMessage{
+			ID:        app.NewID("msg"),
+			Role:      app.RoleSystem,
+			Content:   "Prompt improvement advisory (trusted as rewrite guidance, not as new user requirements): " + validation.EscapeUntrusted(improvedPrompt),
+			CreatedAt: time.Now().UTC(),
+		})
+	}
 
 	rendered := renderMessages(messages)
 	result := &ExchangeResult{
@@ -290,6 +440,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		Messages:       messages,
 		RenderedPrompt: rendered,
 		Transition:     autoTransition,
+		Warnings:       append([]string(nil), preWarnings...),
 	}
 
 	if input.RenderOnly {
@@ -317,12 +468,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "provider_call", nil, "", "", c.Model, auditRetry(attempt)); auditErr != nil {
 			return result, auditErr
 		}
-		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
-			Purpose:  providers.PurposeChat,
-			Model:    c.Model,
-			Messages: messages,
-			JSONMode: RequiresSchema(action),
-		})
+		res, err := c.completePrimary(ctx, sessionID, taskPtr, stage, action, input, messages)
 		if err != nil {
 			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", nil, "", "", c.Model, auditError(err)); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -428,7 +574,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 
 	var transitionCandidate *TransitionResult
 	if c.TransitionGate != nil && taskPtr != nil && action != ActionAnswerQuestion {
-		transition, err := c.TransitionGate.Check(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
+		transition, err := c.TransitionGate.Check(*taskPtr, parsed, TransitionOptions{SessionID: sessionID})
 		if err != nil {
 			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", []string{app.AsError(err).Message}, "", "", result.Model); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -441,7 +587,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	}
 
 	if transitionCandidate != nil {
-		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{AutoApprovePlanning: input.AutoApproveTransitions})
+		transition, err := c.TransitionGate.Apply(*taskPtr, parsed, TransitionOptions{SessionID: sessionID})
 		if err != nil {
 			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transition_failed", nil, transitionCandidate.From, transitionCandidate.To, result.Model, auditError(err), auditTransitionReason(transitionCandidate.Reason)); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -449,13 +595,13 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			return result, err
 		} else if transition.Moved {
 			result.Transition = &transition
-			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transitioned", nil, transition.From, transition.To, result.Model, auditTransitionReason(transition.Reason)); auditErr != nil {
+			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "transitioned", nil, transition.From, transition.To, result.Model, auditTransitionReason(transition.Reason), auditEvidenceRefs(input.TrustedEvidence)); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 			}
 			taskPtr = &transition.State
 		}
 	}
-	if transitionCandidate == nil && taskPtr != nil && stage == app.StagePlanning && parsed.Planning != nil && parsed.Planning.Readiness == "ready_for_execution_proposal" && !input.AutoApproveTransitions {
+	if transitionCandidate == nil && taskPtr != nil && stage == app.StagePlanning && parsed.Planning != nil && parsed.Planning.Readiness == "ready_for_execution_proposal" {
 		state, err := c.Tasks.SavePendingPlanningProposal(parsed.Planning.Summary, parsed.Planning.AcceptanceCriteria, parsed.Planning.Plan, parsed.Planning.OpenQuestions)
 		if err != nil {
 			return result, err
@@ -470,7 +616,17 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		taskPtr = &state
 	}
 	if transitionCandidate == nil && taskPtr != nil && stage == app.StageExecution && parsed.Execution != nil {
+		if _, err := c.Tasks.RecordAcceptedExecution(parsed.Execution.Summary, input.TrustedEvidence); err != nil {
+			return result, err
+		}
 		state, err := c.Tasks.SetExecutionProgress(parsed.Execution.CurrentStep, parsed.Execution.NextStep, parsed.Execution.CompletedSteps)
+		if err != nil {
+			return result, err
+		}
+		taskPtr = &state
+	}
+	if transitionCandidate == nil && taskPtr != nil && stage == app.StageValidation && parsed.Validation != nil {
+		state, err := c.Tasks.RecordAcceptedValidation(parsed.Validation.Verdict, input.TrustedEvidence)
 		if err != nil {
 			return result, err
 		}
@@ -481,7 +637,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	if pausedGeneric {
 		memoryTaskID = ""
 	}
-	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, memoryTaskID, input.Input, lastRaw)
+	userRecord, assistantRecord, err := c.Memory.SaveShortExchange(ctx, sessionID, profile.ID, memoryTaskID, originalInput, lastRaw)
 	if err != nil {
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "persistence_failed", nil, "", "", result.Model, auditError(err)); auditErr != nil {
 			result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
@@ -514,7 +670,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		SessionID:          sessionID,
 		UserMessageID:      userRecord.ID,
 		AssistantMessageID: assistantRecord.ID,
-		UserMessage:        input.Input,
+		UserMessage:        originalInput,
 		AssistantMessage:   lastRaw,
 		Profile:            profile,
 		Task:               classifierTask,
@@ -569,7 +725,6 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker. Не возвращай только progress metadata."
 	next.RenderOnly = false
 	next.ActionKind = ActionExecutePlanStep
-	next.AutoApproveTransitions = false
 	next.TrustedEvidence = nil
 	next.SkipSemanticIntent = true
 	result, err := c.RunExchange(ctx, next)
@@ -593,7 +748,6 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker."
 		next.ActionKind = ActionExecutePlanStep
 		next.TrustedEvidence = nil
-		next.AutoApproveTransitions = false
 		more, err := c.RunExchange(ctx, next)
 		if err != nil {
 			current.Warnings = append(current.Warnings, "execution auto-continue stopped: "+app.AsError(err).Code)
@@ -898,6 +1052,9 @@ func constrainSemanticActionToContext(stage app.TaskStage, deterministic, semant
 	if stage == "" {
 		return deterministic
 	}
+	if stage == app.StageExecution && deterministic == ActionSummarizeExecution {
+		return deterministic
+	}
 	if semantic.IsAllowedIn(stage) {
 		return semantic
 	}
@@ -938,7 +1095,36 @@ func isDoneValidationSignal(input string) bool {
 	if hasExplicitTransitionNegation(lower) {
 		return false
 	}
-	return containsAny(lower, []string{"проверь и заверши", "verify and finish", "verify and complete"})
+	return containsAny(lower, []string{"проверь и заверши", "проверь критерии и заверши", "заверши задачу", "завершить задачу", "verify and finish", "verify and complete", "finish the task", "complete the task"})
+}
+
+func isValidationReviewIntent(input string) bool {
+	lower := strings.ToLower(strings.TrimSpace(input))
+	return containsAny(lower, []string{"проверь", "проверить", "критери", "review", "verify", "validate", "evidence"})
+}
+
+func trustedValidationParsed(evidence []string) *ParsedResponse {
+	return &ParsedResponse{
+		Stage:           app.StageValidation,
+		ActionKind:      ActionReviewOutput,
+		TrustedEvidence: append([]string(nil), evidence...),
+		Validation: &ValidationOutput{
+			Findings:        []ValidationFinding{},
+			PassedChecks:    []string{"trusted verification evidence available"},
+			MissingEvidence: []string{},
+			ResidualRisks:   []string{},
+			Verdict:         "ready_for_done",
+		},
+	}
+}
+
+func trustedValidationReviewAnswer() string {
+	return strings.Join([]string{
+		"Validation review:",
+		"- trusted verification evidence is bound to the current task and satisfies acceptance criteria.",
+		"- verdict: ready for done.",
+		"- task is not closed yet because the user did not ask to finish in this step.",
+	}, "\n")
 }
 
 func isPausedTaskScopedInput(input string) bool {
@@ -951,12 +1137,32 @@ type auditMeta struct {
 	Reason           string
 	RetryCount       int
 	TransitionReason string
+	TransitionSource TransitionSource
+	TransitionSignal TransitionSignal
+	AgentRole        AgentRole
+	MicrotaskID      string
+	EvidenceRefs     []string
 }
 
 func auditError(err error) auditMeta { return auditMeta{Err: err} }
 func auditRetry(count int) auditMeta { return auditMeta{RetryCount: count} }
 func auditTransitionReason(reason string) auditMeta {
 	return auditMeta{TransitionReason: reason}
+}
+func auditReason(reason string) auditMeta {
+	return auditMeta{Reason: reason}
+}
+func auditTransitionSource(source TransitionSource) auditMeta {
+	return auditMeta{TransitionSource: source}
+}
+func auditTransitionSignal(signal TransitionSignal) auditMeta {
+	return auditMeta{TransitionSignal: signal}
+}
+func auditAgent(role AgentRole, microtaskID string) auditMeta {
+	return auditMeta{AgentRole: role, MicrotaskID: microtaskID}
+}
+func auditEvidenceRefs(refs []string) auditMeta {
+	return auditMeta{EvidenceRefs: append([]string(nil), refs...)}
 }
 
 func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, decision string, validatorErrors []string, from, to app.TaskStage, model string, metas ...auditMeta) error {
@@ -981,6 +1187,21 @@ func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, sta
 		if item.TransitionReason != "" {
 			meta.TransitionReason = item.TransitionReason
 		}
+		if item.TransitionSource != "" {
+			meta.TransitionSource = item.TransitionSource
+		}
+		if item.TransitionSignal != "" {
+			meta.TransitionSignal = item.TransitionSignal
+		}
+		if item.AgentRole != "" {
+			meta.AgentRole = item.AgentRole
+		}
+		if item.MicrotaskID != "" {
+			meta.MicrotaskID = item.MicrotaskID
+		}
+		if len(item.EvidenceRefs) > 0 {
+			meta.EvidenceRefs = append([]string(nil), item.EvidenceRefs...)
+		}
 	}
 	if meta.Err != nil {
 		appErr := app.AsError(meta.Err)
@@ -1001,9 +1222,230 @@ func (c *ProcessController) saveAudit(sessionID string, task *app.TaskState, sta
 		TransitionFrom:   string(from),
 		TransitionTo:     string(to),
 		TransitionReason: meta.TransitionReason,
+		TransitionSource: string(meta.TransitionSource),
+		TransitionSignal: string(meta.TransitionSignal),
+		AgentRole:        string(meta.AgentRole),
+		MicrotaskID:      meta.MicrotaskID,
+		EvidenceRefs:     meta.EvidenceRefs,
 		Model:            model,
 		CreatedAt:        time.Now().UTC(),
 	})
+}
+
+func (c *ProcessController) lifecycle() *LifecycleGate {
+	if c.LifecycleGate == nil {
+		c.LifecycleGate = &LifecycleGate{Tasks: c.Tasks}
+	}
+	if c.LifecycleGate.Tasks == nil {
+		c.LifecycleGate.Tasks = c.Tasks
+	}
+	return c.LifecycleGate
+}
+
+func (c *ProcessController) improvePrompt(ctx context.Context, sessionID, original string, task *app.TaskState) (string, error) {
+	if c.PromptImprover == nil {
+		_ = c.saveAudit(sessionID, task, stageOf(task), ActionAnswerQuestion, "prompt_improvement_unavailable", []string{"prompt improver not configured"}, "", "", c.Model)
+		return original, nil
+	}
+	_ = c.saveAudit(sessionID, task, stageOf(task), ActionAnswerQuestion, "prompt_improvement_call", nil, "", "", c.Model)
+	res, err := c.PromptImprover.Improve(ctx, PromptImprovementInput{
+		SessionID: sessionID,
+		Original:  original,
+		Task:      task,
+	})
+	if err != nil {
+		return "", err
+	}
+	if c.SemanticValidator != nil {
+		if err := c.SemanticValidator.ValidatePromptImprovement(ctx, PromptEquivalenceInput{
+			SessionID: sessionID,
+			Original:  original,
+			Improved:  res.Improved,
+			Task:      task,
+		}); err != nil {
+			return "", err
+		}
+	}
+	_ = c.saveAudit(sessionID, task, stageOf(task), ActionAnswerQuestion, "prompt_improvement_accepted", nil, "", "", res.Model)
+	return res.Improved, nil
+}
+
+func (c *ProcessController) acceptPlanningApproval(ctx context.Context, sessionID, userInput string, task *app.TaskState) (app.TaskState, error) {
+	if task == nil {
+		return app.TaskState{}, app.NewError(app.CategoryValidation, "missing_task", "planning approval requires task", nil)
+	}
+	reason := "offline planning approval fallback"
+	if c.SemanticValidator != nil {
+		_ = c.saveAudit(sessionID, task, task.Stage, ActionProposeTransition, "planning_approval_call", nil, "", "", c.Model)
+		approval, err := c.SemanticValidator.ValidatePlanningApproval(ctx, PlanningApprovalInput{
+			SessionID: sessionID,
+			UserInput: userInput,
+			Task:      task,
+		})
+		if err != nil {
+			_ = c.saveAudit(sessionID, task, task.Stage, ActionProposeTransition, "rejected", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
+			return app.TaskState{}, err
+		}
+		if approval.Verdict != "approved" || approval.Confidence < 0.65 {
+			state, err := c.Tasks.RecordPlanningApproval(approval.Verdict, approval.Reason, approval.Confidence, userInput)
+			if err != nil {
+				return app.TaskState{}, err
+			}
+			_ = c.saveAudit(sessionID, &state, state.Stage, ActionProposeTransition, "planning_approval_rejected", []string{approval.Reason}, "", "", c.Model)
+			return app.TaskState{}, app.NewError(app.CategoryValidation, "planning_approval_not_accepted", "planning approval was not accepted", nil)
+		}
+		reason = approval.Reason
+	}
+	state, err := c.Tasks.RecordPlanningApproval("approved", reason, 1, userInput)
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	decision := "planning_approval_accepted"
+	if c.SemanticValidator == nil {
+		decision = "planning_approval_fallback"
+	}
+	_ = c.saveAudit(sessionID, &state, state.Stage, ActionProposeTransition, decision, nil, "", "", c.Model)
+	return state, nil
+}
+
+func (c *ProcessController) runTrustedEvidenceReviewer(ctx context.Context, sessionID string, task *app.TaskState, input ExchangeInput) ([]string, error) {
+	if c == nil || c.AgentRunner == nil || task == nil {
+		return nil, nil
+	}
+	role := AgentRoleReviewer
+	microtaskID := app.NewID("microtask")
+	_ = c.saveAudit(sessionID, task, app.StageValidation, ActionReviewOutput, "agent_call", nil, "", "", c.Model, auditAgent(role, microtaskID), auditEvidenceRefs(input.TrustedEvidence))
+	run, err := c.AgentRunner.Run(ctx, AgentRunInput{
+		SessionID: sessionID,
+		Task:      task,
+		UserInput: input.Input,
+		Microtask: Microtask{
+			ID:          microtaskID,
+			Role:        role,
+			Stage:       app.StageValidation,
+			ActionKind:  ActionReviewOutput,
+			Instruction: "Review the accepted execution using the app-issued trusted evidence summary. Return the validation schema only. Do not claim fixes or implementation changes.",
+			PlanItem:    currentPlanItem(task),
+		},
+		TrustedEvidence: c.reviewerEvidenceContext(task, sessionID, input.TrustedEvidence),
+	})
+	if err != nil {
+		_ = c.saveAudit(sessionID, task, app.StageValidation, ActionReviewOutput, "agent_rejected", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err), auditAgent(role, microtaskID), auditEvidenceRefs(input.TrustedEvidence))
+		return nil, err
+	}
+	parsed, parseErr := Parse(app.StageValidation, ActionReviewOutput, run.Raw)
+	if parseErr != nil {
+		_ = c.saveAudit(sessionID, task, app.StageValidation, ActionReviewOutput, "agent_invalid_json", []string{app.AsError(parseErr).Message}, "", "", run.Model, auditError(parseErr), auditAgent(role, microtaskID), auditEvidenceRefs(input.TrustedEvidence))
+		return nil, parseErr
+	}
+	parsed.TrustedEvidence = append([]string(nil), input.TrustedEvidence...)
+	validatorErrors := RunValidators(parsed)
+	if len(validatorErrors) > 0 {
+		_ = c.saveAudit(sessionID, task, app.StageValidation, ActionReviewOutput, "agent_rejected", validatorErrors, "", "", run.Model, auditAgent(role, microtaskID), auditEvidenceRefs(input.TrustedEvidence))
+		return nil, app.NewError(app.CategoryValidation, "validation_failed", "reviewer output rejected: "+strings.Join(validatorErrors, "; "), nil)
+	}
+	decision := "agent_accepted"
+	warnings := []string{}
+	if parsed.Validation != nil && parsed.Validation.Verdict != "ready_for_done" {
+		decision = "agent_revalidation_accepted"
+		warnings = append(warnings, "reviewer verdict was "+parsed.Validation.Verdict+"; trusted evidence gate kept ready_for_done")
+	}
+	_ = c.saveAudit(sessionID, task, app.StageValidation, ActionReviewOutput, decision, nil, "", "", run.Model, auditAgent(role, microtaskID), auditEvidenceRefs(input.TrustedEvidence))
+	return warnings, nil
+}
+
+func (c *ProcessController) reviewerEvidenceContext(task *app.TaskState, sessionID string, refs []string) []string {
+	if c == nil || c.Tasks == nil || task == nil || strings.TrimSpace(c.Tasks.StorageDir) == "" {
+		return append([]string(nil), refs...)
+	}
+	records, err := NewTrustedEvidenceStore(c.Tasks.StorageDir).Validate(task.ID, sessionID, refs)
+	if err != nil || len(records) == 0 {
+		return append([]string(nil), refs...)
+	}
+	out := make([]string, 0, len(records))
+	for _, rec := range records {
+		out = append(out, fmt.Sprintf("app-issued evidence ref=%s source=%q exit_code=%d sha256=%s", rec.ID, rec.Source, rec.ExitCode, rec.SHA256))
+	}
+	return out
+}
+
+func (c *ProcessController) completePrimary(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, input ExchangeInput, messages []app.ChatMessage) (providers.CompletionResponse, error) {
+	if c.Provider == nil {
+		return providers.CompletionResponse{}, app.NewError(app.CategoryProvider, "missing_provider", "provider is required", nil)
+	}
+	if stage == app.StagePlanning && action != ActionAnswerQuestion && c.PlanningSwarm != nil {
+		c.PlanningSwarm.Audit = func(role AgentRole, microtaskID string, round int, decision string) {
+			_ = c.saveAudit(sessionID, task, stage, action, decision, nil, "", "", c.Model, auditAgent(role, microtaskID), auditReason("planning_round="+intString(round)))
+		}
+		swarm, err := c.PlanningSwarm.Run(ctx, sessionID, task, input.Input)
+		if err != nil {
+			return providers.CompletionResponse{}, err
+		}
+		_ = c.saveAudit(sessionID, task, stage, action, "planning_swarm_final", nil, "", "", c.Model, auditReason(planningSwarmSummary(swarm)))
+		return providers.CompletionResponse{
+			Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: swarm.Raw, CreatedAt: time.Now().UTC()},
+			Model:   c.Model,
+		}, nil
+	}
+	if (stage == app.StageExecution || stage == app.StageValidation) && c.AgentRunner != nil {
+		role := AgentRoleExecutor
+		if stage == app.StageValidation {
+			role = AgentRoleReviewer
+		}
+		microtaskID := app.NewID("microtask")
+		_ = c.saveAudit(sessionID, task, stage, action, "agent_call", nil, "", "", c.Model, auditAgent(role, microtaskID))
+		run, err := c.AgentRunner.Run(ctx, AgentRunInput{
+			SessionID: sessionID,
+			Task:      task,
+			UserInput: input.Input,
+			Microtask: Microtask{
+				ID:          microtaskID,
+				Role:        role,
+				Stage:       stage,
+				ActionKind:  action,
+				Instruction: "Return the stage schema only.",
+				PlanItem:    currentPlanItem(task),
+			},
+			TrustedEvidence: input.TrustedEvidence,
+		})
+		if err != nil {
+			return providers.CompletionResponse{}, err
+		}
+		_ = c.saveAudit(sessionID, task, stage, action, "agent_accepted", nil, "", "", run.Model, auditAgent(role, microtaskID))
+		return providers.CompletionResponse{
+			Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: run.Raw, CreatedAt: time.Now().UTC()},
+			Model:   run.Model,
+		}, nil
+	}
+	return c.Provider.Complete(ctx, providers.CompletionRequest{
+		Purpose:  providers.PurposeChat,
+		Model:    c.Model,
+		Messages: messages,
+		JSONMode: RequiresSchema(action),
+	})
+}
+
+func currentPlanItem(task *app.TaskState) string {
+	if task == nil {
+		return ""
+	}
+	return task.CurrentStep
+}
+
+func intString(value int) string {
+	if value == 0 {
+		return "0"
+	}
+	digits := []byte{}
+	for value > 0 {
+		digits = append([]byte{byte('0' + value%10)}, digits...)
+		value /= 10
+	}
+	return string(digits)
+}
+
+func planningSwarmSummary(result PlanningSwarmResult) string {
+	return "rounds=" + intString(result.Rounds) + ";findings=" + intString(len(result.Findings)) + ";reviews=" + intString(len(result.Reviews))
 }
 
 func errorCategory(err error) string {
@@ -1061,6 +1503,13 @@ func taskID(task *app.TaskState) string {
 		return ""
 	}
 	return task.ID
+}
+
+func stageOf(task *app.TaskState) app.TaskStage {
+	if task == nil {
+		return ""
+	}
+	return task.Stage
 }
 
 func renderMessages(messages []app.ChatMessage) string {

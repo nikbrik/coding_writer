@@ -1,15 +1,15 @@
-# Ручное тестирование Day 11-14
+# Ручное demo-тестирование
 
-Цель: записать 4 отдельных demo acceptance видео, где ассистент выглядит как настоящий CLI coding assistant: получает нормальную маленькую алгоритмическую задачу, планирует, выдает применимый код в `execution`, доводит решение до проверки, и одновременно доказывает требования Day 11, Day 12, Day 13, Day 14.
+Цель: записать 5 отдельных demo acceptance видео, где ассистент выглядит как настоящий CLI coding assistant: получает нормальную маленькую алгоритмическую задачу, планирует, выдает применимый код в `execution`, доводит решение до проверки, и одновременно доказывает требования Day 11, Day 12, Day 13, Day 14, Day 15.
 
-Формат: перед каждым видео используется отдельный `ASSISTANT_STORAGE_DIR`. В видимом demo пользователь работает через `assistant chat` и обычные короткие фразы. Машинные команды `--json`, `--render-prompt`, `--verify` и scratch-package проверки идут в отдельном блоке "agent verification" после demo.
+Формат: перед каждым видео используется отдельный `ASSISTANT_STORAGE_DIR`. В видимом demo пользователь работает через `assistant chat` и обычные короткие фразы. Машинные команды `--json`, `--render-prompt`, explicit `--verify` override и scratch-package проверки идут только в отдельном блоке "agent verification" после demo.
 
 Важно: текущий P0 CLI не редактирует файлы сам. Поэтому "решил до конца" для demo означает:
 
 - в `execution` есть полный `deliverable` с Go-кодом в fenced code block или unified diff;
 - есть разбор примеров, edge cases и сложность;
 - agent verification может взять код из `deliverable`, положить его в scratch package под repo и прогнать `go test`;
-- переход в `done` допускается только через trusted evidence, например `assistant chat --once --verify "go test ./manual_scratch/day13_merge_sorted" --input "Проверь и заверши"`.
+- переход в `done` допускается только через trusted evidence: в основном demo пользователь пишет `Проверь и заверши`, semantic referee подтверждает intent, а приложение само запускает allowlisted command из approved plan/criteria.
 
 ## 0. Общая подготовка
 
@@ -150,8 +150,8 @@ manual_scratch/day11_two_sum/
 
 ```bash
 go test ./manual_scratch/day11_two_sum
-assistant chat --once --input "Готово к проверке" --json
-assistant chat --once --verify "go test ./manual_scratch/day11_two_sum" --input "Проверь и заверши" --json
+assistant chat --once --input "Готово к проверке"
+assistant chat --once --input "Проверь и заверши"
 assistant task status
 ```
 
@@ -242,8 +242,8 @@ assistant chat --once --render-prompt --input "Спланируй и реши Va
 
 ```bash
 go test ./manual_scratch/day12_valid_parentheses
-assistant chat --once --input "Готово к проверке" --json
-assistant chat --once --verify "go test ./manual_scratch/day12_valid_parentheses" --input "Проверь и заверши" --json
+assistant chat --once --input "Готово к проверке"
+assistant chat --once --input "Проверь и заверши"
 assistant task status
 ```
 
@@ -318,7 +318,7 @@ assistant chat
 
 Если после строки `Продолжай с того места...` CLI сразу отвечает `ready for validation` и `/task status` показывает `stage=validation`, это нормальный проход: значит все execution deliverables уже были выданы до pause. В этом случае не нужно повторно просить финальный код в validation stage и не нужно считать `blocked_missing_evidence` багом. Следующий шаг - agent verification ниже.
 
-Если в validation stage вручную ввести `Готово к проверке`, ожидаемый ответ может быть `blocked_missing_evidence`: это значит, что модель не видит trusted output команды `go test`. Для перехода `validation -> done` нужен именно `--verify`.
+Если в validation stage ввести `Проверь и заверши`, приложение должно сначала подтвердить intent через semantic referee, затем само найти verification command в approved plan/criteria, запустить allowlisted command и приложить trusted evidence. `--verify` нужен только как explicit debug/override.
 
 ### Acceptance proof на видео
 
@@ -345,7 +345,7 @@ manual_scratch/day13_merge_sorted/
 
 ```bash
 go test ./manual_scratch/day13_merge_sorted
-assistant chat --once --verify "go test ./manual_scratch/day13_merge_sorted" --input "Проверь и заверши" --json
+assistant chat --once --input "Проверь и заверши"
 assistant task status
 ```
 
@@ -418,7 +418,7 @@ Conflict request:
 Recovery safe request:
 
 ```text
-Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты, проверка будет отдельно через --verify.
+Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само из approved plan/criteria.
 /invariants
 /exit
 ```
@@ -439,18 +439,120 @@ Recovery safe request:
 
 ```bash
 go test ./manual_scratch/day14_stock_profit
-assistant chat --once --input "А теперь перепиши stock-profit решение на Python и сделай brute force O(n^2)." --json
-assistant chat --once --input "Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты, проверка будет отдельно через --verify." --json
-assistant chat --once --input "Готово к проверке" --json
-assistant chat --once --verify "go test ./manual_scratch/day14_stock_profit" --input "Проверь и заверши" --json
+assistant chat --once --input "А теперь перепиши stock-profit решение на Python и сделай brute force O(n^2)."
+assistant chat --once --input "Вернись к безопасному Go-решению one-pass O(n). Не заявляй, что тесты уже запущены или пройдены. Дай только следующий безопасный шаг и финальный код/тесты; проверку приложение запустит само из approved plan/criteria."
+assistant chat --once --input "Готово к проверке"
+assistant chat --once --input "Проверь и заверши"
 assistant task status
 ```
 
 Готово, если safe solution проходит tests, conflict typed as `invariant_conflict`, safe request после отказа снова отвечает, а task закрывается в `done` через trusted evidence.
 
-## 5. Финальный чек-лист
+## 5. Видео Day 15. Controlled Lifecycle + Planning Swarm
+
+### Что доказывает видео
+
+- Весь основной flow идет через `assistant chat`, без `/task move` и без ручной правки state.
+- Обычный пользовательский запрос сам создает task в `planning`.
+- Planning stage использует prompt improvement и planning swarm.
+- Пользовательское approval через chat переводит `planning -> execution`.
+- Execution и validation идут через отдельных microtask agents.
+- Переход `execution -> validation` требует trusted evidence, которое приложение получает через semantic intent signal и auto verification из approved plan/criteria.
+- Переход `validation -> done` невозможен без accepted validation record.
+- Audit показывает prompt improvement, swarm, approval, executor/reviewer roles и transitions.
+
+### Задача
+
+Проверить существующий Go package без изменения файлов:
+
+- package: `manual_scratch/day14_stock_profit`;
+- критерий готовности: `go test ./manual_scratch/day14_stock_profit` проходит;
+- пользователь просит ассистента спланировать проверку, принять план, перейти к проверке и завершить задачу.
+
+### Demo setup
+
+```bash
+export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/video-day15-controlled-lifecycle"
+test "$ASSISTANT_STORAGE_DIR" = "$CW_ROOT/.assistant/storage/video-day15-controlled-lifecycle" && rm -rf "$ASSISTANT_STORAGE_DIR"
+mkdir -p "$ASSISTANT_STORAGE_DIR"
+assistant init --model "$ASSISTANT_MODEL"
+```
+
+Для live demo оставить реальный provider:
+
+```bash
+unset ASSISTANT_PROVIDER
+unset ASSISTANT_LLM_VALIDATION
+```
+
+Для deterministic smoke можно использовать:
+
+```bash
+export ASSISTANT_PROVIDER=fake
+export ASSISTANT_LLM_VALIDATION=1
+export ASSISTANT_MODEL="fake/model"
+```
+
+### Demo flow
+
+Основной visible flow только через human chat output. Пользователь не вводит команду проверки: приложение берёт verification из approved plan/criteria, запускает allowlisted command и прикладывает trusted evidence.
+
+```bash
+assistant chat --once --input "Нужно проверить существующий Go пакет manual_scratch/day14_stock_profit: убедиться, что пакет проходит стандартные Go-тесты. Не меняй файлы без необходимости; предложи план проверки и критерии готовности."
+
+assistant chat --once --input "Да, план принят. Приступай к выполнению первого шага."
+
+assistant chat --once --input "Готово к проверке: проверь результат."
+
+assistant chat --once --input "Проверь критерии по результатам проверки, но пока не завершай задачу; дай review."
+
+assistant chat --once --input "Проверь критерии и заверши задачу, если проверка подтверждает стандартный Go test."
+```
+
+После visible flow можно показать state/audit как assertions, а не как основные пользовательские шаги:
+
+```bash
+assistant task status --json
+assistant process audit --latest --json
+```
+
+### Acceptance proof на видео
+
+- первый chat request создает task в `planning`;
+- human output после planning показывает pending plan/criteria, а не `execution`;
+- approval фразой переводит `planning -> execution`;
+- `execution -> validation` происходит только после app-issued trusted evidence;
+- validation review создает accepted validation record;
+- финальный chat `Проверь критерии и заверши...` переводит task в `done`;
+- post-run `assistant task status --json` показывает `stage=done`, `expected_action=none`, `validation_status=ready_for_done`;
+- пользователь ни разу не использует `/task move`, `/task step`, `/task expect` или прямую правку storage.
+
+### Agent verification после видео
+
+Можно прогнать тот же сценарий полностью автоматически:
+
+```bash
+bash scripts/manual-day15-user-flow.sh
+```
+
+Готово, если script печатает:
+
+```text
+DAY15_MANUAL_PASS ... events=...
+```
+
+Дополнительно можно показать audit:
+
+```bash
+assistant process audit --latest --json
+```
+
+Audit должен содержать события `prompt_improvement_call`, `planning_swarm_final`, `planning_approval_accepted`, `transitioned`, а также роли `requirements_specialist`, `code_research_specialist`, `architecture_specialist`, `test_validation_specialist`, `risk_regression_specialist`, `planning_orchestrator`, `executor`, `reviewer`.
+
+## 6. Финальный чек-лист
 
 - Day 11: Two Sum solved, `short/work/long` разделены, memory apply explicit, preserved context влияет на следующий execution.
 - Day 12: Valid Parentheses solved, одинаковый короткий prompt меняет стиль через `student/senior/tester`, profile попадает в prompt автоматически.
 - Day 13: Merge Sorted Arrays solved through planning -> execution -> pause/restart/resume -> validation -> trusted done.
 - Day 14: Stock Profit solved safely, invariants stored/prompted, unsafe Python/brute-force request blocked, safe flow recovers.
+- Day 15: Controlled lifecycle проходит через chat-only flow, planning swarm и microtask agents видны в audit, `done` достигается только после trusted evidence и accepted validation.

@@ -9,7 +9,8 @@ FRD описывает функциональные требования к MVP 
 - `day11.md`: явная модель памяти с отдельными слоями;
 - `day12.md`: персонализация через профиль пользователя;
 - `day13.md`: состояние задачи как конечный автомат;
-- `day14.md`: отдельный invariant layer с prompt visibility и semantic conflict refusal через out-of-band LLM validator.
+- `day14.md`: отдельный invariant layer с prompt visibility и semantic conflict refusal через out-of-band LLM validator;
+- `day15.md`: контролируемый lifecycle, planning swarm, microtask agents, app-issued evidence и запрет ручного управления внутренним state в основном пользовательском flow.
 
 ## 2. Scope MVP
 
@@ -29,13 +30,18 @@ MVP должен реализовать:
 - stage-aware prompt contract: LLM получает текущий этап, роль этапа, allowed actions и forbidden actions;
 - pause/resume задачи без повторного объяснения контекста;
 - invariant manager/checker: отдельное storage, prompt block, input/output enforcement.
+- lifecycle gate: application-level допуск переходов `planning -> execution -> validation -> done`;
+- prompt improvement перед provider call;
+- planning swarm для независимых планов и финального merged plan;
+- microtask agents для execution/review roles;
+- trusted evidence store: app-issued verification evidence создаётся автоматически из approved plan/acceptance criteria after semantic intent signal; `--verify` остаётся explicit override/debug, а в provider уходит только bounded summary/hash.
 
 Текущее состояние реализации на 2026-06-19:
 
-- Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, process controller, structural validators, semantic validators, transition gate, audit store.
+- Все базовые компоненты MVP существуют в Go-коде: Cobra CLI, OpenRouter/fake provider, profile manager, memory manager/classifier/proposal store, task FSM, prompt builder, process controller, structural validators, semantic validators, transition gate, lifecycle gate, prompt improver, planning swarm, agent runner, trusted evidence store, audit store.
 - Default storage root: `os.UserConfigDir()/coding-writer-assistant`; repo-local `.assistant/` используется только через explicit `--storage-dir` или `ASSISTANT_STORAGE_DIR`.
 - Acceptance flow проверяется fake provider tests: `TestDay11EndToEndMemoryProposalApplyInfluence`, `TestDay12ProfilesChangePromptAndResponse`, `TestDay13PauseResumeAfterRestartUsesWorkingMemory`.
-- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition and rejected-output no-persistence.
+- Process-control flow проверяется tests for reviewer prompt, paused hard gate, invalid-output retry, validation-to-done transition, rejected-output no-persistence, approval validation and lifecycle evidence. Day 15 live manual proof описан в `docs/manual-testing-day15.md`; `scripts/manual-day15-user-flow.sh` is deterministic regression smoke.
 
 MVP не должен реализовывать:
 
@@ -43,7 +49,7 @@ MVP не должен реализовывать:
 - полноценный IDE agent;
 - RAG по репозиторию;
 - vector database;
-- multi-agent workflow;
+- general-purpose autonomous multi-agent IDE workflow beyond the Day 15 planning/execution/validation orchestration;
 - web UI;
 - silent long-term memory writes.
 
@@ -93,7 +99,7 @@ MVP не должен реализовывать:
 
 ### Canonical contract
 
-FRD is source of truth for the implementation contract together with PRD and architecture. The three documents must not disagree on Day 11, Day 12, or Day 13 semantics.
+FRD is source of truth for the implementation contract together with PRD and architecture. The three documents must not disagree on Day 11, Day 12, Day 13, Day 14, or Day 15 semantics.
 
 #### Task state canonical values
 
@@ -106,7 +112,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 #### Command contract
 
 - top-level and slash commands must map to one canonical command tree;
-- P0 commands are only the ones required for Day 11/12/13/14 demo and smoke tests.
+- P0 commands are only the ones required for Day 11/12/13/14/15 demo and smoke tests.
 - the command tree must define P0/P1 status, top-level and slash forms, JSON output, exit behavior, and whether a command calls OpenRouter.
 
 #### Memory layers
@@ -120,7 +126,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - LLM must know the current `stage`, `current_step`, `expected_action`, task `status`, selected `ActionKind`, allowed actions and forbidden actions for task-scoped prompts.
 - Stage-specific trusted prompt is required for process-controlled task work: planner in `planning`, implementer in `execution`, strict reviewer/QA in `validation`, terminal summarizer in `done`.
 - LLM does not update `TaskState`, write memory, run tools, persist output or apply transitions directly.
-- `ProcessController` and `TransitionGate` own hard gates, output acceptance and state transitions.
+- `ProcessController`, `TransitionGate` and `LifecycleGate` own hard gates, output acceptance and state transitions.
 - This contract extends Day 13 behavior but must not bypass Day 11 classifier/proposal/user-confirmation flow or Day 12 profile-in-every-prompt flow.
 
 #### UX hard requirements: no internal-state choreography
@@ -128,8 +134,19 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - Normal user flows MUST NOT require manual orchestration of internal state. The product must infer intent and drive task lifecycle through application code.
 - The happy path for task work MUST NOT require `/task start`, `/task move`, `/task step`, `/task expect`, manual storage edits, direct JSON edits, or direct writes to memory/task/invariant files.
 - Slash/top-level commands for task state are allowed only for optional inspection, explicit pause/resume, recovery, debugging, and deterministic tests. They are not valid substitutes for agent-driven behavior in acceptance demos.
-- If a scenario needs a user decision, the CLI must expose it as product semantics, not internals. Examples: memory proposal apply/reject, planning approval, pause/resume, and trusted verification via `--verify`.
+- If a scenario needs a user decision, the CLI must expose it as product semantics, not internals. Examples: memory proposal apply/reject, planning approval, pause/resume, and user-level "проверь/заверши" verification intent.
 - Any new feature that exposes implementation details as required user steps is rejected until it has an intent-driven flow and regression coverage.
+
+#### Day 15 lifecycle contract
+
+- The primary task path is chat-driven: user states the goal, approves a plan and asks to check/finish in normal language; a semantic referee classifies check/finish intent with strict JSON, then the application derives trusted verification from approved plan/criteria and drives task creation, stage changes, current step, validation status and done state.
+- `planning -> execution` requires a concrete plan, acceptance criteria and a separate approval-validation record.
+- `execution -> validation` requires accepted execution output plus app-issued trusted evidence when criteria mention tests or verification.
+- `validation -> done` requires accepted validation output and criteria-matched trusted evidence; LLM text alone cannot mark a task done.
+- Planning swarm must produce specialist proposals and one final merged plan; audit must expose specialist roles and final plan event.
+- Execution and review must run through role-scoped microtask agents, not generic untracked provider calls.
+- Prompt improvement may rewrite the outbound task prompt, but it must preserve the user's objective and stage policy.
+- Manual `/task move`, `/task step`, `/task expect`, storage edits and JSON edits are invalid as Day 15 acceptance proof.
 
 #### Invariant contract
 
@@ -887,7 +904,9 @@ Traceability rule:
 ```text
 assistant init
 assistant chat
+assistant chat --once --input <text>
 assistant chat --once --input <text> --json
+assistant chat --once --input <text> --verify "<argv command>" --json   # debug/recovery override only
 assistant chat --once --render-prompt --input <text> --json
 assistant chat --profile <profile_id> --model <model_id>
 assistant profiles [list]
@@ -898,13 +917,13 @@ assistant memory list <short|work|long> --json
 assistant memory propose --latest --json
 assistant memory apply --proposal <id> --accept all --json
 assistant memory proposals [--session <id>] --json
-assistant task start <title> --json
 assistant task status --json
-assistant task move <stage> --json
-assistant task step <text> --json
-assistant task expect <action> --json
 assistant task pause --json
 assistant task resume --json
+assistant task start <title> --json         # debug/recovery/test helper, not Day acceptance path
+assistant task move <stage> --json          # debug/recovery/test helper only
+assistant task step <text> --json           # debug/recovery/test helper only
+assistant task expect <action> --json       # debug/recovery/test helper only
 assistant process audit [--latest|--limit <n>] --json
 assistant privacy
 assistant privacy purge --audit [--transcripts] --yes
@@ -944,19 +963,23 @@ Canonical P0 automation matrix:
 
 | Flow | P0 command/protocol | Output | Calls OpenRouter |
 | --- | --- | --- | --- |
-| One-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
+| Human one-shot chat | `assistant chat --once --input <text>` | readable sections: Assistant, Task, Transition, Evidence, Warnings, Memory proposal, Next | yes |
+| JSON one-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
+| Auto verified chat | `assistant chat --once --input "Проверь и заверши"` with approved verification command in task plan/criteria | readable evidence summary, transition summary and task state | yes |
+| Explicit verification override | `assistant chat --once --input <text> --verify "<argv command>" --json` | JSON answer, trusted evidence hash, stage/audit effects | yes |
 | Render prompt | `assistant chat --once --render-prompt --input <text> --json` | JSON rendered prompt, messages, prompt id | no |
 | Render/inspect memory | `assistant memory list <short|work|long> --json` | JSON records | no |
 | Propose memory | `assistant memory propose --latest --json` | JSON proposal with proposal id and record ids | classifier only |
 | Apply memory | `assistant memory apply --proposal <id> --accept all --json` | JSON apply result | no |
 | Reject memory record | `assistant memory apply --proposal <id> --reject <record_id> --json` | JSON apply result | no |
 | Edit memory record | `assistant memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json` | JSON apply result | no |
-| Task lifecycle | `assistant task start|status|move|step|expect|pause|resume ... --json` or matching slash commands | JSON/task text | no |
+| Task lifecycle | natural `assistant chat`; `assistant task status|pause|resume` for inspection/control | JSON/task text/process audit | chat calls provider; status/pause/resume do not |
+| Task debug/recovery | `assistant task start|move|step|expect ... --json` or matching slash commands | JSON/task text | no |
 | Profile switch | `assistant chat --profile <id> ...` or `/profile <id>` | active profile summary | no |
 | Privacy summary | `assistant privacy` or `/privacy` | provider/storage disclosure | no |
 | Process audit | `assistant process audit --latest --json` or `/process audit` | JSON/process event text | no |
 
-Current command boundary: slash `/task plan` and `/task criteria` are implemented REPL conveniences. `/task decision`, `/task done`, `/task stage`, and top-level `assistant task plan|criteria|decision|done|stage` are not implemented in current code.
+Current command boundary: slash `/task plan` and `/task criteria` plus top-level `assistant task plan` and `assistant task criteria` are implemented conveniences for recovery/debug/tests. `/task decision`, `/task done`, `/task stage`, and top-level `assistant task decision|done|stage` are not implemented in current code. None of these commands are valid substitutes for Day 15 chat-driven acceptance.
 
 ## 6.1. Config, env, flags, and exit codes
 

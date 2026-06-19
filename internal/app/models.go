@@ -149,25 +149,37 @@ const (
 )
 
 type TaskState struct {
-	ID                 string                 `json:"id"`
-	Title              string                 `json:"title"`
-	Stage              TaskStage              `json:"stage"`
-	CurrentStep        string                 `json:"current_step"`
-	CompletedSteps     []string               `json:"completed_steps,omitempty"`
-	ExpectedAction     ExpectedAction         `json:"expected_action"`
-	Status             TaskStatus             `json:"status"`
-	Objective          string                 `json:"objective"`
-	AcceptanceCriteria []string               `json:"acceptance_criteria"`
-	Plan               []string               `json:"plan"`
-	Decisions          []string               `json:"decisions"`
-	OpenQuestions      []string               `json:"open_questions"`
-	PendingPlanning    *PlanningProposalState `json:"pending_planning,omitempty"`
-	LastSessionID      string                 `json:"last_session_id,omitempty"`
-	ValidationStatus   string                 `json:"validation_status,omitempty"`
-	HistoryLog         []string               `json:"history_log,omitempty"`
-	PausedAt           *time.Time             `json:"paused_at,omitempty"`
-	ResumedAt          *time.Time             `json:"resumed_at,omitempty"`
-	UpdatedAt          time.Time              `json:"updated_at"`
+	ID                                string                 `json:"id"`
+	Title                             string                 `json:"title"`
+	Stage                             TaskStage              `json:"stage"`
+	CurrentStep                       string                 `json:"current_step"`
+	CompletedSteps                    []string               `json:"completed_steps,omitempty"`
+	ExpectedAction                    ExpectedAction         `json:"expected_action"`
+	Status                            TaskStatus             `json:"status"`
+	Objective                         string                 `json:"objective"`
+	AcceptanceCriteria                []string               `json:"acceptance_criteria"`
+	Plan                              []string               `json:"plan"`
+	Microtasks                        []MicrotaskState       `json:"microtasks,omitempty"`
+	Decisions                         []string               `json:"decisions"`
+	OpenQuestions                     []string               `json:"open_questions"`
+	PendingPlanning                   *PlanningProposalState `json:"pending_planning,omitempty"`
+	LastSessionID                     string                 `json:"last_session_id,omitempty"`
+	ApprovedPlanID                    string                 `json:"approved_plan_id,omitempty"`
+	PlanningApprovalID                string                 `json:"planning_approval_id,omitempty"`
+	PlanningApprovalStatus            string                 `json:"planning_approval_status,omitempty"`
+	PlanningApprovalReason            string                 `json:"planning_approval_reason,omitempty"`
+	PlanningApprovalConfidence        float64                `json:"planning_approval_confidence,omitempty"`
+	PlanningApprovalOriginalReply     string                 `json:"planning_approval_original_reply,omitempty"`
+	PlanningApprovalPlanID            string                 `json:"planning_approval_plan_id,omitempty"`
+	PlanningApprovalAllowedTransition string                 `json:"planning_approval_allowed_transition,omitempty"`
+	LastAcceptedExecutionID           string                 `json:"last_accepted_execution_id,omitempty"`
+	LastValidationID                  string                 `json:"last_validation_id,omitempty"`
+	ValidationStatus                  string                 `json:"validation_status,omitempty"`
+	ValidationEvidence                []string               `json:"validation_evidence,omitempty"`
+	HistoryLog                        []string               `json:"history_log,omitempty"`
+	PausedAt                          *time.Time             `json:"paused_at,omitempty"`
+	ResumedAt                         *time.Time             `json:"resumed_at,omitempty"`
+	UpdatedAt                         time.Time              `json:"updated_at"`
 }
 
 type PlanningProposalState struct {
@@ -177,6 +189,18 @@ type PlanningProposalState struct {
 	Plan               []string  `json:"plan"`
 	OpenQuestions      []string  `json:"open_questions"`
 	CreatedAt          time.Time `json:"created_at"`
+}
+
+type MicrotaskState struct {
+	ID               string    `json:"id"`
+	PlanItem         string    `json:"plan_item"`
+	Role             string    `json:"role,omitempty"`
+	Status           string    `json:"status"`
+	ResultSummary    string    `json:"result_summary,omitempty"`
+	EvidenceRefs     []string  `json:"evidence_refs,omitempty"`
+	LastAuditEventID string    `json:"last_audit_event_id,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type AppConfig struct {

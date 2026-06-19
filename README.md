@@ -24,11 +24,20 @@ flowchart TD
 - профили - задают стиль ответа;
 - задача по стадиям - помогает доводить работу до конца;
 - постоянные правила - блокируют запросы, которые противоречат проекту;
-- проверка результата - не дает завершить задачу без надежного подтверждения.
+- проверка результата - не дает завершить задачу без надежного подтверждения;
+- controlled lifecycle - приложение само ведет задачу через planning, execution, validation и done.
 
-Проверки идут в двух местах. Модель возвращает структурированный JSON там, где приложению нужно принять решение. Затем Go-код разбирает этот JSON строго: лишние поля, неверная стадия или пустые обязательные поля считаются ошибкой. Для смысловых решений, например "пользователь правда одобрил переход дальше или просто обсуждает его" или "запрос реально нарушает правило проекта", используется отдельный LLM-валидатор. Локально приложение оставляет hard gates: секреты, некорректный JSON, небезопасные id, отсутствие обязательных полей и fallback для режимов без LLM-валидатора.
+Проверки идут в двух местах. Модель возвращает структурированный JSON там, где приложению нужно принять решение. Затем Go-код разбирает этот JSON строго: лишние поля, неверная стадия или пустые обязательные поля считаются ошибкой. Для смысловых решений, например "пользователь правда одобрил переход дальше или просто обсуждает его" или "запрос реально нарушает правило проекта", используется отдельный LLM-валидатор. Локально приложение оставляет только hard gates: секреты, некорректный JSON, небезопасные id и отсутствие обязательных полей.
 
-Подробный сценарий ручной демонстрации лежит в [docs/manual-testing-day11-14.md](docs/manual-testing-day11-14.md).
+Подробные сценарии ручной демонстрации лежат в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Фокусный live-сценарий Day 15 описан в [docs/manual-testing-day15.md](docs/manual-testing-day15.md); deterministic script остаётся regression smoke, не заменой live proof.
+
+## CLI chat UX
+
+Обычный `assistant chat` и `assistant chat --once --input <text>` выводят человекочитаемый transcript, а не raw JSON. Пользователь видит секции `Assistant`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal` и `Next`. Это основной интерфейс для demo и ручного тестирования.
+
+В interactive TTY headings и labels подсвечиваются ANSI-стилями; при redirect/non-TTY вывод остается plain text без escape-кодов, чтобы demo logs и tests читались стабильно.
+
+`--json` остаётся машинным режимом для regression scripts, CI, audit extraction и debug. В этом режиме stdout должен быть parseable JSON, а diagnostics идут в stderr.
 
 ## День 11: память
 
@@ -218,7 +227,7 @@ flowchart TD
 - stage validators проверяют обязательные поля и простые запреты в Go-коде;
 - `SemanticValidator` отдельно спрашивает модель-валидатор о смысле ответа и получает строгий JSON `pass` или `fail`;
 - `TransitionGate` проверяет, можно ли менять стадию именно из текущего состояния;
-- trusted verification добавляется только приложением, например через `--verify "go test ..."`, а не со слов модели.
+- trusted verification добавляется только приложением: semantic referee сначала подтверждает intent `ready_for_validation` или `ready_for_done`, затем ассистент берет allowlisted команду из approved plan/acceptance criteria, запускает ее локально и сохраняет evidence; `--verify` остается explicit override/debug, не happy path.
 
 Например, в `execution` модель может дать код в `deliverable`, но не может сама заявить "тесты прошли", если приложение не передало результат команды как trusted evidence. В `validation` переход в `done` запрещен, если нет проверок, есть blocker/high finding или отсутствует trusted evidence.
 
@@ -317,6 +326,99 @@ assistant invariants add algorithm.no_bruteforce --kind quality --content "For s
 go test ./tests -run TestDay14
 ```
 
+## День 15: контролируемый lifecycle
+
+День 15 превращает task FSM из набора управляемых команд в автономный пользовательский flow. Пользователь пишет цель и подтверждает решения на уровне продукта, а приложение само создает задачу, улучшает prompt, собирает план, запускает исполнение, принимает evidence, проверяет результат и меняет `TaskState`.
+
+Главное правило: LLM не владеет lifecycle. Она может предложить план, deliverable, findings или `next_signal`, но `stage`, `current_step`, `expected_action`, `validation_status` и `done` меняет только Go-код после проверок.
+
+Архитектурно Day 15 добавляет пять компонентов:
+
+- `PromptImprover` - уточняет task prompt перед stage-specific вызовом, не меняя исходную цель пользователя;
+- `PlanningSwarm` - собирает несколько независимых specialist plans и один финальный merged plan;
+- `AgentRunner` - запускает role-scoped microtask agents для execution и review;
+- `TrustedEvidenceStore` - сохраняет app-issued evidence от auto verification или explicit `--verify`, с digest и bounded summary;
+- `LifecycleGate` - решает, можно ли перейти между стадиями.
+
+Компоненты связаны так:
+
+```mermaid
+flowchart TD
+    User["Пользователь: цель / approval / запрос проверки"] --> Controller["ProcessController"]
+    Controller --> State["TaskState<br/>stage, step, expected_action"]
+    Controller --> Improve["PromptImprover"]
+    Improve --> Policy["StagePolicy + trusted prompt"]
+    Policy --> Swarm["PlanningSwarm<br/>specialists + orchestrator"]
+    Policy --> Agents["AgentRunner<br/>executor / reviewer"]
+    Controller --> Intent["Semantic intent referee<br/>strict JSON signal"]
+    Intent --> Verify["auto verification<br/>from plan / criteria"]
+    Verify --> Evidence["TrustedEvidenceStore<br/>exit code + digest + summary"]
+    Swarm --> Gate["LifecycleGate"]
+    Agents --> Gate
+    Evidence --> Gate
+    Gate -->|accepted| State
+    Gate --> Audit["process_audit.jsonl"]
+    Gate -->|rejected| User
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> planning: пользователь ставит цель
+    planning --> execution: пользователь одобрил план, approval проверен LLM-validator
+    execution --> validation: есть accepted execution или app-issued verification evidence
+    validation --> done: есть accepted validation и validation_status=ready_for_done
+    execution --> planning: нужен replan
+    validation --> execution: найдены исправления
+```
+
+Пользовательский сценарий остается chat-driven:
+
+```mermaid
+sequenceDiagram
+    participant U as Пользователь
+    participant C as CLI / ProcessController
+    participant P as PlanningSwarm
+    participant A as Microtask agents
+    participant E as TrustedEvidenceStore
+    participant G as LifecycleGate
+
+    U->>C: "Реши задачу..."
+    C->>P: улучшенный prompt + stage policy
+    P-->>C: specialist plans + merged plan
+    C-->>U: план и acceptance criteria
+    U->>C: "План ок, выполняй"
+    C->>G: проверить approval
+    G-->>C: planning -> execution
+    C->>A: executor microtasks
+    A-->>C: deliverable
+    U->>C: "Проверь и заверши"
+    C->>E: auto-run allowlisted verification from plan/criteria
+    C->>G: проверить execution + evidence
+    G-->>C: execution -> validation
+    C->>A: reviewer microtask
+    A-->>C: validation findings / ready_for_done
+    C->>G: проверить accepted validation + evidence
+    G-->>C: validation -> done
+```
+
+Lifecycle gate закрывает конкретные переходы:
+
+- `planning -> execution` требует готовый план, acceptance criteria и отдельную запись approval validation;
+- `execution -> validation` требует accepted execution output или criteria-matched trusted evidence;
+- `validation -> done` требует accepted validation record, `validation_status=ready_for_done` и trusted evidence, если критерии требуют tests/verification;
+- `execution -> planning` разрешен только для replan, когда план или критерии оказались недостаточными;
+- `validation -> execution` разрешен, когда reviewer нашел blocker/high issues.
+
+Что это меняет по сравнению с Day 13:
+
+- раньше `/task move`, `/task step`, `/task expect` могли показать FSM механически;
+- теперь эти команды считаются debug/recovery/test helpers, а не пользовательским happy path;
+- основной acceptance доказывает, что пользователь работает через chat, а приложение автономно рулит state;
+- `done` нельзя получить словами модели вроде "тесты прошли": нужен app-issued evidence;
+- audit должен показывать prompt improvement, planning swarm, approval validation, executor/reviewer roles и lifecycle transitions.
+
+Ручной сценарий для демо описан в [docs/manual-testing-demo.md](docs/manual-testing-demo.md), focused live Day 15 proof - в [docs/manual-testing-day15.md](docs/manual-testing-day15.md).
+
 ## Как собрать и запустить
 
 Сборка CLI:
@@ -353,11 +455,19 @@ export ASSISTANT_STORAGE_DIR="$PWD/.assistant/storage/demo"
 
 ## Как проверить
 
-Проверить дни 11-14:
+Проверить acceptance-регрессию Days 11-14:
 
 ```bash
 go test ./tests -run 'TestDay11|TestDay12|TestDay13|TestDay14'
 ```
+
+Проверить deterministic Day 15 regression smoke:
+
+```bash
+bash scripts/manual-day15-user-flow.sh
+```
+
+Live Day 15 proof требует `OPENROUTER_API_KEY`, `ASSISTANT_MODEL=google/gemini-3.1-flash-lite` и выполняется по [docs/manual-testing-day15.md](docs/manual-testing-day15.md).
 
 Проверить весь проект:
 
@@ -367,7 +477,8 @@ go test ./...
 
 ## Где читать дальше
 
-- [docs/manual-testing-day11-14.md](docs/manual-testing-day11-14.md) - подробный сценарий демонстрации дней 11-14;
+- [docs/manual-testing-demo.md](docs/manual-testing-demo.md) - подробный сценарий демонстрации дней 11-15;
+- [docs/manual-testing-day15.md](docs/manual-testing-day15.md) - live chat-only Day 15 manual flow;
 - [docs/prd.md](docs/prd.md) - описание продукта;
 - [docs/frd.md](docs/frd.md) - функциональные требования;
 - [docs/architect.md](docs/architect.md) - архитектурные заметки.

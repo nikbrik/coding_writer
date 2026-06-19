@@ -10,10 +10,7 @@ import (
 const trustedEvidencePrefix = "app:evidence:v1:"
 
 func NewTrustedEvidence(source string, exitCode int, output string) string {
-	source = strings.NewReplacer(";", "_", "=", "_", "\n", "_", "\r", "_").Replace(strings.TrimSpace(source))
-	if source == "" {
-		source = "tool"
-	}
+	source = sanitizeEvidenceSource(source)
 	digest := sha256.Sum256([]byte(output))
 	return fmt.Sprintf("%ssource=%s;exit=%d;sha256=%x", trustedEvidencePrefix, source, exitCode, digest)
 }
@@ -52,11 +49,16 @@ func hasTrustedToolEvidenceText(text string) bool {
 
 func hasTrustedEvidence(evidence []string) bool {
 	for _, item := range evidence {
-		if isStructuredTrustedEvidence(item) {
+		if isStructuredTrustedEvidence(item) || isIssuedTrustedEvidence(item) {
 			return true
 		}
 	}
 	return false
+}
+
+func isIssuedTrustedEvidence(item string) bool {
+	_, ok := trustedEvidenceID(item)
+	return ok
 }
 
 func isStructuredTrustedEvidence(item string) bool {
