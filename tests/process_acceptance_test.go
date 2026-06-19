@@ -118,14 +118,14 @@ func TestProcessInvalidValidationRetriesThenBlocks(t *testing.T) {
 	state, _ = rt.tasks.Move(app.StageExecution)
 	state, _ = rt.tasks.Move(app.StageValidation)
 	_ = state
-	rt.provider.ChatResponses = []string{"not json", "still bad", "bad again"}
+	rt.provider.ChatResponses = []string{"not json", "still bad", "bad again", "bad fourth", "bad fifth"}
 	ctrl := newProcessAcceptanceController(rt)
 	_, err := ctrl.RunExchange(ctx, process.ExchangeInput{SessionID: "process_retry", Input: "проверь", ActionKind: process.ActionReviewOutput})
 	if err == nil || app.AsError(err).Code != "invalid_json" {
 		t.Fatalf("want invalid_json, got %v", err)
 	}
-	if processChatCalls(rt.provider.SnapshotCalls()) != 3 {
-		t.Fatalf("expected initial + 2 retries, got %d", processChatCalls(rt.provider.SnapshotCalls()))
+	if processChatCalls(rt.provider.SnapshotCalls()) != 5 {
+		t.Fatalf("expected initial + 4 retries, got %d", processChatCalls(rt.provider.SnapshotCalls()))
 	}
 }
 

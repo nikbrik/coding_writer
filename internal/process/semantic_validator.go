@@ -221,7 +221,19 @@ func semanticParsedResponse(resp ParsedResponse) map[string]any {
 }
 
 func decodeSemanticJSON(raw string, out any) error {
-	dec := json.NewDecoder(bytes.NewReader([]byte(strings.TrimSpace(stripMarkdownFences(raw)))))
+	cleaned := strings.TrimSpace(stripMarkdownFences(raw))
+	if err := decodeSemanticJSONObject(cleaned, out); err == nil {
+		return nil
+	}
+	extracted := extractFirstJSONObject(cleaned)
+	if extracted == "" || extracted == cleaned {
+		return decodeSemanticJSONObject(cleaned, out)
+	}
+	return decodeSemanticJSONObject(extracted, out)
+}
+
+func decodeSemanticJSONObject(raw string, out any) error {
+	dec := json.NewDecoder(bytes.NewReader([]byte(strings.TrimSpace(raw))))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		return app.NewError(app.CategoryValidation, "semantic_validator_invalid_json", "semantic validator returned invalid JSON: "+err.Error(), err)
@@ -230,6 +242,45 @@ func decodeSemanticJSON(raw string, out any) error {
 		return app.NewError(app.CategoryValidation, "semantic_validator_invalid_json", "semantic validator returned trailing JSON data", err)
 	}
 	return nil
+}
+
+func extractFirstJSONObject(raw string) string {
+	start := strings.Index(raw, "{")
+	if start < 0 {
+		return ""
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for i := start; i < len(raw); i++ {
+		ch := raw[i]
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return raw[start : i+1]
+			}
+		}
+	}
+	return ""
 }
 
 func semanticIntentSystemPrompt() string {
@@ -249,7 +300,8 @@ Hard rules:
 - A read-only answer may describe memory policy, consent requirements, or intended filtering, such as saying noise should not be saved or will require explicit apply/approval. Treat that as guidance, not a memory mutation claim, unless the output says memory was already written, applied, deleted, updated, or persisted.
 - Future-tense or intended behavior statements such as "will implement", "should support", "will ask for confirmation", or "before proceeding I will request approval" are valid read-only planning/guidance language. Reject only if the output claims completed progress or an already-performed side effect.
 - planning may propose future implementation and test steps as a plan; reject only if it claims implementation or test execution already happened.
-- execution in this CLI can be read-only when no trusted_evidence is present: it may provide the next implementation specification, patch plan, code snippet, command list, or guidance for the user/outer agent to apply, as long as it clearly does not claim files were changed, commands/tests ran, memory/task state mutated, or criteria were validated.
+- execution in this CLI can be read-only when no trusted_evidence is present: it must provide code-oriented output in the deliverable field for code tasks, preferably a fenced code block or unified diff the user can apply, as long as it clearly does not claim files were changed, commands/tests ran, memory/task state mutated, or criteria were validated.
+- execution without trusted_evidence must still be useful: fail if deliverable is empty, generic, only repeats progress metadata, or gives a code-task answer without concrete code/diff unless there is a real blocker.
 - execution progress/completion claims require trusted_evidence; no invented tool/test/file results. Do not fail merely because current_step names the task step being discussed or because the answer gives a specification for that step.
 - validation may review evidence; ready_for_done requires trusted_evidence and no blocker/high findings or missing evidence.
 - done may summarize completed state only; no new mutation instructions.

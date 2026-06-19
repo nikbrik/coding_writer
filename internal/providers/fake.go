@@ -170,9 +170,9 @@ func defaultStructuredChatAnswer(prompt string) string {
 		return `{"stage":"planning","summary":"fake planning response","assumptions":[],"acceptance_criteria":["criteria captured"],"plan":["proposed step"],"open_questions":[],"readiness":"needs_user_input"}`
 	case strings.Contains(lower, "current stage: execution"):
 		if strings.Contains(lower, "готово к проверке") || strings.Contains(lower, "ready for validation") {
-			return `{"stage":"execution","summary":"fake execution ready for validation","current_step":"proposed step","completed_steps":["proposed step"],"next_step":"","changed_artifacts":["internal/memory/manager.go"],"verification":["not run"],"blockers":[],"next_signal":"ready_for_validation"}`
+			return `{"stage":"execution","summary":"fake execution ready for validation","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"proposed step","completed_steps":["proposed step"],"next_step":"","changed_artifacts":["internal/memory/manager.go"],"verification":["not run"],"blockers":[],"next_signal":"ready_for_validation"}`
 		}
-		return `{"stage":"execution","summary":"fake execution response","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+		return `{"stage":"execution","summary":"fake execution response","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
 	case strings.Contains(lower, "current stage: validation"):
 		if strings.Contains(lower, "проверь и заверши") || strings.Contains(lower, "verify and finish") {
 			return `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`

@@ -8,14 +8,6 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 		return []string{"missing execution output"}
 	}
 	errs := validateExecutionStructural(out, trustedEvidence...)
-	if out.NextSignal == "ready_for_validation" {
-		if hasNonEmpty(out.Blockers) {
-			errs = append(errs, "ready_for_validation is blocked by active blockers")
-		}
-		if !hasNonEmpty(out.ChangedArtifacts) || !hasNonEmpty(out.Verification) {
-			errs = append(errs, "ready_for_validation requires changed artifacts and verification evidence")
-		}
-	}
 	progressClaims := []string{out.CurrentStep, out.NextStep}
 	progressClaims = append(progressClaims, out.CompletedSteps...)
 	combinedParts := append([]string{out.Summary}, progressClaims...)
@@ -55,13 +47,35 @@ func validateExecutionStructural(out *ExecutionOutput, trustedEvidence ...string
 	if strings.TrimSpace(out.Summary) == "" || strings.TrimSpace(out.NextSignal) == "" {
 		errs = append(errs, "execution output missing required summary/next_signal")
 	}
+	if !hasTrustedEvidence(trustedEvidence) && strings.TrimSpace(out.Deliverable) == "" {
+		errs = append(errs, "execution deliverable is required without trusted evidence")
+	}
+	if !hasTrustedEvidence(trustedEvidence) && !hasNonEmpty(out.Blockers) && strings.TrimSpace(out.Deliverable) != "" && !looksLikeCodeDeliverable(out.Deliverable) {
+		errs = append(errs, "execution deliverable for code tasks must include fenced code or unified diff")
+	}
 	switch out.NextSignal {
 	case "continue_execution", "planning_required", "ready_for_validation":
 		// allowed
 	default:
 		errs = append(errs, "unknown execution next_signal")
 	}
+	if out.NextSignal == "ready_for_validation" {
+		if hasNonEmpty(out.Blockers) {
+			errs = append(errs, "ready_for_validation is blocked by active blockers")
+		}
+		if !hasTrustedEvidence(trustedEvidence) {
+			errs = append(errs, "ready_for_validation requires trusted evidence")
+		}
+		if !hasNonEmpty(out.ChangedArtifacts) || !hasNonEmpty(out.Verification) {
+			errs = append(errs, "ready_for_validation requires changed artifacts and verification evidence")
+		}
+	}
 	return errs
+}
+
+func looksLikeCodeDeliverable(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.Contains(trimmed, "```") || strings.HasPrefix(trimmed, "diff --git ") || strings.Contains(trimmed, "\n--- ") && strings.Contains(trimmed, "\n+++ ") || strings.Contains(trimmed, "\n@@ ")
 }
 
 func containsProgressToolClaim(text string) bool {

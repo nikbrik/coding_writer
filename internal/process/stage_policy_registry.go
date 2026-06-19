@@ -103,6 +103,7 @@ func executionSchemaText() string {
 	return `{
   "stage": "execution",
   "summary": "string, required",
+  "deliverable": "string, required; concrete read-only code output for this step. For implementation tasks include a fenced code block or unified diff. Use blocker explanation only when blocked.",
   "current_step": "string, current step just worked on",
   "completed_steps": ["string"],
   "next_step": "string, next persisted current_step if any",

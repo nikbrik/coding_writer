@@ -81,7 +81,7 @@ func TestExecutionSchemaIncludesProgressFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"current_step", "completed_steps", "next_step"} {
+	for _, field := range []string{"deliverable", "current_step", "completed_steps", "next_step"} {
 		if !strings.Contains(policy.OutputSchema, field) {
 			t.Fatalf("execution schema missing %s:\n%s", field, policy.OutputSchema)
 		}

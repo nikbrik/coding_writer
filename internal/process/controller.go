@@ -43,6 +43,7 @@ type ExchangeInput struct {
 	AutoApproveTransitions bool
 	TrustedEvidence        []string
 	RequireMemoryProposal  bool
+	SkipSemanticIntent     bool
 }
 
 // RunExchange executes the gated process loop.
@@ -127,7 +128,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		stage = taskPtr.Stage
 		action = ResolveActionKind(input.Input, stage, taskPtr.ExpectedAction)
 	}
-	if !input.RenderOnly && c.SemanticValidator != nil {
+	if !input.RenderOnly && c.SemanticValidator != nil && !input.SkipSemanticIntent {
 		deterministicAction := action
 		_ = c.saveAudit(sessionID, taskPtr, stage, action, "semantic_intent_call", nil, "", "", c.Model)
 		intent, err := c.SemanticValidator.ResolveIntent(ctx, SemanticIntentInput{
@@ -363,7 +364,11 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 						TrustedEvidence: input.TrustedEvidence,
 					})
 					if err != nil {
-						validatorErrors = append(validatorErrors, app.AsError(err).Message)
+						if shouldSkipBrokenSemanticValidator(err, parsed) {
+							result.Warnings = append(result.Warnings, "semantic validation skipped: "+app.AsError(err).Code)
+						} else {
+							validatorErrors = append(validatorErrors, app.AsError(err).Message)
+						}
 					} else {
 						validatorErrors = append(validatorErrors, semanticErrors...)
 					}
@@ -545,15 +550,27 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	return result, nil
 }
 
+func shouldSkipBrokenSemanticValidator(err error, parsed ParsedResponse) bool {
+	appErr := app.AsError(err)
+	if appErr.Category != app.CategoryValidation || appErr.Code != "semantic_validator_invalid_json" {
+		return false
+	}
+	if parsed.Stage != app.StageExecution || parsed.Execution == nil {
+		return false
+	}
+	return strings.TrimSpace(parsed.Execution.Deliverable) != ""
+}
+
 func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, input ExchangeInput, sessionID string, transition *TransitionResult) (*ExchangeResult, error) {
 	fallback := &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}
 	next := input
 	next.SessionID = sessionID
-	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"]. Дай следующий безопасный шаг или read-only спецификацию."
+	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker. Не возвращай только progress metadata."
 	next.RenderOnly = false
 	next.ActionKind = ActionExecutePlanStep
 	next.AutoApproveTransitions = false
 	next.TrustedEvidence = nil
+	next.SkipSemanticIntent = true
 	result, err := c.RunExchange(ctx, next)
 	if err != nil {
 		fallback.Warnings = append(fallback.Warnings, "execution continuation skipped: "+app.AsError(err).Code)
@@ -562,11 +579,60 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 	if result == nil {
 		return fallback, nil
 	}
-	if strings.TrimSpace(result.Answer) == "" {
-		result.Answer = fallback.Answer
+	answers := []string{}
+	if strings.TrimSpace(result.Answer) != "" {
+		answers = append(answers, result.Answer)
 	}
-	result.Transition = transition
-	return result, nil
+	current := result
+	for i := 1; i < c.autoExecutionLimit(transition); i++ {
+		parsed, ok := parseExecutionAnswer(current.Answer)
+		if !ok || parsed.NextSignal != "continue_execution" || hasNonEmpty(parsed.Blockers) {
+			break
+		}
+		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. В поле deliverable обязательно дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Только если реально заблокирован, дай явный blocker."
+		next.ActionKind = ActionExecutePlanStep
+		next.TrustedEvidence = nil
+		next.AutoApproveTransitions = false
+		more, err := c.RunExchange(ctx, next)
+		if err != nil {
+			current.Warnings = append(current.Warnings, "execution auto-continue stopped: "+app.AsError(err).Code)
+			break
+		}
+		if more == nil || strings.TrimSpace(more.Answer) == "" {
+			break
+		}
+		answers = append(answers, more.Answer)
+		current = more
+	}
+	if len(answers) > 0 {
+		current.Answer = strings.Join(answers, "\n\n")
+	} else if strings.TrimSpace(current.Answer) == "" {
+		current.Answer = fallback.Answer
+	}
+	current.Transition = transition
+	return current, nil
+}
+
+func (c *ProcessController) autoExecutionLimit(transition *TransitionResult) int {
+	limit := 10
+	if transition != nil && len(transition.State.Plan) > 0 {
+		limit = len(transition.State.Plan)
+	}
+	if limit < 1 {
+		return 1
+	}
+	if limit > 20 {
+		return 20
+	}
+	return limit
+}
+
+func parseExecutionAnswer(answer string) (*ExecutionOutput, bool) {
+	parsed, err := Parse(app.StageExecution, ActionExecutePlanStep, answer)
+	if err != nil || parsed.Execution == nil {
+		return nil, false
+	}
+	return parsed.Execution, true
 }
 
 func normalizeParsedActionForOutput(stage app.TaskStage, parsed *ParsedResponse) {
@@ -934,7 +1000,7 @@ func shouldRetryValidatorErrors(errs []string) bool {
 		if strings.Contains(lower, "missing required") || strings.Contains(lower, "unknown") || strings.Contains(lower, "schema") {
 			return true
 		}
-		if strings.Contains(lower, "open questions block readiness") || strings.Contains(lower, "ask_clarification requires") || strings.Contains(lower, "llm_validator:missing_user_input") || strings.Contains(lower, "llm_validator:read_only_violation") || strings.Contains(lower, "llm_validator:false_read_only_claim") || strings.Contains(lower, "llm_validator:memory_claim") || strings.Contains(lower, "llm_validator:missing_trusted_evidence") || strings.Contains(lower, "llm_validator:missing_implementation") || strings.Contains(lower, "llm_validator:no_trusted_evidence") || strings.Contains(lower, "llm_validator:no_side_effects") || strings.Contains(lower, "llm_validator:unauthorized_mutation") || strings.Contains(lower, "llm_validator:unsupported_mutation") || strings.Contains(lower, "llm_validator:unsupported_execution_claim") {
+		if strings.Contains(lower, "open questions block readiness") || strings.Contains(lower, "ask_clarification requires") || strings.Contains(lower, "ready_for_validation requires trusted evidence") || strings.Contains(lower, "execution deliverable is required") || strings.Contains(lower, "execution deliverable for code tasks") || strings.Contains(lower, "llm_validator:missing_user_input") || strings.Contains(lower, "llm_validator:read_only_violation") || strings.Contains(lower, "llm_validator:false_claim") || strings.Contains(lower, "llm_validator:unauthorized_claim") || strings.Contains(lower, "llm_validator:false_read_only_claim") || strings.Contains(lower, "llm_validator:memory_claim") || strings.Contains(lower, "llm_validator:missing_trusted_evidence") || strings.Contains(lower, "llm_validator:missing_implementation") || strings.Contains(lower, "llm_validator:no_trusted_evidence") || strings.Contains(lower, "llm_validator:no_side_effects") || strings.Contains(lower, "llm_validator:unauthorized_mutation") || strings.Contains(lower, "llm_validator:unsupported_mutation") || strings.Contains(lower, "llm_validator:unsupported_execution_claim") {
 			return true
 		}
 	}

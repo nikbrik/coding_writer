@@ -120,7 +120,7 @@ func TestTransitionGateExecutionToValidation(t *testing.T) {
 	state, _ := mgr.Start("task")
 	state, _ = mgr.Move(app.StageExecution)
 	gate := &TransitionGate{Tasks: mgr}
-	parsed := ParsedResponse{Stage: app.StageExecution, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"not run"}, NextSignal: "ready_for_validation"}}
+	parsed := ParsedResponse{Stage: app.StageExecution, TrustedEvidence: []string{NewTrustedEvidence("go test ./...", 0, "ok")}, Execution: &ExecutionOutput{ChangedArtifacts: []string{"file"}, Verification: []string{"not run"}, NextSignal: "ready_for_validation"}}
 	res, err := gate.Apply(state, parsed, TransitionOptions{})
 	if err != nil {
 		t.Fatal(err)

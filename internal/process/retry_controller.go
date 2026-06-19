@@ -14,7 +14,7 @@ type RetryController struct {
 }
 
 func NewRetryController() *RetryController {
-	return &RetryController{MaxRetries: 2}
+	return &RetryController{MaxRetries: 4}
 }
 
 // ShouldRetry returns true only for fixable schema/stage violations.
@@ -51,6 +51,16 @@ func (r *RetryController) CorrectionPrompt(validatorErrors []string) string {
 		b.WriteString("\n")
 	}
 	b.WriteString("</trusted_validator_errors>\n")
+	lower := strings.ToLower(strings.Join(validatorErrors, "\n"))
+	if strings.Contains(lower, "ready_for_validation requires changed artifacts and verification evidence") || strings.Contains(lower, "ready_for_validation requires trusted evidence") {
+		b.WriteString("Because trusted file/tool evidence was not provided, do not use next_signal=ready_for_validation. Set next_signal=continue_execution and provide the next code deliverable in a fenced code block or unified diff. Keep changed_artifacts empty and verification=[\"not run\"].\n")
+	}
+	if strings.Contains(lower, "execution deliverable") {
+		b.WriteString("For execution, the deliverable field must contain concrete code in a fenced code block or a unified diff. Do not return only metadata.\n")
+	}
+	if strings.Contains(lower, "llm_validator:false_claim") || strings.Contains(lower, "llm_validator:unauthorized_claim") || strings.Contains(lower, "llm_validator:missing_trusted_evidence") || strings.Contains(lower, "llm_validator:no_trusted_evidence") {
+		b.WriteString("Without trusted_evidence, describe the code as prepared/proposed in chat only. Do not claim files were created, changed, implemented, verified, or tested. Keep changed_artifacts empty and verification=[\"not run\"].\n")
+	}
 	b.WriteString("Regenerate the response using the required schema.\n")
 	b.WriteString("Do not add new scope.")
 	return b.String()

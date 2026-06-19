@@ -31,6 +31,13 @@ func TestRetryCorrectionPrompt(t *testing.T) {
 	}
 }
 
+func TestRetryCorrectionPromptForPrematureValidation(t *testing.T) {
+	prompt := NewRetryController().CorrectionPrompt([]string{"ready_for_validation requires changed artifacts and verification evidence"})
+	if !strings.Contains(prompt, "do not use next_signal=ready_for_validation") || !strings.Contains(prompt, "fenced code block") {
+		t.Fatalf("missing premature validation correction: %s", prompt)
+	}
+}
+
 func TestProcessControllerRetriesFixableParseError(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -59,12 +66,12 @@ func TestProcessControllerRejectsAfterMaxRetries(t *testing.T) {
 	if _, err := ctrl.Tasks.Start("task"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponses = []string{"bad", "still bad", "bad again"}
+	fake.ChatResponses = []string{"bad", "still bad", "bad again", "bad fourth", "bad fifth"}
 	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "спланируй", ActionKind: ActionPlanTask})
 	if err == nil {
 		t.Fatal("expected validation error")
 	}
-	if chatCalls(fake.Calls) != 3 {
-		t.Fatalf("expected initial + 2 retries, got %d", chatCalls(fake.Calls))
+	if chatCalls(fake.Calls) != 5 {
+		t.Fatalf("expected initial + 4 retries, got %d", chatCalls(fake.Calls))
 	}
 }

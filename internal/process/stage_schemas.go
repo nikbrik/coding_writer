@@ -15,6 +15,7 @@ type PlanningOutput struct {
 type ExecutionOutput struct {
 	Stage            string   `json:"stage"`
 	Summary          string   `json:"summary"`
+	Deliverable      string   `json:"deliverable,omitempty"`
 	CurrentStep      string   `json:"current_step,omitempty"`
 	CompletedSteps   []string `json:"completed_steps,omitempty"`
 	NextStep         string   `json:"next_step,omitempty"`

@@ -670,7 +670,7 @@ func TestProcessControllerLocalReadySignalDoesNotOverrideSemanticDowngrade(t *te
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.92,"reason":"overly conservative fake downgrade"}`,
 	}
-	fake.ChatResponse = `{"stage":"execution","summary":"continuing safely","current_step":"first step","completed_steps":[],"next_step":"first step","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+	fake.ChatResponse = `{"stage":"execution","summary":"continuing safely","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"first step","completed_steps":[],"next_step":"first step","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
 	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Готово к проверке."})
 	if err != nil {
 		t.Fatal(err)
@@ -815,6 +815,7 @@ func TestShouldRetryFixableSemanticPlanningErrors(t *testing.T) {
 	for _, errText := range []string{
 		"open questions block readiness",
 		"ask_clarification requires open questions and needs_user_input readiness",
+		"execution deliverable is required without trusted evidence",
 		"llm_validator:missing_user_input: user already provided clear input",
 		"llm_validator:read_only_violation: future guidance was misread as mutation",
 		"llm_validator:false_read_only_claim: future confirmation was misread as mutation",
@@ -862,6 +863,21 @@ func TestGuardUnsignaledSemanticTransitionDoesNotInventExecutionSignal(t *testin
 	}
 }
 
+func TestAutoExecutionLimitFollowsPlanLength(t *testing.T) {
+	ctrl := &ProcessController{}
+	transition := &TransitionResult{State: app.TaskState{Plan: make([]string, 12)}}
+	if got := ctrl.autoExecutionLimit(transition); got != 12 {
+		t.Fatalf("want plan-length limit 12, got %d", got)
+	}
+	transition.State.Plan = make([]string, 25)
+	if got := ctrl.autoExecutionLimit(transition); got != 20 {
+		t.Fatalf("want cap 20, got %d", got)
+	}
+	if got := ctrl.autoExecutionLimit(&TransitionResult{}); got != 10 {
+		t.Fatalf("want default 10, got %d", got)
+	}
+}
+
 func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -871,7 +887,7 @@ func TestProcessControllerExecutionProgressUpdatesCurrentStep(t *testing.T) {
 	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"execution","summary":"worked","current_step":"first","completed_steps":["first"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
+	fake.ChatResponse = `{"stage":"execution","summary":"worked","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"first","completed_steps":["first"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
 	if _, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "реализуй", ActionKind: ActionExecutePlanStep}); err != nil {
 		t.Fatal(err)
 	}
@@ -893,7 +909,7 @@ func TestProcessControllerRejectsUnverifiedExecutionProgressClaims(t *testing.T)
 	if _, err := ctrl.Tasks.SetStep("first"); err != nil {
 		t.Fatal(err)
 	}
-	fake.ChatResponse = `{"stage":"execution","summary":"worked","current_step":"updated file internal/foo.go","completed_steps":["tests passed"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
+	fake.ChatResponse = `{"stage":"execution","summary":"worked","deliverable":"\u0060\u0060\u0060go\npackage main\n\u0060\u0060\u0060","current_step":"updated file internal/foo.go","completed_steps":["tests passed"],"next_step":"second","changed_artifacts":[],"verification":[],"blockers":[],"next_signal":"continue_execution"}`
 	_, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "progress_claims", Input: "реализуй", ActionKind: ActionExecutePlanStep})
 	if err == nil || app.AsError(err).Code != "validation_failed" {
 		t.Fatalf("want validation_failed, got %v", err)

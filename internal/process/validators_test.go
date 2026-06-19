@@ -103,6 +103,7 @@ func TestStructuralValidatorsSkipSemanticImplementationKeywordChecks(t *testing.
 		Stage:      app.StageExecution,
 		ActionKind: ActionExecutePlanStep,
 		Execution: &ExecutionOutput{
+			Deliverable:    "```go\npackage main\n```",
 			Summary:        "s",
 			CompletedSteps: []string{"Реализовать функции чтения/записи файла конфигурации в директории пользователя."},
 			NextSignal:     "continue_execution",
@@ -131,9 +132,23 @@ func TestExecutionRejectsToolResultClaimInNextStep(t *testing.T) {
 }
 
 func TestExecutionAllowsBenignProgressFields(t *testing.T) {
-	errs := validateExecution(&ExecutionOutput{Summary: "worked", CurrentStep: "first", CompletedSteps: []string{"first"}, NextStep: "second", NextSignal: "continue_execution"})
+	errs := validateExecution(&ExecutionOutput{Summary: "worked", Deliverable: "```go\npackage main\n```", CurrentStep: "first", CompletedSteps: []string{"first"}, NextStep: "second", NextSignal: "continue_execution"})
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
+	}
+}
+
+func TestExecutionRequiresDeliverableWithoutTrustedEvidence(t *testing.T) {
+	errs := validateExecution(&ExecutionOutput{Summary: "worked", CurrentStep: "first", NextStep: "second", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected missing deliverable rejection")
+	}
+}
+
+func TestExecutionStructuralRequiresCodeDeliverableShape(t *testing.T) {
+	errs := validateExecutionStructural(&ExecutionOutput{Summary: "worked", Deliverable: "package main", NextSignal: "continue_execution"})
+	if len(errs) == 0 {
+		t.Fatal("expected non-fenced deliverable rejection")
 	}
 }
 
@@ -190,6 +205,19 @@ func TestExecutionRejectsReadyWithBlockers(t *testing.T) {
 	})
 	if len(errs) == 0 {
 		t.Fatal("expected blocker rejection")
+	}
+}
+
+func TestExecutionStructuralReadyRequiresTrustedEvidence(t *testing.T) {
+	errs := validateExecutionStructural(&ExecutionOutput{
+		Summary:          "prepared",
+		Deliverable:      "```go\npackage main\n```",
+		ChangedArtifacts: []string{"file"},
+		Verification:     []string{"not run"},
+		NextSignal:       "ready_for_validation",
+	})
+	if len(errs) == 0 {
+		t.Fatal("expected ready_for_validation trusted evidence rejection")
 	}
 }
 

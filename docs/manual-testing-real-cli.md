@@ -74,7 +74,7 @@ go test ./...
 
 Canonical source: `docs/manual-testing-day11-14.md`.
 
-Эти 4 сценария нужно прогонять первыми, когда цель - доказать, что требования Day 11, Day 12, Day 13, Day 14 полностью выполняются. Они остались отдельным документом, потому что это именно video/demo acceptance checklist, а не compact regression matrix.
+Эти 4 сценария нужно прогонять первыми, когда цель - доказать, что требования Day 11, Day 12, Day 13, Day 14 полностью выполняются. Каждый demo case теперь решает маленькую LeetCode-style задачу до полного code deliverable, а требование конкретного дня доказывается на фоне нормальной работы coding assistant.
 
 Preflight:
 
@@ -89,53 +89,56 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит.
 
-### Demo Case 1. Day 11 Memory Layers
+### Demo Case 1. Day 11 Memory Layers + Two Sum
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 11. Memory Layers`.
+Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 11. Memory Layers + Two Sum`.
 
 Acceptance proof:
 
-- ordinary user request creates/plans the task without manual `/task start`;
+- ordinary user request asks to solve `Two Sum` in Go;
+- execution returns complete code/tests/complexity, not only metadata;
 - memory classifier proposes records;
 - user explicitly applies proposal;
 - `short`, `work`, `long` are separate physical layers;
 - next assistant answer uses saved context without the user repeating requirements;
 - noise does not become useful `work`/`long` memory.
 
-### Demo Case 2. Day 12 Personalization Profiles
+### Demo Case 2. Day 12 Personalization Profiles + Valid Parentheses
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 12. Personalization Profiles`.
+Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 12. Profiles + Valid Parentheses`.
 
 Acceptance proof:
 
 - `student`, `senior`, and custom `tester` profiles exist;
 - active profile is injected into prompt automatically;
-- same user query changes style under different profiles;
+- same short `Valid Parentheses` prompt changes style under different profiles;
+- active `tester` profile then solves the full task with code/tests/edge cases/complexity;
 - user does not copy/paste style requirements into every prompt.
 
-### Demo Case 3. Day 13 Task State FSM
+### Demo Case 3. Day 13 Task State FSM + Merge Sorted Arrays
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 13. Task State FSM`.
+Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 13. Task FSM + Merge Sorted Arrays`.
 
 Acceptance proof:
 
-- natural planning request creates task state;
+- natural `Merge Sorted Arrays` request creates task state;
 - task has stage, current step, expected action;
+- execution returns code deliverables for the algorithm task;
 - pause/resume survives CLI restart;
 - assistant continues from persisted context without asking for the original task again;
 - validation/done transition uses trusted verification evidence, not manual `/task move done`.
 
-### Demo Case 4. Day 14 Invariants
+### Demo Case 4. Day 14 Invariants + Stock Profit
 
-Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 14. Invariants`.
+Run exact scenario from `docs/manual-testing-day11-14.md` section `Видео Day 14. Invariants + Best Time to Buy/Sell Stock`.
 
 Acceptance proof:
 
 - invariants are stored separately;
 - active invariants appear in rendered prompt;
-- safe Go request runs normally;
-- conflicting Python rewrite request is blocked with `invariant_conflict`, invariant ID, and evidence;
-- custom invariant persists in `invariants/project.jsonl`.
+- safe Go `MaxProfit` request runs normally and returns complete code/tests/complexity;
+- conflicting Python/brute-force rewrite request is blocked with `invariant_conflict`, invariant ID, and evidence;
+- custom algorithm invariant persists in `invariants/project.jsonl`.
 
 ## 3. Validation model
 

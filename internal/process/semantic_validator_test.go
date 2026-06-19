@@ -10,7 +10,7 @@ import (
 
 func TestSemanticValidationPromptAllowsReadOnlyProcedures(t *testing.T) {
 	prompt := semanticValidationSystemPrompt()
-	for _, needle := range []string{"read-only checklist", "procedure", "claims the assistant already performed", "explicit apply/approval", "will ask for confirmation"} {
+	for _, needle := range []string{"read-only checklist", "procedure", "claims the assistant already performed", "explicit apply/approval", "will ask for confirmation", "deliverable is empty"} {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("semantic validation prompt lost read-only procedure guidance: missing %q", needle)
 		}
@@ -32,5 +32,18 @@ func TestSemanticValidatorRetriesInvalidJSON(t *testing.T) {
 	}
 	if validatorCalls(fake.SnapshotCalls()) != 2 {
 		t.Fatalf("expected two validator attempts, got %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestDecodeSemanticJSONExtractsObjectFromProse(t *testing.T) {
+	var out struct {
+		Verdict string `json:"verdict"`
+	}
+	err := decodeSemanticJSON("Here is the result:\n```json\n{\"verdict\":\"pass\"}\n```", &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Verdict != "pass" {
+		t.Fatalf("unexpected verdict: %q", out.Verdict)
 	}
 }

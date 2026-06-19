@@ -142,6 +142,9 @@ func (g *TransitionGate) nextStage(state app.TaskState, parsed ParsedResponse, o
 			if hasNonEmpty(parsed.Execution.Blockers) {
 				return state.Stage, "", false, app.NewError(app.CategoryValidation, "transition_precondition_failed", "execution has blockers", nil)
 			}
+			if !hasTrustedEvidence(parsed.TrustedEvidence) {
+				return state.Stage, "", false, app.NewError(app.CategoryValidation, "transition_precondition_failed", "execution trusted evidence is missing", nil)
+			}
 			if !hasNonEmpty(parsed.Execution.ChangedArtifacts) || !hasNonEmpty(parsed.Execution.Verification) {
 				return state.Stage, "", false, app.NewError(app.CategoryValidation, "transition_precondition_failed", "execution evidence is missing", nil)
 			}
