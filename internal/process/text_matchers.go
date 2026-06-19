@@ -60,17 +60,9 @@ func hasTrustedEvidence(evidence []string) bool {
 }
 
 func isStructuredTrustedEvidence(item string) bool {
-	item = strings.TrimSpace(item)
-	if !strings.HasPrefix(item, trustedEvidencePrefix) {
+	fields, ok := structuredTrustedEvidenceFields(item)
+	if !ok {
 		return false
-	}
-	fields := map[string]string{}
-	for _, part := range strings.Split(strings.TrimPrefix(item, trustedEvidencePrefix), ";") {
-		key, value, ok := strings.Cut(part, "=")
-		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-			return false
-		}
-		fields[key] = value
 	}
 	if strings.TrimSpace(fields["source"]) == "" || len(fields["sha256"]) != 64 {
 		return false
@@ -82,6 +74,80 @@ func isStructuredTrustedEvidence(item string) bool {
 	}
 	exit, err := strconv.Atoi(fields["exit"])
 	return err == nil && exit == 0
+}
+
+func structuredTrustedEvidenceFields(item string) (map[string]string, bool) {
+	item = strings.TrimSpace(item)
+	if !strings.HasPrefix(item, trustedEvidencePrefix) {
+		return nil, false
+	}
+	fields := map[string]string{}
+	for _, part := range strings.Split(strings.TrimPrefix(item, trustedEvidencePrefix), ";") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			return nil, false
+		}
+		fields[key] = value
+	}
+	return fields, true
+}
+
+func trustedEvidenceSatisfiesAcceptanceCriteria(criteria []string, evidence []string) bool {
+	if !hasTrustedEvidence(evidence) {
+		return false
+	}
+	requiredSources := requiredTrustedEvidenceSources(criteria)
+	if len(requiredSources) == 0 {
+		return true
+	}
+	sources := trustedEvidenceSources(evidence)
+	for _, required := range requiredSources {
+		if !hasEvidenceSourcePrefix(sources, required) {
+			return false
+		}
+	}
+	return true
+}
+
+func requiredTrustedEvidenceSources(criteria []string) []string {
+	required := map[string]bool{}
+	for _, criterion := range criteria {
+		lower := strings.ToLower(criterion)
+		switch {
+		case strings.Contains(lower, "go test") || strings.Contains(lower, "tests pass") || strings.Contains(lower, "tests passed") || strings.Contains(lower, "тесты"):
+			required["go test"] = true
+		case strings.Contains(lower, "go vet"):
+			required["go vet"] = true
+		case strings.Contains(lower, "git diff --check"):
+			required["git diff --check"] = true
+		}
+	}
+	out := make([]string, 0, len(required))
+	for source := range required {
+		out = append(out, source)
+	}
+	return out
+}
+
+func trustedEvidenceSources(evidence []string) []string {
+	var sources []string
+	for _, item := range evidence {
+		if !isStructuredTrustedEvidence(item) {
+			continue
+		}
+		fields, _ := structuredTrustedEvidenceFields(item)
+		sources = append(sources, strings.ToLower(strings.TrimSpace(fields["source"])))
+	}
+	return sources
+}
+
+func hasEvidenceSourcePrefix(sources []string, required string) bool {
+	for _, source := range sources {
+		if source == required || strings.HasPrefix(source, required+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func containsSideEffectClaim(text string) bool {

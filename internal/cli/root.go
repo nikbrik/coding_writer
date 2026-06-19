@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,9 +28,16 @@ import (
 	"github.com/nikbrik/coding_writer/internal/providers"
 	"github.com/nikbrik/coding_writer/internal/storage"
 	"github.com/nikbrik/coding_writer/internal/tasks"
+	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
 var Version = "dev"
+
+const (
+	trustedVerificationTimeout       = 2 * time.Minute
+	trustedVerificationOutputLimit   = 256 * 1024
+	trustedVerificationCommandMaxLen = 512
+)
 
 type globalOptions struct {
 	StorageDir             string
@@ -67,13 +75,41 @@ func Execute() error {
 	opts := &globalOptions{}
 	cmd := newRootCommand(opts)
 	if err := cmd.Execute(); err != nil {
-		printError(cmd.ErrOrStderr(), err, opts.JSON)
+		err = normalizeTopLevelCLIError(err)
+		printError(cmd.ErrOrStderr(), err, opts.JSON || argvRequestsJSON(os.Args[1:]))
 		return err
 	}
 	return nil
 }
 
 func ExitCode(err error) int { return app.ExitCode(err) }
+
+func normalizeTopLevelCLIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var appErr *app.Error
+	if errors.As(err, &appErr) {
+		return err
+	}
+	return app.ErrorWithHint(app.CategoryCLI, "command_error", err.Error(), "run assistant --help", err)
+}
+
+func argvRequestsJSON(args []string) bool {
+	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
+		if arg == "--json" {
+			return true
+		}
+		if value, ok := strings.CutPrefix(arg, "--json="); ok {
+			parsed, err := strconv.ParseBool(value)
+			return err == nil && parsed
+		}
+	}
+	return false
+}
 
 func newRootCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{
@@ -284,7 +320,11 @@ func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 
 func chooseProvider(cfg app.AppConfig) providers.LLMProvider {
 	if os.Getenv("ASSISTANT_PROVIDER") == "fake" || os.Getenv("ASSISTANT_FAKE_PROVIDER") == "1" {
-		return providers.NewFakeProvider()
+		fake := providers.NewFakeProvider()
+		if value := os.Getenv("ASSISTANT_FAKE_CLASSIFIER_RESPONSE"); value != "" {
+			fake.ClassifierResponse = value
+		}
+		return fake
 	}
 	return providers.NewOpenRouterProvider(cfg.OpenRouterBaseURL)
 }
@@ -474,6 +514,9 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 				printError(diag, err, false)
 			}
 			if done {
+				if failed && !interactive {
+					return app.NewError(app.CategoryCLI, "batch_failed", "one or more non-interactive REPL commands failed", nil)
+				}
 				return nil
 			}
 			continue
@@ -521,8 +564,23 @@ func runTrustedVerification(ctx context.Context, command string, renderOnly bool
 	if command == "" || renderOnly {
 		return nil, nil
 	}
-	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
-	output, err := cmd.CombinedOutput()
+	tokens, err := parseTrustedVerificationCommand(command)
+	if err != nil {
+		return nil, err
+	}
+	verifyCtx, cancel := context.WithTimeout(ctx, trustedVerificationTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(verifyCtx, tokens[0], tokens[1:]...)
+	output := &boundedVerificationOutput{limit: trustedVerificationOutputLimit}
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err = cmd.Run()
+	if verifyCtx.Err() == context.DeadlineExceeded {
+		return nil, app.NewError(app.CategoryValidation, "verification_timeout", "verification command timed out", nil)
+	}
+	if output.truncated {
+		return nil, app.NewError(app.CategoryValidation, "verification_output_too_large", "verification command output exceeded limit", nil)
+	}
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -534,7 +592,96 @@ func runTrustedVerification(ctx context.Context, command string, renderOnly bool
 	if exitCode != 0 {
 		return nil, app.NewError(app.CategoryValidation, "verification_failed", "verification command exited non-zero", nil)
 	}
-	return []string{process.NewTrustedEvidence(command, exitCode, string(output))}, nil
+	return []string{process.NewTrustedEvidence(strings.Join(tokens, " "), exitCode, output.String())}, nil
+}
+
+type boundedVerificationOutput struct {
+	buf       strings.Builder
+	limit     int
+	truncated bool
+}
+
+func (b *boundedVerificationOutput) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.buf.Write(p[:remaining])
+			b.truncated = true
+			return len(p), nil
+		}
+		_, _ = b.buf.Write(p)
+		return len(p), nil
+	}
+	b.truncated = true
+	return len(p), nil
+}
+
+func (b *boundedVerificationOutput) String() string {
+	return b.buf.String()
+}
+
+func parseTrustedVerificationCommand(command string) ([]string, error) {
+	if len(command) > trustedVerificationCommandMaxLen {
+		return nil, app.NewError(app.CategoryValidation, "unsafe_verification_command", "verification command is too long", nil)
+	}
+	if containsUnsafeVerificationSyntax(command) {
+		return nil, app.NewError(app.CategoryValidation, "unsafe_verification_command", "verification command must be argv-only without shell operators or env expansion", nil)
+	}
+	tokens := splitShellTokens(command)
+	if len(tokens) == 0 || strings.TrimSpace(tokens[0]) == "" {
+		return nil, app.NewError(app.CategoryCLI, "missing_verification_command", "verification command is required", nil)
+	}
+	for _, token := range tokens {
+		if hasParentPathSegment(token) || strings.HasPrefix(token, "/") || strings.ContainsAny(token, "\x00\n\r") {
+			return nil, app.NewError(app.CategoryValidation, "unsafe_verification_command", "verification command contains an unsafe path or control character", nil)
+		}
+	}
+	name := tokens[0]
+	if strings.ContainsAny(name, `/\`) {
+		return nil, app.NewError(app.CategoryValidation, "unsafe_verification_command", "verification command executable must be resolved from PATH", nil)
+	}
+	if !allowedVerificationCommand(tokens) {
+		return nil, app.ErrorWithHint(app.CategoryValidation, "unsafe_verification_command", "verification command is not in the trusted allowlist", "allowed: go test|go vet|go version; git diff|git status", nil)
+	}
+	return tokens, nil
+}
+
+func containsUnsafeVerificationSyntax(command string) bool {
+	if strings.ContainsAny(command, "\x00\n\r;&|<>`$") {
+		return true
+	}
+	return strings.Contains(command, "$(") || strings.Contains(command, "${")
+}
+
+func allowedVerificationCommand(tokens []string) bool {
+	if len(tokens) < 2 {
+		return false
+	}
+	switch tokens[0] {
+	case "go":
+		switch tokens[1] {
+		case "test", "vet", "version":
+			return true
+		}
+	case "git":
+		switch tokens[1] {
+		case "diff", "status":
+			return true
+		}
+	}
+	return false
+}
+
+func hasParentPathSegment(token string) bool {
+	for _, segment := range strings.Split(strings.ReplaceAll(token, `\`, "/"), "/") {
+		if segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func isInteractiveReader(r io.Reader) bool {
@@ -765,6 +912,13 @@ func memoryProposeCommand(opts *globalOptions) *cobra.Command {
 			sessionID, err := memory.LatestSessionID(rt.StorageDir)
 			if err != nil {
 				return err
+			}
+			if proposal, ok, err := rt.Proposals.LatestPending(cmd.Context(), sessionID); err != nil {
+				if app.AsError(err).Code != "proposal_read" && app.AsError(err).Code != "session_missing" {
+					return err
+				}
+			} else if ok {
+				return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "proposal": proposal, "session_id": sessionID}, proposalText(proposal))
 			}
 			userRecord, assistantRecord, err := rt.Memory.LatestExchange(cmd.Context(), sessionID)
 			if err != nil {
@@ -1535,6 +1689,14 @@ func handleMemorySlash(ctx context.Context, out io.Writer, diag io.Writer, rt *r
 		}
 		_, _ = fmt.Fprint(out, memoryText(records))
 	case "propose":
+		if proposal, ok, err := rt.Proposals.LatestPending(ctx, sessionID); err != nil {
+			if app.AsError(err).Code != "proposal_read" && app.AsError(err).Code != "session_missing" {
+				return err
+			}
+		} else if ok {
+			_, _ = fmt.Fprint(out, proposalText(proposal))
+			return nil
+		}
 		userRecord, assistantRecord, err := rt.Memory.LatestExchange(ctx, sessionID)
 		if err != nil {
 			return err
@@ -2086,14 +2248,25 @@ func invariantsText(items []app.Invariant) string {
 		b.WriteString("] ")
 		b.WriteString(inv.Kind)
 		b.WriteString(": ")
-		b.WriteString(safeTerminalText(inv.Content))
+		b.WriteString(safeTerminalText(redactSecretLikeDisplay(inv.Content)))
 		if len(inv.ForbiddenTerms) > 0 {
 			b.WriteString(" forbid=")
-			b.WriteString(safeTerminalText(strings.Join(inv.ForbiddenTerms, ",")))
+			b.WriteString(safeTerminalText(redactSecretLikeDisplay(strings.Join(inv.ForbiddenTerms, ","))))
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func redactSecretLikeDisplay(text string) string {
+	redacted, findings := validation.RedactText(text)
+	for _, marker := range []string{"OPENROUTER_API_KEY", "openrouter_api_key"} {
+		redacted = strings.ReplaceAll(redacted, marker, "[REDACTED_SECRET_PATTERN]")
+	}
+	if len(findings) == 0 {
+		return redacted
+	}
+	return strings.ReplaceAll(redacted, "[REDACTED_SECRET]", "[REDACTED_SECRET_PATTERN]")
 }
 
 func processAuditText(events []process.ProcessAuditEvent) string {

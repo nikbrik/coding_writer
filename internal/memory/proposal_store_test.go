@@ -69,6 +69,33 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestProposalStoreLatestPendingSkipsAppliedProposals(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewProposalStore(dir, NewManager(dir))
+	sessionID := "session_pending"
+	appliedAt := time.Now().UTC()
+	first := app.MemoryProposal{ID: "proposal_applied", SessionID: sessionID, CreatedAt: appliedAt, Records: []app.ProposedMemoryRecord{
+		{ID: "r_applied", Layer: app.ProposedLayerLong, Kind: "preference", Content: "old", Status: app.ProposalAccepted, AppliedAt: &appliedAt},
+	}}
+	second := app.MemoryProposal{ID: "proposal_pending", SessionID: sessionID, CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
+		{ID: "r_work", Layer: app.ProposedLayerWork, Kind: "requirement", Content: "CLI supports OpenRouter model selection", Status: app.ProposalPending},
+	}}
+	if err := store.Save(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := store.LatestPending(ctx, sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || got.ID != "proposal_pending" {
+		t.Fatalf("want latest pending proposal, ok=%v got=%s", ok, got.ID)
+	}
+}
+
 func TestProposalApplyUsesStoredGenerationProfile(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

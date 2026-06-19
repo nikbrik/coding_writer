@@ -204,7 +204,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
 		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (isDoneValidationSignal(input.Input) || semanticSignal == "ready_for_done") && hasTrustedEvidence(input.TrustedEvidence) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (isDoneValidationSignal(input.Input) || semanticSignal == "ready_for_done") && trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
 		from := taskPtr.Stage
 		state, err := c.Tasks.Move(app.StageDone)
 		if err != nil {
@@ -213,6 +213,11 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "trusted verification completed", State: state}
 		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
 		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+	}
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (isDoneValidationSignal(input.Input) || semanticSignal == "ready_for_done") && hasTrustedEvidence(input.TrustedEvidence) && !trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
+		err := app.NewError(app.CategoryValidation, "transition_precondition_failed", "trusted verification does not satisfy acceptance criteria", nil)
+		_ = c.saveAudit(sessionID, taskPtr, taskPtr.Stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
+		return nil, err
 	}
 
 	profile, err := c.activeProfile()
@@ -736,9 +741,13 @@ func expectedAction(task *app.TaskState) app.ExpectedAction {
 
 func actionForSemanticSignal(stage app.TaskStage, action ActionKind, signal string) ActionKind {
 	switch signal {
-	case "approve_planning", "reject_planning":
+	case "approve_planning":
 		if stage == app.StagePlanning {
 			return ActionProposeTransition
+		}
+	case "reject_planning":
+		if stage == app.StagePlanning {
+			return ActionAnswerQuestion
 		}
 	case "ready_for_validation":
 		if stage == app.StageExecution {
@@ -756,10 +765,22 @@ func constrainSemanticActionToContext(stage app.TaskStage, deterministic, semant
 	if stage == "" {
 		return deterministic
 	}
+	if semantic.IsAllowedIn(stage) {
+		return semantic
+	}
+	if stage == app.StageExecution && semantic == ActionReviewOutput {
+		return ActionSummarizeExecution
+	}
+	if deterministic.IsAllowedIn(stage) {
+		return deterministic
+	}
 	return semantic
 }
 
 func preserveLocalTransitionSignal(stage app.TaskStage, input string, deterministic, semantic ActionKind, signal string) (ActionKind, string) {
+	if stage == app.StagePlanning && semantic == ActionProposeTransition && deterministic != ActionProposeTransition && signal != "approve_planning" {
+		return deterministic, signal
+	}
 	if stage == app.StagePlanning && deterministic == ActionProposeTransition {
 		if signal == "" || signal == "none" {
 			signal = "approve_planning"
@@ -768,6 +789,9 @@ func preserveLocalTransitionSignal(stage app.TaskStage, input string, determinis
 	}
 	if stage == app.StageExecution && deterministic == ActionSummarizeExecution && isReadyForValidationSignal(input) {
 		return deterministic, "ready_for_validation"
+	}
+	if stage == app.StageExecution && semantic == ActionSummarizeExecution && deterministic == ActionExecutePlanStep {
+		return semantic, "ready_for_validation"
 	}
 	if stage == app.StageValidation && isDoneValidationSignal(input) {
 		return semantic, "ready_for_done"
@@ -785,11 +809,17 @@ func hasUsefulPlanningDraft(out *PlanningOutput) bool {
 
 func isReadyForValidationSignal(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
+	if hasExplicitTransitionNegation(lower) {
+		return false
+	}
 	return containsAny(lower, []string{"готово к проверке", "ready for validation", "ready to validate"})
 }
 
 func isDoneValidationSignal(input string) bool {
 	lower := strings.ToLower(strings.TrimSpace(input))
+	if hasExplicitTransitionNegation(lower) {
+		return false
+	}
 	return containsAny(lower, []string{"проверь и заверши", "verify and finish", "verify and complete"})
 }
 
@@ -880,6 +910,9 @@ func shouldRetryValidatorErrors(errs []string) bool {
 	for _, err := range errs {
 		lower := strings.ToLower(err)
 		if strings.Contains(lower, "missing required") || strings.Contains(lower, "unknown") || strings.Contains(lower, "schema") {
+			return true
+		}
+		if strings.Contains(lower, "open questions block readiness") || strings.Contains(lower, "ask_clarification requires") || strings.Contains(lower, "llm_validator:missing_user_input") || strings.Contains(lower, "llm_validator:read_only_violation") || strings.Contains(lower, "llm_validator:false_read_only_claim") || strings.Contains(lower, "llm_validator:memory_claim") {
 			return true
 		}
 	}

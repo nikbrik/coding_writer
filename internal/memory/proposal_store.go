@@ -97,6 +97,19 @@ func (s *ProposalStore) Latest(ctx context.Context, sessionID string) (app.Memor
 	return proposals[len(proposals)-1], nil
 }
 
+func (s *ProposalStore) LatestPending(ctx context.Context, sessionID string) (app.MemoryProposal, bool, error) {
+	proposals, err := s.List(ctx, sessionID)
+	if err != nil {
+		return app.MemoryProposal{}, false, err
+	}
+	for i := len(proposals) - 1; i >= 0; i-- {
+		if proposalHasPendingRecords(proposals[i]) {
+			return proposals[i], true, nil
+		}
+	}
+	return app.MemoryProposal{}, false, nil
+}
+
 func (s *ProposalStore) Apply(ctx context.Context, opts ApplyOptions) (ApplyResult, error) {
 	if !hasApplyAction(opts) {
 		return ApplyResult{}, app.ErrorWithHint(app.CategoryCLI, "missing_apply_action", "memory apply requires --accept, --reject, or --edit", "example: assistant memory apply --proposal latest --accept all --json", nil)
@@ -270,6 +283,15 @@ func (s *ProposalStore) applyLocked(ctx context.Context, opts ApplyOptions, path
 
 func hasApplyAction(opts ApplyOptions) bool {
 	return opts.AcceptAll || opts.RejectAll || len(opts.AcceptIDs) > 0 || len(opts.RejectIDs) > 0 || len(opts.Edits) > 0
+}
+
+func proposalHasPendingRecords(proposal app.MemoryProposal) bool {
+	for _, record := range proposal.Records {
+		if record.Status == app.ProposalPending {
+			return true
+		}
+	}
+	return false
 }
 
 func physicalLayer(layer app.ProposedMemoryLayer) (app.MemoryLayer, error) {

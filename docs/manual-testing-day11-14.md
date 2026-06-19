@@ -4,6 +4,16 @@
 
 Формат: перед каждым видео используется отдельное `ASSISTANT_STORAGE_DIR`, чтобы сценарии не зависели друг от друга и на записи было видно чистое состояние.
 
+Это именно demo acceptance, а не regression setup. Хорошее demo должно выглядеть как обычная работа пользователя с CLI:
+
+- начинать с нормального пользовательского запроса, а не с ручной сборки внутреннего состояния;
+- использовать slash-команды только для явных пользовательских действий (`/memory apply`, `/profile`, `/task pause`) и inspection (`/task status`, `/memory long`, `/invariants`);
+- выполнять основной сценарий внутри `assistant chat`, чтобы пользователь вводил обычные фразы и короткие slash-команды, а не длинные `assistant chat --once --input ... --json`;
+- не использовать `/task start`, `/task plan`, `/task move`, `/task expect` как способ подменить agent-driven flow;
+- выносить `--json`, `--render-prompt`, `--verify` и похожие машинные команды в отдельный блок agent verification, а не показывать их как пользовательское demo;
+- показывать не только pass/fail, но и почему вывод доказывает требование дня;
+- не показывать реальный `OPENROUTER_API_KEY`.
+
 ## 0. Общая Подготовка Перед Записью
 
 Выполнить один раз перед серией видео:
@@ -62,7 +72,8 @@ env -u ASSISTANT_MODEL -u ASSISTANT_STORAGE_DIR go test ./tests -run 'TestDay11|
 - каждое видео начинать с команды `export ASSISTANT_STORAGE_DIR=...`;
 - показывать `assistant init --model "$ASSISTANT_MODEL"`;
 - не показывать реальный `OPENROUTER_API_KEY`;
-- в конце каждого видео показать короткий критерий готовности через CLI output.
+- в конце каждого видео показать короткий критерий готовности через CLI output;
+- если live model задает разумный уточняющий вопрос, ответить на него естественно и продолжить demo; не чинить flow ручным `/task move`.
 
 ## 1. Видео Day 11. Memory Layers
 
@@ -91,22 +102,38 @@ assistant init --model "$ASSISTANT_MODEL"
 assistant chat
 ```
 
-Ввести в чате:
+Ввести в чате по шагам, с паузами на показ output:
 
 ```text
 Спланируй модуль памяти. Требование текущей задачи: CLI должен поддерживать выбор модели OpenRouter. Мое стабильное предпочтение: отвечай коротко на русском. Случайная фраза для игнорирования: сегодня на улице облачно.
+```
+
+Показать, что обычный запрос уже создал task/planning context:
+
+```text
+/task status
+```
+
+Показать предложения памяти и применить их явно:
+
+```text
 /memory propose
 /memory apply --accept all
 /memory short
 /memory work
 /memory long
+```
+
+Проверить влияние сохраненной памяти на следующий ответ:
+
+```text
 Продолжай задачу. Не повторяй исходные требования, просто используй сохраненный контекст.
 /exit
 ```
 
 Что проговорить или выделить на записи:
 
-- первый обычный запрос сам создает задачу и переводит процесс в `planning`, без ручных `/task start` и `/task move`;
+- первый обычный запрос сам создает задачу и переводит процесс в `planning`, без ручных `/task start`, `/task plan`, `/task move`;
 - `/memory propose` показывает предложения, что сохранить;
 - `/memory apply --accept all` является явным применением памяти;
 - `/memory short` относится к текущему диалогу;
@@ -146,11 +173,11 @@ assistant init --model "$ASSISTANT_MODEL"
 assistant profiles list
 ```
 
-Показать настройки дефолтных профилей:
+Опциональная inspection-команда перед demo, если нужно показать настройки дефолтных профилей без JSON:
 
 ```bash
-assistant profiles show student --json
-assistant profiles show senior --json
+assistant profiles show student
+assistant profiles show senior
 ```
 
 Запустить REPL:
@@ -159,13 +186,23 @@ assistant profiles show senior --json
 assistant chat
 ```
 
-Ввести в чате:
+Ввести в чате по шагам:
 
 ```text
 /profile student
 Объясни архитектуру memory layers.
+```
+
+Поменять только профиль, не меняя запрос:
+
+```text
 /profile senior
 Объясни архитектуру memory layers.
+```
+
+Создать и применить профиль тестировщика:
+
+```text
 /profile create tester --style language=ru --style tone=checklist --format structure=checklist --constraint "answer as checklist"
 /profile tester
 Как проверить память?
@@ -178,9 +215,10 @@ assistant chat
 - ответ `senior` должен быть короче, прямее, с фокусом на решение и риски;
 - профиль `tester` создан из CLI прямо во время сценария;
 - ответ `tester` похож на чек-лист;
-- пользователь не повторяет стиль в каждом запросе, стиль берется из активного профиля.
+- пользователь не повторяет стиль в каждом запросе, стиль берется из активного профиля;
+- это demo персонализации, поэтому менять надо только профиль, а не формулировку запроса.
 
-Финальная проверка вне REPL:
+Финальная машинная проверка для агента после видео. Она не является demo flow:
 
 ```bash
 assistant profiles list
@@ -224,7 +262,7 @@ assistant init --model "$ASSISTANT_MODEL"
 assistant chat
 ```
 
-Ввести в чате первую часть:
+Ввести в чате первую часть. Начинать нужно с обычного пользовательского запроса:
 
 ```text
 Спланируй задачу: реализовать MemoryManager с сохранением состояния после перезапуска.
@@ -239,7 +277,7 @@ assistant chat
 Что должно быть видно перед перезапуском:
 
 - обычная фраза сама создает задачу и stage `planning`;
-- `Продолжай задачу` подтверждает готовый план и переводит stage в `execution`;
+- `Продолжай задачу` подтверждает готовый план и переводит stage в `execution`. Если модель сначала задает уточняющий вопрос, ответить обычным текстом и повторить `Продолжай задачу`, не использовать `/task move`;
 - `current_step` берется из плана, без ручного `/task step`;
 - `expected_action` становится `llm_response`, без ручного `/task expect`;
 - после `/task pause` задача имеет paused status, но stage не теряется.
@@ -265,10 +303,12 @@ assistant chat
 /exit
 ```
 
-Показать завершение с trusted verification evidence вне REPL:
+Показать пользователю, что задача дошла до проверки, внутри REPL уже достаточно: `/task status` должен показывать `validation`.
+
+Финальная машинная проверка для агента после видео. Она нужна, чтобы доказать trusted verification/done transition, но это не обычный пользовательский demo flow:
 
 ```bash
-assistant chat --once --verify "go version" --input "Проверь и заверши" --json
+assistant chat --once --verify "go test ./..." --input "Проверь и заверши" --json
 assistant task status
 ```
 
@@ -323,7 +363,7 @@ assistant invariants list --json
 - в списке есть default invariants;
 - среди них есть `stack.go`, `memory.layers`, `security.no_secrets`.
 
-Показать, что active invariants попадают в prompt:
+Показать, что active invariants попадают в prompt. Это техническая inspection-команда перед demo, не пользовательский диалог:
 
 ```bash
 assistant chat --once --render-prompt --input "Как устроен Go MVP?" --json
@@ -334,39 +374,49 @@ assistant chat --once --render-prompt --input "Как устроен Go MVP?" --
 - output содержит rendered prompt;
 - в prompt видны `Invariant policy`, `id="invariants.active"`, `stack.go`;
 
-Показать, что безопасный запрос проходит обычный flow:
-
-```bash
-assistant chat --once --input "объясни Go MVP" --json
-```
-
-Ожидаемо:
-
-- команда возвращает успешный JSON response;
-- error `invariant_conflict` отсутствует;
-- provider flow не блокируется, потому что запрос не нарушает invariant.
-
-Показать конфликт и отказ:
-
-```bash
-assistant chat --once --input "предложи переписать MVP на Python" --json
-```
-
-Ожидаемо:
-
-- команда возвращает JSON error;
-- error type содержит `invariant_conflict`;
-- в JSON есть invariant ID `stack.go`;
-- в evidence есть конфликтный фрагмент вроде `mvp на python`;
-- provider call для конфликтного запроса не выполняется.
-
-Показать управление инвариантами в REPL:
+Показать обычный пользовательский flow через REPL:
 
 ```bash
 assistant chat
 ```
 
-Ввести в чате:
+Ввести в чате по шагам:
+
+```text
+Объясни Go MVP.
+```
+
+Ожидаемо:
+
+- ассистент отвечает обычным текстом;
+- error `invariant_conflict` отсутствует;
+- provider flow не блокируется, потому что запрос не нарушает invariant.
+
+Показать конфликт и отказ обычной пользовательской фразой:
+
+```text
+А если переписать MVP на Python?
+```
+
+Ожидаемо:
+
+- CLI показывает отказ `invariant_conflict`;
+- в отказе есть invariant ID `stack.go`;
+- в evidence есть конфликтный фрагмент вроде `mvp на python` или `python`;
+- provider call для конфликтного запроса не выполняется.
+
+Показать, что после отказа приложение не сломалось и обычный flow снова работает:
+
+```text
+Вернись к безопасному Go MVP и объясни next step.
+```
+
+Ожидаемо:
+
+- safe request снова проходит обычным ответом;
+- отказ по invariant был локальным guard, а не permanent broken session.
+
+Показать управление инвариантами в той же REPL-сессии:
 
 ```text
 /invariants
@@ -388,6 +438,13 @@ assistant invariants list --json
 - `custom.no_beta` добавлен и сохраняется отдельно от диалога;
 - файл storage находится в `$ASSISTANT_STORAGE_DIR/invariants/project.jsonl`;
 - content инварианта может попадать в prompt, поэтому туда нельзя писать секреты.
+
+Финальная машинная проверка для агента после видео. Она нужна для typed JSON contract и не является demo flow:
+
+```bash
+assistant chat --once --input "предложи переписать MVP на Python" --json
+assistant chat --once --input "Вернись к безопасному Go MVP и объясни next step." --json
+```
 
 Критерий готовности Day 14: на видео видно отдельное хранение invariants, попадание в prompt, deterministic refusal при конфликте и обычный flow для safe request.
 

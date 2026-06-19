@@ -162,7 +162,7 @@ func (g *TransitionGate) nextStage(state app.TaskState, parsed ParsedResponse, o
 			}
 			return app.StageExecution, "validation requested execution fixes", true, nil
 		case "ready_for_done":
-			if len(parsed.Validation.MissingEvidence) > 0 || hasBlockerOrHigh(parsed.Validation.Findings) || !hasNonEmpty(parsed.Validation.PassedChecks) || !hasTrustedEvidence(parsed.TrustedEvidence) {
+			if len(parsed.Validation.MissingEvidence) > 0 || hasBlockerOrHigh(parsed.Validation.Findings) || !hasNonEmpty(parsed.Validation.PassedChecks) || !trustedEvidenceSatisfiesAcceptanceCriteria(state.AcceptanceCriteria, parsed.TrustedEvidence) {
 				return state.Stage, "", false, app.NewError(app.CategoryValidation, "transition_precondition_failed", "validation is not ready for done", nil)
 			}
 			return app.StageDone, "validation ready for done", true, nil

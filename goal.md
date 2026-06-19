@@ -28,6 +28,14 @@ scenarios for future agents to run.
   happy paths, edge cases, recovery, restart, LLM validation, provider failures,
   safety/invariant conflicts, profile/memory/task interactions, and negative
   cases. The document should be broad but not bloated.
+- Consensus verdict `artifacts/consensus/20260618-223503-manual-test-cases/12-final-verdict.md`
+  is resolved: required findings F001-F008 are reflected in docs/code or
+  explicitly documented as conditional/unsupported, and optional F009 coverage is
+  tracked without bloating the required matrix.
+- New/changed manual scenarios are run and evidence is recorded. If Go/source
+  behavior changes, the full manual matrix is rerun with real OpenRouter
+  `deepseek/deepseek-v4-flash` wherever the scenario is live-provider
+  applicable.
 - `go test ./...` passes.
 - Latest self-review has no unresolved findings.
 
@@ -68,3 +76,38 @@ scenarios for future agents to run.
 - Latest self-review: no unresolved findings.
 - Full manual verification: ran all 20 cases from `docs/manual-testing-real-cli.md` with real OpenRouter `deepseek/deepseek-v4-flash`; final run `manual-live-20260618-194037` passed 20/20.
 - Fixes from manual runs: relaxed semantic validator to judge side effects/FSM safety rather than ordinary programming facts, preserved no-task answer intent, removed bare `sk-` false-positive invariant matcher, rerouted active-task classifier requirements to work memory, stabilized done/semantic-ready manual setup, and added `доработай` as done-stage mutation intent.
+- New goal loop started for consensus verdict: implement compact manual coverage
+  and any needed behavior fixes for F001-F008, then verify with tests and manual
+  runs. Initial assessment: `--verify` needs code hardening; classifier-failure
+  manual coverage needs deterministic fake CLI hook or explicit relocation.
+- Demo acceptance docs were revised so Day 11-14 videos use normal REPL flows
+  and reserve `--json`/`--render-prompt`/`--verify` for agent verification, not
+  user-facing demo steps.
+- Fixed live Day 11 memory proposal reuse: `/memory propose` now reuses an
+  existing pending proposal instead of overwriting it before `/memory apply`.
+- Fixed terminal invariant display redaction so `/invariants` does not print
+  secret-like credential markers while JSON/audit data remains machine-readable.
+- Fixed semantic retry coverage for `llm_validator:memory_claim` so false
+  read-only memory-save claims can be corrected instead of breaking later
+  `/memory propose`.
+- Verification on real OpenRouter `deepseek/deepseek-v4-flash`: Day 11 rerun
+  passed in `.assistant/manual-runs/day11-demo-rerun-20260619-014731`; Day 12
+  and Day 13 REPL demos passed in
+  `.assistant/manual-runs/day12-13-repl-demo-live-20260619-015701`; Day 14 REPL
+  demo and JSON recovery passed in
+  `.assistant/manual-runs/day14-repl-demo-rerun-20260619-015357`.
+- Real CLI matrix evidence: cases 1-4 passed in
+  `.assistant/manual-runs/all26-real-cli-20260619-020245`; case 5 passed after
+  retry fix in `.assistant/manual-runs/case05-rerun-20260619-020937`; cases 6-20
+  passed in `.assistant/manual-runs/case06-26-real-cli-rerun-20260619-021223`
+  with case 20 confirmed as metadata-only prompt audit; case 21 passed in
+  `.assistant/manual-runs/case21-26-real-cli-20260619-022024`; cases 22-24
+  passed in `.assistant/manual-runs/case22-26-real-cli-20260619-022210`; case 25
+  passed there by evidence (`Кратко на русском языке` saved, noise rejected);
+  case 26 passed in `.assistant/manual-runs/case26-real-cli-20260619-022547`.
+- Final verification: `go test ./...` passed and `git diff --check` passed.
+- Latest self-review: no unresolved findings.
+- Completion audit file created:
+  `.assistant/manual-runs/completion-audit-20260619.json`. It maps every Day
+  11-14 demo requirement and every real CLI case 1-26 to concrete evidence and
+  passed.

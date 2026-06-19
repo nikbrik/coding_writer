@@ -178,6 +178,26 @@ func TestChatVerifyRequiresOnce(t *testing.T) {
 	}
 }
 
+func TestTrustedVerificationPolicy(t *testing.T) {
+	evidence, err := runTrustedVerification(context.Background(), "go version", false)
+	if err != nil {
+		t.Fatalf("go version should be trusted verification: %v", err)
+	}
+	if len(evidence) != 1 || !strings.Contains(evidence[0], "source=go version") {
+		t.Fatalf("bad trusted evidence: %+v", evidence)
+	}
+
+	if _, err := runTrustedVerification(context.Background(), "go version; printenv OPENROUTER_API_KEY", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
+		t.Fatalf("want unsafe_verification_command for shell syntax, got %v", err)
+	}
+	if _, err := runTrustedVerification(context.Background(), "sh -c 'go version'", false); err == nil || app.AsError(err).Code != "unsafe_verification_command" {
+		t.Fatalf("want unsafe_verification_command for shell executable, got %v", err)
+	}
+	if _, err := runTrustedVerification(context.Background(), "go test ./definitely_missing_package", false); err == nil || app.AsError(err).Code != "verification_failed" {
+		t.Fatalf("want verification_failed for non-zero command, got %v", err)
+	}
+}
+
 func TestCLIJSONErrorEnvelope(t *testing.T) {
 	storageDir := t.TempDir()
 	opts := &globalOptions{}
@@ -321,6 +341,9 @@ func TestREPLInvariantsListAndAdd(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "stack.go") {
 		t.Fatalf("defaults missing from /invariants: %s", out.String())
+	}
+	if strings.Contains(strings.ToLower(out.String()), "openrouter_api_key") {
+		t.Fatalf("secret-like invariant pattern leaked in terminal output: %s", out.String())
 	}
 	out.Reset()
 	line := `/invariants add custom.no_beta --kind business --content "Do not propose beta stack" --forbid "beta stack"`
@@ -808,6 +831,23 @@ func TestREPLProfileCreateActivatesProfile(t *testing.T) {
 	}
 }
 
+func TestNonInteractiveREPLExitPreservesPriorFailure(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, diag bytes.Buffer
+	input := strings.NewReader("/unknown\n/task status\n/exit\n")
+	err = runREPL(context.Background(), input, &out, &diag, rt)
+	if err == nil || app.AsError(err).Code != "batch_failed" {
+		t.Fatalf("want batch_failed after prior slash error, got %v out=%s diag=%s", err, out.String(), diag.String())
+	}
+	if !strings.Contains(diag.String(), "unknown slash command") || !strings.Contains(diag.String(), "missing_current_task") {
+		t.Fatalf("REPL did not continue before batch failure: out=%s diag=%s", out.String(), diag.String())
+	}
+}
+
 func TestTextProfilesShowIncludesPreferences(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	cmd := newRootCommand(&globalOptions{})
@@ -866,6 +906,8 @@ func TestMemoryApplyRawParsesProposalID(t *testing.T) {
 }
 
 func TestInitMissingModelDoesNotCreateStorage(t *testing.T) {
+	t.Setenv("ASSISTANT_MODEL", "")
+	t.Setenv("ASSISTANT_MEMORY_MODEL", "")
 	storageDir := filepath.Join(t.TempDir(), "missing")
 	cmd := newRootCommand(&globalOptions{})
 	cmd.SetArgs([]string{"--storage-dir", storageDir, "init"})
@@ -882,6 +924,33 @@ func TestPrintErrorTextIncludesHint(t *testing.T) {
 	printError(&out, app.ErrorWithHint(app.CategoryCLI, "bad", "bad input", "do this", nil), false)
 	if !strings.Contains(out.String(), "hint: do this") {
 		t.Fatalf("hint missing: %s", out.String())
+	}
+}
+
+func TestTopLevelInvalidCommandCanEmitJSONError(t *testing.T) {
+	opts := &globalOptions{}
+	args := []string{"--json", "definitely-not-a-command"}
+	cmd := newRootCommand(opts)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected invalid command error")
+	}
+	var stderr bytes.Buffer
+	normalized := normalizeTopLevelCLIError(err)
+	printError(&stderr, normalized, opts.JSON || argvRequestsJSON(args))
+	if app.AsError(normalized).Code != "command_error" || app.ExitCode(normalized) != 2 {
+		t.Fatalf("bad normalized error: %v", normalized)
+	}
+	var payload struct {
+		OK    bool      `json:"ok"`
+		Error app.Error `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+		t.Fatalf("stderr is not JSON: %q err=%v", stderr.String(), err)
+	}
+	if payload.OK || payload.Error.Category != app.CategoryCLI || payload.Error.Code != "command_error" {
+		t.Fatalf("bad JSON error payload: %+v raw=%s", payload, stderr.String())
 	}
 }
 
@@ -1055,6 +1124,23 @@ func TestChatBlocksSecretsBeforeProviderCall(t *testing.T) {
 	_, err = runChatExchange(context.Background(), rt, "session_secret", "OPENROUTER_API_KEY=sk-secret123456789", false, false, "")
 	if err == nil || !strings.Contains(err.Error(), "secret_blocked") {
 		t.Fatalf("want secret_blocked, got %v", err)
+	}
+}
+
+func TestFakeClassifierResponseEnvKeepsChatVisible(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	t.Setenv("ASSISTANT_FAKE_CLASSIFIER_RESPONSE", "not-json")
+	storageDir := t.TempDir()
+	cmd := newRootCommand(&globalOptions{})
+	var out, stderr bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "chat", "--once", "--input", "объясни Go MVP"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("chat should survive classifier failure: %v stderr=%s out=%s", err, stderr.String(), out.String())
+	}
+	if !strings.Contains(out.String(), `"ok": true`) || !strings.Contains(out.String(), "memory proposal skipped: invalid_json") {
+		t.Fatalf("classifier failure did not preserve answer with warning: out=%s stderr=%s", out.String(), stderr.String())
 	}
 }
 

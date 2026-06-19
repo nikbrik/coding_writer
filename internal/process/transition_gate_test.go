@@ -151,6 +151,29 @@ func TestTransitionGateValidationToDone(t *testing.T) {
 	}
 }
 
+func TestTransitionGateValidationToDoneRequiresCriteriaMatchedEvidence(t *testing.T) {
+	dir := t.TempDir()
+	mgr := tasks.NewManager(dir)
+	state, _ := mgr.Start("task")
+	state, _ = mgr.AddCriteria("go test ./... passes")
+	state, _ = mgr.Move(app.StageExecution)
+	state, _ = mgr.Move(app.StageValidation)
+	gate := &TransitionGate{Tasks: mgr}
+	parsed := ParsedResponse{Stage: app.StageValidation, TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "ok")}, Validation: &ValidationOutput{
+		Findings:     []ValidationFinding{},
+		PassedChecks: []string{"tool evidence available"},
+		Verdict:      "ready_for_done",
+	}}
+	_, err := gate.Apply(state, parsed, TransitionOptions{})
+	if err == nil || app.AsError(err).Code != "transition_precondition_failed" {
+		t.Fatalf("want transition_precondition_failed, got %v", err)
+	}
+	current, _ := mgr.Current()
+	if current.Stage != app.StageValidation {
+		t.Fatalf("irrelevant evidence moved stage: %+v", current)
+	}
+}
+
 func TestTransitionGateValidationToDoneBlockedByMixedCaseHighFinding(t *testing.T) {
 	dir := t.TempDir()
 	mgr := tasks.NewManager(dir)

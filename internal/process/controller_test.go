@@ -396,6 +396,7 @@ func TestProcessControllerSemanticValidatorInvalidJSONDoesNotMutateTask(t *testi
 	fake.ValidatorResponses = []string{
 		`{"action_kind":"plan_task","transition_signal":"none","confidence":0.9,"reason":"planning"}`,
 		`not-json`,
+		`not-json`,
 	}
 	_, err = ctrl.RunExchange(ctx, ExchangeInput{SessionID: "semantic_invalid", Input: "спланируй"})
 	if err == nil || app.AsError(err).Code != "validation_failed" {
@@ -540,6 +541,36 @@ func TestProcessControllerSemanticIntentApprovesPlanningBySignal(t *testing.T) {
 	}
 }
 
+func TestProcessControllerSemanticIntentRejectsNegativePlanningTransition(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"first step"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"reject_planning","confidence":0.93,"reason":"user says not yet and does not approve the plan"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Not yet, do not proceed with implementation."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition != nil {
+		t.Fatalf("negative intent should not transition: %+v", res.Transition)
+	}
+	current, err := ctrl.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Stage != app.StagePlanning {
+		t.Fatalf("negative intent moved stage: %+v", current)
+	}
+}
+
 func TestProcessControllerUserReadySignalMovesExecutionToValidation(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -623,7 +654,7 @@ func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeCalls := len(fake.SnapshotCalls())
-	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "go version test")}})
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go test ./...", 0, "ok")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,6 +663,42 @@ func TestProcessControllerTrustedDoneSignalMovesValidationToDone(t *testing.T) {
 	}
 	if len(fake.SnapshotCalls()) != beforeCalls {
 		t.Fatalf("trusted done signal should not require provider call")
+	}
+}
+
+func TestProcessControllerTrustedDoneRejectsIrrelevantEvidence(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.SetPlanningOutput("build it", []string{"tests pass"}, []string{"first step"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"validation","findings":[],"passed_checks":["tool evidence available"],"missing_evidence":[],"residual_risks":[],"verdict":"ready_for_done"}`
+	beforeCalls := len(fake.SnapshotCalls())
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "Проверь и заверши", TrustedEvidence: []string{NewTrustedEvidence("go version", 0, "go version test")}})
+	if err == nil {
+		t.Fatalf("irrelevant evidence should not finish task: result=%+v", res)
+	}
+	if app.AsError(err).Code != "transition_precondition_failed" {
+		t.Fatalf("want transition_precondition_failed, got %v", err)
+	}
+	if len(fake.SnapshotCalls()) != beforeCalls {
+		t.Fatalf("irrelevant trusted evidence should fail before provider call")
+	}
+	current, currentErr := ctrl.Tasks.Current()
+	if currentErr != nil {
+		t.Fatal(currentErr)
+	}
+	if current.Stage != app.StageValidation {
+		t.Fatalf("irrelevant evidence moved stage: %+v", current)
 	}
 }
 
@@ -701,6 +768,50 @@ func TestProcessControllerPlanningContinueWithoutPendingReplans(t *testing.T) {
 	}
 	if current.Stage != app.StagePlanning || current.PendingPlanning == nil {
 		t.Fatalf("continue should save pending planning proposal: %+v", current)
+	}
+}
+
+func TestShouldRetryFixableSemanticPlanningErrors(t *testing.T) {
+	for _, errText := range []string{
+		"open questions block readiness",
+		"ask_clarification requires open questions and needs_user_input readiness",
+		"llm_validator:missing_user_input: user already provided clear input",
+		"llm_validator:read_only_violation: future guidance was misread as mutation",
+		"llm_validator:false_read_only_claim: future confirmation was misread as mutation",
+		"llm_validator:memory_claim: read-only answer claimed memory was already saved",
+	} {
+		if !shouldRetryValidatorErrors([]string{errText}) {
+			t.Fatalf("expected retry for %q", errText)
+		}
+	}
+}
+
+func TestPreserveLocalTransitionSignalBlocksUnsignaledSemanticPlanningTransition(t *testing.T) {
+	action, signal := preserveLocalTransitionSignal(app.StagePlanning, "спланируй задачу", ActionPlanTask, ActionProposeTransition, "none")
+	if action != ActionPlanTask || signal != "none" {
+		t.Fatalf("unexpected semantic transition preservation action=%s signal=%s", action, signal)
+	}
+	action, signal = preserveLocalTransitionSignal(app.StagePlanning, "looks good", ActionAnswerQuestion, ActionProposeTransition, "approve_planning")
+	if action != ActionProposeTransition || signal != "approve_planning" {
+		t.Fatalf("approve_planning signal should still allow transition action=%s signal=%s", action, signal)
+	}
+}
+
+func TestConstrainSemanticActionMapsExecutionReviewIntent(t *testing.T) {
+	got := constrainSemanticActionToContext(app.StageExecution, ActionExecutePlanStep, ActionReviewOutput)
+	if got != ActionSummarizeExecution {
+		t.Fatalf("want summarize_execution, got %s", got)
+	}
+	got = constrainSemanticActionToContext(app.StagePlanning, ActionPlanTask, ActionReviewOutput)
+	if got != ActionPlanTask {
+		t.Fatalf("want deterministic planning action, got %s", got)
+	}
+}
+
+func TestPreserveLocalTransitionSignalMapsExecutionReviewIntent(t *testing.T) {
+	action, signal := preserveLocalTransitionSignal(app.StageExecution, "please review it now", ActionExecutePlanStep, ActionSummarizeExecution, "none")
+	if action != ActionSummarizeExecution || signal != "ready_for_validation" {
+		t.Fatalf("want summarize_execution ready_for_validation, got action=%s signal=%s", action, signal)
 	}
 }
 

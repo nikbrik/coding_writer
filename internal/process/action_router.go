@@ -1,10 +1,13 @@
 package process
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 )
+
+var explicitTransitionNegationPattern = regexp.MustCompile(`(?i)(^|[^\p{L}\p{N}_])(do\s+not\s+(proceed|continue|move)|don['’]t\s+(proceed|continue|move)|not\s+yet|not\s+ready|no\s+transition|не\s+(продолжай|переходи|запускай|реализуй|выполняй|готово?)|пока\s+нет|ещ[её]\s+не)([^\p{L}\p{N}_]|$)`)
 
 // ResolveActionKind maps user input and current stage to a deterministic ActionKind.
 func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.ExpectedAction) ActionKind {
@@ -29,6 +32,9 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}
+		if hasExplicitTransitionNegation(normalized) {
+			return ActionAnswerQuestion
+		}
 		if containsAny(normalized, []string{"готов", "ready", "execute", "реализуй", "implement", "proceed", "продолжай", "continue"}) {
 			return ActionProposeTransition
 		}
@@ -39,6 +45,9 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 	case app.StageExecution:
 		if isPlanningIntent(normalized) {
 			return ActionPlanTask
+		}
+		if hasExplicitTransitionNegation(normalized) {
+			return ActionAnswerQuestion
 		}
 		if containsAny(normalized, []string{"продолжай", "continue", "выполняй", "execute next", "next step"}) {
 			return ActionExecutePlanStep
@@ -51,6 +60,9 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		}
 		return ActionExecutePlanStep
 	case app.StageValidation:
+		if hasExplicitTransitionNegation(normalized) {
+			return ActionAnswerQuestion
+		}
 		if containsAny(normalized, []string{"verify", "criteria", "проверь критерии"}) {
 			return ActionVerifyCriteria
 		}
@@ -98,6 +110,10 @@ func isInformationalQuestion(normalized string) bool {
 		return true
 	}
 	return false
+}
+
+func hasExplicitTransitionNegation(normalized string) bool {
+	return explicitTransitionNegationPattern.MatchString(normalized)
 }
 
 func isConfirmation(normalized string) bool {

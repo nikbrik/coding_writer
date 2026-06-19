@@ -62,6 +62,24 @@ func TestResolveActionKindPlanningQuestionAboutPlanIsAnswerQuestion(t *testing.T
 	}
 }
 
+func TestResolveActionKindExplicitNegationFallbackDoesNotProceed(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		stage app.TaskStage
+	}{
+		{"do not proceed yet", app.StagePlanning},
+		{"not yet, do not continue", app.StagePlanning},
+		{"not ready for validation", app.StageExecution},
+		{"не продолжай пока", app.StagePlanning},
+		{"не готово к проверке", app.StageExecution},
+	} {
+		got := ResolveActionKind(tc.input, tc.stage, app.ExpectedUserInput)
+		if got != ActionAnswerQuestion {
+			t.Fatalf("%q in %s: want answer_question, got %s", tc.input, tc.stage, got)
+		}
+	}
+}
+
 func TestResolveActionKindPlanningConceptQuestionIsAnswerQuestion(t *testing.T) {
 	got := ResolveActionKind("what is planning?", app.StagePlanning, app.ExpectedUserInput)
 	if got != ActionAnswerQuestion {
