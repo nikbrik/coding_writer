@@ -147,7 +147,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			semanticSignal = intent.TransitionSignal
 			action = actionForSemanticSignal(stage, action, semanticSignal)
 			action = constrainSemanticActionToContext(stage, deterministicAction, action)
-			action, semanticSignal = preserveLocalTransitionSignal(stage, input.Input, deterministicAction, action, semanticSignal)
+			action, semanticSignal = guardUnsignaledSemanticTransition(stage, deterministicAction, action, semanticSignal)
 			if stage != "" {
 				if c.PolicyRegistry == nil {
 					c.PolicyRegistry = NewStagePolicyRegistry()
@@ -165,7 +165,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.PendingPlanning != nil {
-		if isPlanningRejection(input.Input) || semanticSignal == "reject_planning" {
+		if semanticSignal == "reject_planning" || c.SemanticValidator == nil && isPlanningRejection(input.Input) {
 			state, err := c.Tasks.RejectPendingPlanningProposal()
 			if err != nil {
 				return nil, err
@@ -181,7 +181,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			}
 			transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "pending planning approved", State: state}
 			_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-			return &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+			return c.continueAfterPlanningApproval(ctx, input, sessionID, transition)
 		}
 	}
 	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StagePlanning && taskPtr.PendingPlanning == nil && action == ActionProposeTransition && hasRunnablePlanningState(*taskPtr) {
@@ -192,9 +192,9 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		transition := &TransitionResult{Moved: true, From: from, To: state.Stage, Reason: "current planning approved", State: state}
 		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
-		return &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
+		return c.continueAfterPlanningApproval(ctx, input, sessionID, transition)
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (isReadyForValidationSignal(input.Input) || semanticSignal == "ready_for_validation") {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionSummarizeExecution && (semanticSignal == "ready_for_validation" || c.SemanticValidator == nil && isReadyForValidationSignal(input.Input)) {
 		from := taskPtr.Stage
 		state, err := c.Tasks.Move(app.StageValidation)
 		if err != nil {
@@ -204,7 +204,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
 		return &ExchangeResult{Answer: "ready for validation", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (isDoneValidationSignal(input.Input) || semanticSignal == "ready_for_done") && trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (semanticSignal == "ready_for_done" || c.SemanticValidator == nil && isDoneValidationSignal(input.Input)) && trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
 		from := taskPtr.Stage
 		state, err := c.Tasks.Move(app.StageDone)
 		if err != nil {
@@ -214,7 +214,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, &state, from, action, "transitioned", nil, from, state.Stage, c.Model, auditTransitionReason(transition.Reason))
 		return &ExchangeResult{Answer: "trusted verification completed", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}, nil
 	}
-	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (isDoneValidationSignal(input.Input) || semanticSignal == "ready_for_done") && hasTrustedEvidence(input.TrustedEvidence) && !trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
+	if !input.RenderOnly && taskPtr != nil && taskPtr.Stage == app.StageValidation && (semanticSignal == "ready_for_done" || c.SemanticValidator == nil && isDoneValidationSignal(input.Input)) && hasTrustedEvidence(input.TrustedEvidence) && !trustedEvidenceSatisfiesAcceptanceCriteria(taskPtr.AcceptanceCriteria, input.TrustedEvidence) {
 		err := app.NewError(app.CategoryValidation, "transition_precondition_failed", "trusted verification does not satisfy acceptance criteria", nil)
 		_ = c.saveAudit(sessionID, taskPtr, taskPtr.Stage, action, "rejected", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
 		return nil, err
@@ -345,6 +345,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 
 		parsed, parseErr = Parse(stage, action, lastRaw)
 		if parseErr == nil {
+			normalizeParsedActionForOutput(stage, &parsed)
 			parsed.TrustedEvidence = append([]string(nil), input.TrustedEvidence...)
 			if c.SemanticValidator != nil {
 				validatorErrors = RunStructuralValidators(parsed)
@@ -544,6 +545,39 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 	return result, nil
 }
 
+func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, input ExchangeInput, sessionID string, transition *TransitionResult) (*ExchangeResult, error) {
+	fallback := &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}
+	next := input
+	next.SessionID = sessionID
+	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"]. Дай следующий безопасный шаг или read-only спецификацию."
+	next.RenderOnly = false
+	next.ActionKind = ActionExecutePlanStep
+	next.AutoApproveTransitions = false
+	next.TrustedEvidence = nil
+	result, err := c.RunExchange(ctx, next)
+	if err != nil {
+		fallback.Warnings = append(fallback.Warnings, "execution continuation skipped: "+app.AsError(err).Code)
+		return fallback, nil
+	}
+	if result == nil {
+		return fallback, nil
+	}
+	if strings.TrimSpace(result.Answer) == "" {
+		result.Answer = fallback.Answer
+	}
+	result.Transition = transition
+	return result, nil
+}
+
+func normalizeParsedActionForOutput(stage app.TaskStage, parsed *ParsedResponse) {
+	if parsed == nil {
+		return
+	}
+	if stage == app.StagePlanning && parsed.ActionKind == ActionProposeTransition && parsed.Planning != nil {
+		parsed.ActionKind = ActionPlanTask
+	}
+}
+
 func (c *ProcessController) activeProfile() (app.UserProfile, error) {
 	id := strings.TrimSpace(c.ActiveProfileID)
 	if id == "" {
@@ -580,9 +614,12 @@ func blockWorkProposalRecords(proposal *app.MemoryProposal, reason string) {
 func isPlanningRejection(input string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	replacer := strings.NewReplacer(".", " ", ",", " ", "!", " ", "?", " ", ";", " ", ":", " ", "\n", " ", "\t", " ")
+	if hasExplicitTransitionNegation(normalized) || containsAny(normalized, []string{"отклоняю", "отмена", "reject", "cancel"}) {
+		return true
+	}
 	for _, token := range strings.Fields(replacer.Replace(normalized)) {
 		switch token {
-		case "no", "n", "reject", "rejected", "cancel", "нет", "не", "отклоняю", "отмена":
+		case "no", "n", "reject", "rejected", "cancel", "нет":
 			return true
 		}
 	}
@@ -777,24 +814,9 @@ func constrainSemanticActionToContext(stage app.TaskStage, deterministic, semant
 	return semantic
 }
 
-func preserveLocalTransitionSignal(stage app.TaskStage, input string, deterministic, semantic ActionKind, signal string) (ActionKind, string) {
+func guardUnsignaledSemanticTransition(stage app.TaskStage, deterministic, semantic ActionKind, signal string) (ActionKind, string) {
 	if stage == app.StagePlanning && semantic == ActionProposeTransition && deterministic != ActionProposeTransition && signal != "approve_planning" {
 		return deterministic, signal
-	}
-	if stage == app.StagePlanning && deterministic == ActionProposeTransition {
-		if signal == "" || signal == "none" {
-			signal = "approve_planning"
-		}
-		return deterministic, signal
-	}
-	if stage == app.StageExecution && deterministic == ActionSummarizeExecution && isReadyForValidationSignal(input) {
-		return deterministic, "ready_for_validation"
-	}
-	if stage == app.StageExecution && semantic == ActionSummarizeExecution && deterministic == ActionExecutePlanStep {
-		return semantic, "ready_for_validation"
-	}
-	if stage == app.StageValidation && isDoneValidationSignal(input) {
-		return semantic, "ready_for_done"
 	}
 	return semantic, signal
 }
@@ -912,7 +934,7 @@ func shouldRetryValidatorErrors(errs []string) bool {
 		if strings.Contains(lower, "missing required") || strings.Contains(lower, "unknown") || strings.Contains(lower, "schema") {
 			return true
 		}
-		if strings.Contains(lower, "open questions block readiness") || strings.Contains(lower, "ask_clarification requires") || strings.Contains(lower, "llm_validator:missing_user_input") || strings.Contains(lower, "llm_validator:read_only_violation") || strings.Contains(lower, "llm_validator:false_read_only_claim") || strings.Contains(lower, "llm_validator:memory_claim") {
+		if strings.Contains(lower, "open questions block readiness") || strings.Contains(lower, "ask_clarification requires") || strings.Contains(lower, "llm_validator:missing_user_input") || strings.Contains(lower, "llm_validator:read_only_violation") || strings.Contains(lower, "llm_validator:false_read_only_claim") || strings.Contains(lower, "llm_validator:memory_claim") || strings.Contains(lower, "llm_validator:missing_trusted_evidence") || strings.Contains(lower, "llm_validator:missing_implementation") || strings.Contains(lower, "llm_validator:no_trusted_evidence") || strings.Contains(lower, "llm_validator:no_side_effects") || strings.Contains(lower, "llm_validator:unauthorized_mutation") || strings.Contains(lower, "llm_validator:unsupported_mutation") || strings.Contains(lower, "llm_validator:unsupported_execution_claim") {
 			return true
 		}
 	}

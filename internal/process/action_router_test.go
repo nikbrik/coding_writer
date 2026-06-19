@@ -34,6 +34,23 @@ func TestResolveActionKindExecutionContinueWithNoReexplainExecutesStep(t *testin
 	}
 }
 
+func TestResolveActionKindExecutionReviewRequiresReadyIntent(t *testing.T) {
+	for _, input := range []string{
+		"Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования.",
+		"Не переходи к проверке, просто продолжай текущий шаг.",
+		"проверь контекст перед следующим шагом",
+	} {
+		got := ResolveActionKind(input, app.StageExecution, app.ExpectedLLMResponse)
+		if got != ActionExecutePlanStep && got != ActionAnswerQuestion {
+			t.Fatalf("%q: want no validation transition action, got %s", input, got)
+		}
+	}
+	got := ResolveActionKind("Готово к проверке.", app.StageExecution, app.ExpectedLLMResponse)
+	if got != ActionSummarizeExecution {
+		t.Fatalf("want summarize_execution for ready intent, got %s", got)
+	}
+}
+
 func TestResolveActionKindExecutionPlanningIntentPlansTask(t *testing.T) {
 	got := ResolveActionKind("спланируй модуль памяти", app.StageExecution, app.ExpectedLLMResponse)
 	if got != ActionPlanTask {

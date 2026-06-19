@@ -40,7 +40,7 @@ Live mode через OpenRouter:
 
 ```bash
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
-export ASSISTANT_MODEL="deepseek/deepseek-v4-flash"
+export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
 unset ASSISTANT_PROVIDER
 test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 ```

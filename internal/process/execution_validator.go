@@ -8,6 +8,14 @@ func validateExecution(out *ExecutionOutput, trustedEvidence ...string) []string
 		return []string{"missing execution output"}
 	}
 	errs := validateExecutionStructural(out, trustedEvidence...)
+	if out.NextSignal == "ready_for_validation" {
+		if hasNonEmpty(out.Blockers) {
+			errs = append(errs, "ready_for_validation is blocked by active blockers")
+		}
+		if !hasNonEmpty(out.ChangedArtifacts) || !hasNonEmpty(out.Verification) {
+			errs = append(errs, "ready_for_validation requires changed artifacts and verification evidence")
+		}
+	}
 	progressClaims := []string{out.CurrentStep, out.NextStep}
 	progressClaims = append(progressClaims, out.CompletedSteps...)
 	combinedParts := append([]string{out.Summary}, progressClaims...)
@@ -52,14 +60,6 @@ func validateExecutionStructural(out *ExecutionOutput, trustedEvidence ...string
 		// allowed
 	default:
 		errs = append(errs, "unknown execution next_signal")
-	}
-	if out.NextSignal == "ready_for_validation" {
-		if hasNonEmpty(out.Blockers) {
-			errs = append(errs, "ready_for_validation is blocked by active blockers")
-		}
-		if !hasNonEmpty(out.ChangedArtifacts) || !hasNonEmpty(out.Verification) {
-			errs = append(errs, "ready_for_validation requires changed artifacts and verification evidence")
-		}
 	}
 	return errs
 }

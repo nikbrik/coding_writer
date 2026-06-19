@@ -47,7 +47,6 @@ func RunStructuralValidators(resp ParsedResponse) []string {
 	case app.StageDone:
 		errs = append(errs, validateDoneStructural(resp.Done)...)
 	}
-	errs = append(errs, validateActionKind(resp)...)
 	return filterEmpty(errs)
 }
 

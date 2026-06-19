@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 
@@ -201,14 +202,34 @@ func defaultValidatorJSON(prompt string) string {
 				break
 			}
 		}
+		userInput := strings.ToLower(semanticUserInputFromPrompt(prompt))
 		signal := "none"
-		if strings.Contains(lower, "ready for validation") || strings.Contains(lower, "ready to validate") || strings.Contains(lower, "готово к проверке") {
+		if strings.Contains(userInput, "ready for validation") || strings.Contains(userInput, "ready to validate") || strings.Contains(userInput, "готово к проверке") || strings.Contains(userInput, "work is complete") || strings.Contains(userInput, "please review it now") {
 			signal = "ready_for_validation"
 		}
-		if strings.Contains(lower, "verify and finish") || strings.Contains(lower, "verify and complete") || strings.Contains(lower, "проверь и заверши") {
+		if strings.Contains(userInput, "verify and finish") || strings.Contains(userInput, "verify and complete") || strings.Contains(userInput, "проверь и заверши") {
 			signal = "ready_for_done"
 		}
 		return `{"action_kind":"` + action + `","transition_signal":"` + signal + `","confidence":0.8,"reason":"fake deterministic intent"}`
 	}
 	return `{"verdict":"pass","findings":[]}`
+}
+
+func semanticUserInputFromPrompt(prompt string) string {
+	idx := strings.LastIndex(prompt, "user: ")
+	if idx < 0 {
+		return ""
+	}
+	payload := strings.TrimSpace(prompt[idx+len("user: "):])
+	if nl := strings.IndexByte(payload, '\n'); nl >= 0 {
+		payload = payload[:nl]
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+		return ""
+	}
+	if value, ok := decoded["user_input"].(string); ok {
+		return value
+	}
+	return ""
 }

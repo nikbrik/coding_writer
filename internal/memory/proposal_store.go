@@ -308,6 +308,9 @@ func physicalLayer(layer app.ProposedMemoryLayer) (app.MemoryLayer, error) {
 }
 
 func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
+	if err := validateApplyRecordIDs(proposal, opts); err != nil {
+		return err
+	}
 	for _, record := range proposal.Records {
 		if record.Status == app.ProposalAccepted || record.Status == app.ProposalEdited || record.Status == app.ProposalRejected || record.Status == app.ProposalBlocked {
 			continue
@@ -352,6 +355,29 @@ func preflightApply(proposal app.MemoryProposal, opts ApplyOptions) error {
 		}
 		if layer == app.LayerLong && record.Layer == app.ProposedLayerLong && record.ProfileID == "" && profileScopedLong(record.Kind, record.Scope, opts.Scope) {
 			return app.ErrorWithHint(app.CategoryValidation, "missing_proposal_profile", "long profile memory proposal has no generation profile", "regenerate the memory proposal so profile ownership is explicit", nil)
+		}
+	}
+	return nil
+}
+
+func validateApplyRecordIDs(proposal app.MemoryProposal, opts ApplyOptions) error {
+	known := make(map[string]bool, len(proposal.Records))
+	for _, record := range proposal.Records {
+		known[record.ID] = true
+	}
+	for id := range opts.AcceptIDs {
+		if !known[id] {
+			return app.NewError(app.CategoryValidation, "unknown_proposal_record", "memory proposal record not found: "+id, nil)
+		}
+	}
+	for id := range opts.RejectIDs {
+		if !known[id] {
+			return app.NewError(app.CategoryValidation, "unknown_proposal_record", "memory proposal record not found: "+id, nil)
+		}
+	}
+	for id := range opts.Edits {
+		if !known[id] {
+			return app.NewError(app.CategoryValidation, "unknown_proposal_record", "memory proposal record not found: "+id, nil)
 		}
 	}
 	return nil

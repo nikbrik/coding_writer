@@ -55,7 +55,7 @@ func ResolveActionKind(input string, stage app.TaskStage, expectedAction app.Exp
 		if looksLikeClarification(normalized) {
 			return ActionAnswerQuestion
 		}
-		if containsAny(normalized, []string{"summarize", "summary", "готово", "ready for validation", "проверь", "validate"}) {
+		if isReadyForExecutionReviewIntent(normalized) {
 			return ActionSummarizeExecution
 		}
 		return ActionExecutePlanStep
@@ -98,6 +98,23 @@ func isPlanningIntent(normalized string) bool {
 
 func looksLikeClarification(normalized string) bool {
 	return containsAny(normalized, []string{"?", "что", "как", "почему", "какой", "какие", "объясни", "расскажи", "what", "how", "why", "which", "explain"})
+}
+
+func isReadyForExecutionReviewIntent(normalized string) bool {
+	if hasExplicitTransitionNegation(normalized) {
+		return false
+	}
+	return containsAny(normalized, []string{
+		"готово к проверке",
+		"готово, проверь",
+		"работа завершена",
+		"задача выполнена",
+		"work is complete",
+		"ready for validation",
+		"ready to validate",
+		"please review it now",
+		"review it now",
+	})
 }
 
 func isInformationalQuestion(normalized string) bool {

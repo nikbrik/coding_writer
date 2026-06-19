@@ -69,6 +69,26 @@ func TestProposalApplyRoutesRejectsEditsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestProposalApplyRejectsUnknownExplicitRecordID(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store := NewProposalStore(dir, NewManager(dir))
+	proposal := app.MemoryProposal{ID: "proposal_test", SessionID: "session_test", CreatedAt: time.Now().UTC(), Records: []app.ProposedMemoryRecord{
+		{ID: "r_long", Layer: app.ProposedLayerLong, Kind: "preference", Content: "long", ProfileID: "student", Status: app.ProposalPending},
+	}}
+	if err := store.Save(ctx, proposal); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, AcceptIDs: map[string]bool{"": true}, SessionID: "session_test", ProfileID: "student"})
+	if err == nil || app.AsError(err).Code != "unknown_proposal_record" {
+		t.Fatalf("want unknown_proposal_record for empty accept id, got %v", err)
+	}
+	_, err = store.Apply(ctx, ApplyOptions{ProposalID: proposal.ID, RejectIDs: map[string]bool{"missing": true}, SessionID: "session_test", ProfileID: "student"})
+	if err == nil || app.AsError(err).Code != "unknown_proposal_record" {
+		t.Fatalf("want unknown_proposal_record for missing reject id, got %v", err)
+	}
+}
+
 func TestProposalStoreLatestPendingSkipsAppliedProposals(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

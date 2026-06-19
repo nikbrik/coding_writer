@@ -1,6 +1,10 @@
 package process
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nikbrik/coding_writer/internal/app"
+)
 
 func TestPlanningRejectsImplementation(t *testing.T) {
 	errs := validatePlanning(&PlanningOutput{Summary: "I implemented it", Readiness: "needs_user_input"}, "")
@@ -94,10 +98,21 @@ func TestExecutionRejectsRanTestClaimInCurrentStep(t *testing.T) {
 	}
 }
 
-func TestExecutionRejectsImplementationClaimInCompletedSteps(t *testing.T) {
-	errs := validateExecution(&ExecutionOutput{Summary: "s", CompletedSteps: []string{"updated file internal/foo.go"}, NextSignal: "continue_execution"})
-	if len(errs) == 0 {
-		t.Fatal("expected completed_steps implementation claim rejection")
+func TestStructuralValidatorsSkipSemanticImplementationKeywordChecks(t *testing.T) {
+	resp := ParsedResponse{
+		Stage:      app.StageExecution,
+		ActionKind: ActionExecutePlanStep,
+		Execution: &ExecutionOutput{
+			Summary:        "s",
+			CompletedSteps: []string{"Реализовать функции чтения/записи файла конфигурации в директории пользователя."},
+			NextSignal:     "continue_execution",
+		},
+	}
+	if errs := RunStructuralValidators(resp); len(errs) != 0 {
+		t.Fatalf("structural validators must not reject semantic claims: %v", errs)
+	}
+	if errs := RunValidators(resp); len(errs) != 0 {
+		t.Fatalf("local validators must not reject semantic implementation claims by keywords: %v", errs)
 	}
 }
 
