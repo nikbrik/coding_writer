@@ -28,5 +28,8 @@ Artifacts/
 artifacts/consensus/
 Artifacts/consensus/
 
+# Scratch / manual test artifacts
+manual_scratch/
+
 # Logs
 *.log
