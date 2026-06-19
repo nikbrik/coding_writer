@@ -404,6 +404,9 @@ func (m *Manager) RecordAcceptedValidation(status string, trustedEvidence []stri
 		state.ValidationStatus = strings.TrimSpace(status)
 		state.ValidationEvidence = trimNonEmpty(trustedEvidence)
 		markCurrentMicrotask(state, "accepted_validation", status, trustedEvidence)
+		if state.ValidationStatus == "ready_for_done" {
+			markPendingMicrotasks(state, "accepted_validation", status, trustedEvidence)
+		}
 		return nil
 	})
 }
@@ -492,6 +495,23 @@ func markCurrentMicrotask(state *app.TaskState, status, summary string, evidence
 	state.Microtasks[idx].ResultSummary = strings.TrimSpace(summary)
 	state.Microtasks[idx].EvidenceRefs = trimNonEmpty(evidence)
 	state.Microtasks[idx].UpdatedAt = time.Now().UTC()
+}
+
+func markPendingMicrotasks(state *app.TaskState, status, summary string, evidence []string) {
+	if state == nil {
+		return
+	}
+	now := time.Now().UTC()
+	refs := trimNonEmpty(evidence)
+	for i := range state.Microtasks {
+		if strings.TrimSpace(state.Microtasks[i].Status) != "pending" {
+			continue
+		}
+		state.Microtasks[i].Status = status
+		state.Microtasks[i].ResultSummary = strings.TrimSpace(summary)
+		state.Microtasks[i].EvidenceRefs = refs
+		state.Microtasks[i].UpdatedAt = now
+	}
 }
 
 func hasSecretIn(items []string) bool {

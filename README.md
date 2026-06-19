@@ -1,49 +1,214 @@
 # Coding Writer
 
-Coding Writer - это terminal-first AI coding agent CLI в том же классе продуктов, что Claude Code и Codex CLI.
+Coding Writer - terminal-first AI coding agent CLI в том же продуктовом классе, что Claude Code и Codex CLI.
 
-Целевая пользовательская модель: разработчик открывает репозиторий, запускает `assistant chat`, пишет задачу обычным языком, а агент планирует работу, понимает контекст проекта, применяет изменения через контролируемые tools, запускает проверки, показывает evidence/diff и доводит задачу до завершения в одном chat flow.
+Целевая модель: разработчик открывает репозиторий, запускает `assistant chat`, пишет задачу обычным языком, а ассистент планирует работу, ведёт task lifecycle, использует память/профиль/правила, запускает безопасную проверку, показывает evidence и доводит задачу до результата в одном chat flow.
 
-Текущий P0 — это control-plane срез такого агента: диалог, память, профили, task lifecycle, semantic validation, audit and trusted verification. Это не финальная “chat utility”. File edit tools, shell/test tools, repo context search and patch application are P1/P2 layers that must integrate into the same chat-first lifecycle.
+Текущий P0 - это control-plane такого агента. Он уже реализует диалог, память, профили, task state, stage policies, semantic validators, planning swarm, trusted verification, audit и human-readable terminal output. Полноценные repo tools для чтения/редактирования файлов, shell execution, diff review and recovery - следующий слой P1/P2; они должны встраиваться в тот же chat-first lifecycle, а не становиться отдельной debug-утилитой.
 
-Главное: модель не управляет приложением сама. Она отвечает в заданном формате, а приложение проверяет ответ и только потом сохраняет новое состояние или запускает разрешённые tools.
+Главный принцип: LLM не владеет приложением. Модель может предложить план, код, findings или transition signal, но Go-код проверяет схему, смысл, правила, evidence и только потом меняет состояние или запускает разрешённую проверку.
 
-## Общая идея
+## Architecture
 
-Обычный запрос проходит такой путь:
+### Runtime Flow
+
+Обычный запрос проходит через контролируемый pipeline:
 
 ```mermaid
 flowchart TD
-    User["Пользователь пишет запрос"] --> Preflight["Приложение проверяет правила"]
-    Preflight --> Context["Собирает контекст: профиль, память, задача, правила"]
-    Context --> Model["Отправляет запрос модели"]
-    Model --> Validate["Проверяет ответ модели"]
-    Validate --> Store["Сохраняет новое состояние"]
-    Store --> User
+    User["User message"] --> CLI["assistant chat"]
+    CLI --> Preflight["Preflight gates<br/>secret check + invariants"]
+    Preflight --> Intent["Semantic intent referee<br/>strict JSON"]
+    Intent --> Context["PromptBuilder<br/>profile + memory + task + rules"]
+    Context --> Provider["OpenRouter / fake provider"]
+    Provider --> Parse["ResponseParser<br/>strict stage schema"]
+    Parse --> Validate["Structural + semantic validators"]
+    Validate --> Gate["TransitionGate / LifecycleGate"]
+    Gate --> Persist["Storage<br/>task + memory proposal + audit"]
+    Persist --> Render["Human renderer<br/>sections, evidence, syntax highlight"]
+    Render --> User
 ```
 
-В приложении есть несколько важных частей:
+Ключевые компоненты:
 
-- память - хранит полезный контекст;
-- профили - задают стиль ответа;
-- задача по стадиям - помогает доводить работу до конца;
-- постоянные правила - блокируют запросы, которые противоречат проекту;
-- проверка результата - не дает завершить задачу без надежного подтверждения;
-- controlled lifecycle - приложение само ведет задачу через planning, execution, validation и done.
+- `internal/cli` - Cobra commands, REPL, slash commands, human/JSON rendering;
+- `internal/providers` - OpenRouter and fake provider;
+- `internal/prompting` - prompt assembly from profile, memory, task and invariants;
+- `internal/memory` - short/work/long memory and proposal workflow;
+- `internal/profiles` - user style profiles;
+- `internal/tasks` - persisted task FSM;
+- `internal/invariants` - durable project rules;
+- `internal/process` - process controller, stage policies, validators, planning swarm, lifecycle gate, evidence store and audit;
+- `internal/storage` - JSON/JSONL file storage with locks;
+- `manual_scratch/*` and `tests/*` - acceptance/demo tasks.
 
-Проверки идут в двух местах. Модель возвращает структурированный JSON там, где приложению нужно принять решение. Затем Go-код разбирает этот JSON строго: лишние поля, неверная стадия или пустые обязательные поля считаются ошибкой. Для смысловых решений, например "пользователь правда одобрил переход дальше или просто обсуждает его" или "запрос реально нарушает правило проекта", используется отдельный LLM-валидатор. Локально приложение оставляет только hard gates: секреты, некорректный JSON, небезопасные id и отсутствие обязательных полей.
+### Storage Model
 
-Подробные сценарии ручной демонстрации, включая единственный canonical live-сценарий Day 15, лежат в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Deterministic script остаётся regression smoke, не заменой live proof.
+Storage root задаётся `--storage-dir` или `ASSISTANT_STORAGE_DIR`. Для demo используется repo-local `.assistant/storage/...`; обычный default идёт через user config dir.
+
+```mermaid
+flowchart TD
+    Storage["storage root"] --> Config["config.json"]
+    Storage --> Profiles["profiles/*.json"]
+    Storage --> Sessions["sessions/<id>/short_term.jsonl"]
+    Storage --> Long["long_term/*.jsonl"]
+    Storage --> Tasks["tasks/current.json<br/>tasks/<task>.json"]
+    Storage --> Invariants["invariants/project.jsonl"]
+    Storage --> Proposals["sessions/<id>/memory_proposals.jsonl"]
+    Storage --> Evidence["trusted_evidence/*.json"]
+    Storage --> Audit["process_audit.jsonl"]
+```
+
+Физические memory layers только три:
+
+- `short` - текущая сессия;
+- `work` - текущая задача;
+- `long` - устойчивые предпочтения, решения, знания.
+
+`ignore` существует только как proposal/audit status; это не storage layer.
+
+### Task Lifecycle
+
+Task state хранит `stage`, `current_step`, `expected_action`, `status`, план, критерии, microtasks, validation evidence and history.
+
+```mermaid
+stateDiagram-v2
+    [*] --> planning: user states task
+    planning --> execution: approved plan
+    execution --> validation: accepted execution or trusted evidence
+    validation --> done: accepted validation + ready_for_done
+    execution --> planning: replan needed
+    validation --> execution: fixes needed
+    planning --> planning: plan revised
+    done --> [*]
+```
+
+Allowed stage ownership:
+
+| Stage | LLM role | User sees | App gate |
+| --- | --- | --- | --- |
+| `planning` | planner + planning swarm | summary, assumptions, criteria, plan, swarm review | plan schema + approval validation |
+| `execution` | implementer | deliverable, current step, next step | execution schema + no false tool claims |
+| `validation` | strict reviewer | findings, checks, missing evidence, verdict | trusted evidence + accepted validation |
+| `done` | summarizer | final status | terminal `expected_action=none` |
+
+### Day 15 Control Plane
+
+Day 15 is the main proof that this is a coding-agent workflow, not manual FSM driving. The user works in one `assistant chat`; application code owns state transitions.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant C as ProcessController
+    participant I as PromptImprover
+    participant P as PlanningSwarm
+    participant A as AgentRunner
+    participant V as VerificationResolver
+    participant E as TrustedEvidenceStore
+    participant G as LifecycleGate
+
+    U->>C: Natural task
+    C->>I: Preserve intent, reduce ambiguity
+    C->>P: Role-specific planning review
+    P-->>C: Specialist reviews + merged plan
+    C-->>U: Human plan + Planning swarm section
+    U->>C: Approves plan
+    C->>G: planning -> execution
+    C->>A: executor microtask
+    A-->>C: deliverable / next signal
+    U->>C: asks to check result
+    C->>V: exact command or strict-JSON planner
+    V->>E: allowlisted argv command result
+    C->>G: execution -> validation
+    C->>A: reviewer microtask
+    C->>G: validation -> done
+```
+
+Planning swarm roles are real review roles, not labels:
+
+| Role | Focus |
+| --- | --- |
+| `requirements_specialist` | ambiguity, missing requirements, acceptance criteria completeness |
+| `code_research_specialist` | files/packages/APIs, implementation surface, project conventions |
+| `architecture_specialist` | module boundaries, lifecycle impact, maintainability |
+| `test_validation_specialist` | test coverage, exact evidence, objectively checkable criteria |
+| `risk_regression_specialist` | regressions, unsafe assumptions, false completion risk |
+
+Human output for swarm shows verdict/contribution, finding count, proposal count, top finding and proposed changes when present. It must not be a plain restatement of the user task.
+
+### Verification And Evidence
+
+The user must not type exact verification commands in the happy path. The app resolves verification from approved task state:
+
+```mermaid
+flowchart TD
+    Intent["User asks to check / finish"] --> Resolver["VerificationResolver"]
+    Plan["Approved plan + criteria"] --> Resolver
+    Resolver --> Exact["Exact command found in approved state"]
+    Resolver --> Planner["Strict JSON verification planner"]
+    Exact --> Policy["Local command policy"]
+    Planner --> Policy
+    Policy -->|argv-only + allowlist + path safe| Run["Run command"]
+    Policy -->|unsafe| Block["No execution"]
+    Run --> Evidence["TrustedEvidenceStore<br/>exit_code + sha256 + bounded output"]
+    Evidence --> Gate["LifecycleGate"]
+```
+
+Important constraints:
+
+- no language/path heuristic like `Go package path -> go test`;
+- exact command from approved state first;
+- otherwise structured planner returns strict JSON `{command, confidence, reason}`;
+- local parser enforces argv-only, command allowlist, safe paths and output/time bounds;
+- `--verify` exists only for debug/recovery override, not primary Day 15 demo.
+
+### Validation Model
+
+Validation is split intentionally:
+
+- local deterministic checks: JSON shape, enum values, IDs, secrets, path safety, command allowlist, state transition preconditions;
+- LLM semantic validators: approval intent, invariant conflicts, output contract meaning, prompt equivalence, verification planning;
+- final user-visible/stage schemas stay strict;
+- internal helper outputs may use tolerant parsing plus semantic revalidation.
+
+Keyword/regex matching is not allowed as final product validation for user intent, approval, readiness, acceptance or invariant meaning.
 
 ## CLI chat UX
 
-Обычный `assistant chat` и `assistant chat --once --input <text>` выводят человекочитаемый transcript, а не raw JSON. Пользователь видит секции `Assistant`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal` и `Next`. Это основной интерфейс для demo и ручного тестирования.
+Обычный `assistant chat` и `assistant chat --once --input <text>` выводят человекочитаемый transcript, а не raw JSON. Пользователь видит секции `Assistant`, `Planning swarm`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal` и `Next`.
+
+В planning для Day 15 дополнительно видна секция `Planning swarm`: verdict/contribution по specialist roles, количество findings/proposals и top finding/proposed change, если они есть. Это должен быть review результата планирования, а не пересказ исходной задачи.
 
 Для Day 15 primary demo пользователь запускает `assistant chat` один раз и дальше пишет сообщения внутри этого chat session. `assistant chat --once --input ...` допустим для automation/smoke, но не является основным пользовательским demo-сценарием Day 15.
 
-В interactive TTY headings и labels подсвечиваются ANSI-стилями; при redirect/non-TTY вывод остается plain text без escape-кодов, чтобы demo logs и tests читались стабильно.
+В interactive TTY headings, labels и fenced Go code blocks подсвечиваются ANSI-стилями; при redirect/non-TTY вывод остается plain text без escape-кодов, чтобы demo logs и tests читались стабильно.
 
 `--json` остаётся машинным режимом для regression scripts, CI, audit extraction и debug. В этом режиме stdout должен быть parseable JSON, а diagnostics идут в stderr.
+
+## Demo And Manual Testing
+
+Подробные сценарии ручной демонстрации, включая единственный canonical live-сценарий Day 15, лежат в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Deterministic script остаётся regression smoke, не заменой live proof.
+
+Day 15 live demo запускается одной командой из repo root и открывает обычный `assistant chat`:
+
+```bash
+export OPENROUTER_API_KEY="..."
+scripts/day15-demo.sh
+```
+
+Для локальной репетиции без OpenRouter:
+
+```bash
+scripts/day15-demo.sh --fake
+```
+
+Для автоматизированной regression-проверки:
+
+```bash
+scripts/day15-demo.sh --fake --auto
+```
+
+Day 15 live proof хранится только в demo-доке, чтобы не было второго source of truth.
 
 ## День 11: память
 
@@ -338,10 +503,10 @@ go test ./tests -run TestDay14
 
 Главное правило: LLM не владеет lifecycle. Она может предложить план, deliverable, findings или `next_signal`, но `stage`, `current_step`, `expected_action`, `validation_status` и `done` меняет только Go-код после проверок.
 
-Архитектурно Day 15 добавляет пять компонентов:
+Архитектурно Day 15 добавляет шесть компонентов:
 
 - `PromptImprover` - уточняет task prompt перед stage-specific вызовом, не меняя исходную цель пользователя;
-- `PlanningSwarm` - собирает несколько независимых specialist plans и один финальный merged plan;
+- `PlanningSwarm` - собирает role-specific specialist reviews и один финальный merged plan;
 - `AgentRunner` - запускает role-scoped microtask agents для execution и review;
 - `VerificationResolver` - получает exact verification command из approved task state или strict-JSON verification planner, но не делает language/path inference в application code;
 - `TrustedEvidenceStore` - сохраняет app-issued evidence от auto verification или explicit `--verify`, с digest и bounded summary;
@@ -361,8 +526,8 @@ flowchart TD
     Controller --> Approval["User approval<br/>approved plan"]
     Approval --> Verify["VerificationResolver<br/>exact command or planner"]
     Intent --> Verify
-    Verify --> Policy["local command policy<br/>argv-only + allowlist"]
-    Policy --> Evidence["TrustedEvidenceStore<br/>exit code + digest + summary"]
+    Verify --> CommandPolicy["local command policy<br/>argv-only + allowlist"]
+    CommandPolicy --> Evidence["TrustedEvidenceStore<br/>exit code + digest + summary"]
     Swarm --> Gate["LifecycleGate"]
     Agents --> Gate
     Evidence --> Gate
@@ -395,7 +560,7 @@ sequenceDiagram
 
     U->>C: "Реши задачу..."
     C->>P: улучшенный prompt + stage policy
-    P-->>C: specialist plans + merged plan
+    P-->>C: Specialist reviews + merged plan
     C-->>U: план и acceptance criteria
     U->>C: "План ок, выполняй"
     C->>G: проверить approval
@@ -429,14 +594,17 @@ Lifecycle gate закрывает конкретные переходы:
 - `done` нельзя получить словами модели вроде "тесты прошли": нужен app-issued evidence;
 - audit должен показывать prompt improvement, planning swarm, approval validation, executor/reviewer roles и lifecycle transitions.
 
-Ручной сценарий для демо описан в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Day 15 live proof хранится только там, чтобы не было второго source of truth.
+Ручной сценарий для демо описан в [docs/manual-testing-demo.md](docs/manual-testing-demo.md); команды запуска перечислены выше в разделе `Demo And Manual Testing`. Day 15 live proof хранится только в demo-доке, чтобы не было второго source of truth.
 
 ## Как собрать и запустить
 
 Сборка CLI:
 
 ```bash
+export GOCACHE="${GOCACHE:-/private/tmp/coding_writer_gocache}"
+mkdir -p .assistant/bin
 go build -o .assistant/bin/assistant ./cmd/assistant
+export ASSISTANT_BIN="$PWD/.assistant/bin/assistant"
 ```
 
 Добавить бинарник в `PATH` для текущего терминала:
@@ -448,13 +616,13 @@ export PATH="$PWD/.assistant/bin:$PATH"
 Инициализация:
 
 ```bash
-assistant init --model "$ASSISTANT_MODEL"
+"$ASSISTANT_BIN" init --model "$ASSISTANT_MODEL"
 ```
 
 Интерактивный чат:
 
 ```bash
-assistant chat
+"$ASSISTANT_BIN" chat
 ```
 
 Для отдельной демонстрации удобно задавать отдельную папку состояния:

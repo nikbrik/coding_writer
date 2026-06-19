@@ -400,9 +400,10 @@ func initCommand(opts *globalOptions) *cobra.Command {
 			if rt.Config.ActiveModel == "" {
 				return app.ErrorWithHint(app.CategoryProvider, "missing_model", "active model is required", "run assistant init --model <provider/model>", nil)
 			}
-			provider := rt.ensureProvider()
-			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
-			if err := validateModelID(cmd.Context(), provider, rt.Config.ActiveModel); err != nil {
+			if err := validateModelSyntax(rt.Config.ActiveModel); err != nil {
+				return err
+			}
+			if err := validateModelSyntax(rt.Config.MemoryModel); err != nil {
 				return err
 			}
 			if err := rt.ConfigMgr.Save(rt.Config); err != nil {
@@ -492,17 +493,18 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 }
 
 type chatResult struct {
-	OK               bool                      `json:"ok"`
-	SessionID        string                    `json:"session_id"`
-	Answer           string                    `json:"answer,omitempty"`
-	Model            string                    `json:"model,omitempty"`
-	RenderedPromptID string                    `json:"rendered_prompt_id,omitempty"`
-	RenderedPrompt   string                    `json:"rendered_prompt,omitempty"`
-	Messages         []app.ChatMessage         `json:"messages,omitempty"`
-	Proposal         *app.MemoryProposal       `json:"proposal,omitempty"`
-	Transition       *process.TransitionResult `json:"transition,omitempty"`
-	Warnings         []string                  `json:"warnings,omitempty"`
-	Task             *app.TaskState            `json:"-"`
+	OK               bool                        `json:"ok"`
+	SessionID        string                      `json:"session_id"`
+	Answer           string                      `json:"answer,omitempty"`
+	Model            string                      `json:"model,omitempty"`
+	RenderedPromptID string                      `json:"rendered_prompt_id,omitempty"`
+	RenderedPrompt   string                      `json:"rendered_prompt,omitempty"`
+	Messages         []app.ChatMessage           `json:"messages,omitempty"`
+	Proposal         *app.MemoryProposal         `json:"proposal,omitempty"`
+	Transition       *process.TransitionResult   `json:"transition,omitempty"`
+	Warnings         []string                    `json:"warnings,omitempty"`
+	Task             *app.TaskState              `json:"-"`
+	AuditEvents      []process.ProcessAuditEvent `json:"-"`
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
@@ -549,6 +551,13 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		result.Transition = procResult.Transition
 		result.Warnings = procResult.Warnings
 	}
+	if materialized, matErr := materializeExecutionDeliverable(procResult, currentTask); matErr != nil {
+		result.Warnings = append(result.Warnings, "artifact materialization skipped: "+app.AsError(matErr).Code)
+	} else {
+		for _, path := range materialized {
+			result.Warnings = append(result.Warnings, "artifact materialized: "+path)
+		}
+	}
 	if autoVerifyCommand != "" {
 		result.Warnings = append(result.Warnings, "auto verification: "+autoVerifyCommand)
 	}
@@ -573,6 +582,9 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 			result.Model = postResult.Model
 		}
 		result.Transition = postResult.Transition
+		if postResult.Transition != nil {
+			result.Warnings = dropExecutionAutoContinueWarnings(result.Warnings)
+		}
 		result.Warnings = append(result.Warnings, postResult.Warnings...)
 		if postCommand != "" {
 			result.Warnings = append(result.Warnings, "auto verification: "+postCommand)
@@ -581,7 +593,212 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	if task, taskErr := rt.Tasks.Current(); taskErr == nil {
 		result.Task = &task
 	}
+	result.AuditEvents = chatAuditEvents(rt.StorageDir, sessionID, result.Task)
 	return result, nil
+}
+
+func dropExecutionAutoContinueWarnings(warnings []string) []string {
+	out := warnings[:0]
+	for _, warning := range warnings {
+		if strings.HasPrefix(warning, "execution auto-continue stopped:") || strings.HasPrefix(warning, "execution continuation skipped:") {
+			continue
+		}
+		out = append(out, warning)
+	}
+	return out
+}
+
+func chatAuditEvents(storageDir, sessionID string, task *app.TaskState) []process.ProcessAuditEvent {
+	if strings.TrimSpace(storageDir) == "" || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	events, err := process.NewAuditStore(storageDir).Latest(80)
+	if err != nil {
+		return nil
+	}
+	taskID := taskID(task)
+	out := []process.ProcessAuditEvent{}
+	for _, event := range events {
+		if event.SessionID != sessionID {
+			continue
+		}
+		if taskID != "" && event.TaskID != "" && event.TaskID != taskID {
+			continue
+		}
+		out = append(out, event)
+	}
+	return out
+}
+
+func materializeExecutionDeliverable(procResult *process.ExchangeResult, task app.TaskState) ([]string, error) {
+	if procResult == nil || strings.TrimSpace(procResult.Answer) == "" || task.ID == "" {
+		return nil, nil
+	}
+	blocks := []deliverableFileBlock{}
+	for _, answer := range splitExecutionAnswers(procResult.Answer) {
+		parsed, err := process.Parse(app.StageExecution, process.ActionExecutePlanStep, answer)
+		if err != nil || parsed.Execution == nil {
+			continue
+		}
+		blocks = append(blocks, extractDeliverableFileBlocks(parsed.Execution.Deliverable, task)...)
+	}
+	if len(blocks) == 0 {
+		return nil, nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, app.NewError(app.CategoryCLI, "working_dir_unavailable", "could not resolve working directory", err)
+	}
+	written := []string{}
+	seenWritten := map[string]bool{}
+	for _, block := range blocks {
+		target, err := safeWorkspacePath(cwd, block.Path)
+		if err != nil {
+			return written, err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return written, app.NewError(app.CategoryCLI, "artifact_dir_create_failed", "could not create artifact directory", err)
+		}
+		content := normalizeGoPackageForDirectory(filepath.Dir(target), block.Content)
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			return written, app.NewError(app.CategoryCLI, "artifact_write_failed", "could not write execution artifact", err)
+		}
+		rel, _ := filepath.Rel(cwd, target)
+		relSlash := filepath.ToSlash(rel)
+		if !seenWritten[relSlash] {
+			seenWritten[relSlash] = true
+			written = append(written, relSlash)
+		}
+	}
+	return written, nil
+}
+
+func normalizeGoPackageForDirectory(dir, content string) string {
+	existing := existingGoPackageName(dir)
+	if existing == "" {
+		return content
+	}
+	re := regexp.MustCompile(`(?m)^package\s+[A-Za-z_][A-Za-z0-9_]*\s*$`)
+	return re.ReplaceAllString(content, "package "+existing)
+}
+
+func existingGoPackageName(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	re := regexp.MustCompile(`(?m)^package\s+([A-Za-z_][A-Za-z0-9_]*)\s*$`)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		match := re.FindSubmatch(data)
+		if len(match) == 2 {
+			return string(match[1])
+		}
+	}
+	return ""
+}
+
+func splitExecutionAnswers(answer string) []string {
+	parts := strings.Split(answer, "\n\n")
+	out := []string{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 && strings.TrimSpace(answer) != "" {
+		out = append(out, strings.TrimSpace(answer))
+	}
+	return out
+}
+
+type deliverableFileBlock struct {
+	Path    string
+	Content string
+}
+
+func extractDeliverableFileBlocks(deliverable string, task app.TaskState) []deliverableFileBlock {
+	baseDir := inferSingleTaskDirectory(task)
+	re := regexp.MustCompile(`(?ms)^#{2,6}\s+([^\n]+?)\s*\n` + "```[A-Za-z0-9_-]*\n(.*?)```")
+	matches := re.FindAllStringSubmatch(deliverable, -1)
+	blocks := []deliverableFileBlock{}
+	for _, match := range matches {
+		if len(match) != 3 {
+			continue
+		}
+		path := normalizeDeliverablePath(match[1], baseDir)
+		if path == "" {
+			continue
+		}
+		content := strings.TrimRight(match[2], "\n") + "\n"
+		blocks = append(blocks, deliverableFileBlock{Path: path, Content: content})
+	}
+	return blocks
+}
+
+func normalizeDeliverablePath(heading, baseDir string) string {
+	path := strings.TrimSpace(heading)
+	path = strings.Trim(path, "`'\" ")
+	fields := strings.Fields(path)
+	if len(fields) > 0 {
+		path = fields[len(fields)-1]
+	}
+	path = strings.Trim(path, "`'\" :")
+	path = filepath.ToSlash(path)
+	if path == "" {
+		return ""
+	}
+	if !strings.Contains(path, "/") && baseDir != "" {
+		path = strings.TrimRight(baseDir, "/") + "/" + path
+	}
+	return path
+}
+
+func inferSingleTaskDirectory(task app.TaskState) string {
+	text := strings.Join(append(append([]string{task.Objective}, task.AcceptanceCriteria...), task.Plan...), "\n")
+	re := regexp.MustCompile(`(?:^|[\s'"` + "`" + `])((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+)(?:[\s'"` + "`" + `.,:]|$)`)
+	seen := map[string]bool{}
+	var only string
+	for _, match := range re.FindAllStringSubmatch(text, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		candidate := strings.Trim(match[1], "/.,:;")
+		if candidate == "" || strings.Contains(candidate, "..") || strings.Contains(filepath.Base(candidate), ".") {
+			continue
+		}
+		if !seen[candidate] {
+			seen[candidate] = true
+			if only != "" && only != candidate {
+				return ""
+			}
+			only = candidate
+		}
+	}
+	return only
+}
+
+func safeWorkspacePath(cwd, rel string) (string, error) {
+	if strings.TrimSpace(rel) == "" || filepath.IsAbs(rel) {
+		return "", app.NewError(app.CategoryValidation, "unsafe_artifact_path", "artifact path must be relative", nil)
+	}
+	clean := filepath.Clean(filepath.FromSlash(rel))
+	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return "", app.NewError(app.CategoryValidation, "unsafe_artifact_path", "artifact path escapes workspace", nil)
+	}
+	target := filepath.Join(cwd, clean)
+	relToCWD, err := filepath.Rel(cwd, target)
+	if err != nil || strings.HasPrefix(relToCWD, ".."+string(filepath.Separator)) || relToCWD == ".." {
+		return "", app.NewError(app.CategoryValidation, "unsafe_artifact_path", "artifact path escapes workspace", err)
+	}
+	return target, nil
 }
 
 func runPostApprovalTrustedVerification(ctx context.Context, rt *runtime, pc *process.ProcessController, sessionID string, renderOnly bool, procResult *process.ExchangeResult) (*process.ExchangeResult, string, error) {
@@ -614,6 +831,7 @@ func runPostApprovalTrustedVerification(ctx context.Context, rt *runtime, pc *pr
 		RequireMemoryProposal: false,
 		SkipSemanticIntent:    true,
 		SkipPromptImprovement: true,
+		SkipInputInvariants:   true,
 	})
 	if err != nil {
 		return nil, command, err
@@ -623,6 +841,9 @@ func runPostApprovalTrustedVerification(ctx context.Context, rt *runtime, pc *pr
 
 func autoTrustedVerificationCommand(ctx context.Context, rt *runtime, sessionID, input string, task app.TaskState, renderOnly bool, semanticValidator *process.SemanticValidator) (string, error) {
 	if renderOnly || strings.TrimSpace(task.ID) == "" || task.Status == app.TaskStatusPaused || task.Stage == app.StageDone {
+		return "", nil
+	}
+	if task.Stage == app.StageValidation && task.ValidationStatus == "ready_for_done" && len(task.ValidationEvidence) > 0 {
 		return "", nil
 	}
 	if semanticValidator != nil {
@@ -2623,6 +2844,9 @@ func renderChatResult(result chatResult, opts chatRenderOptions) string {
 
 	writeSectionHeader(&b, style, "Assistant")
 	b.WriteString(renderAssistantAnswer(result.Answer, style))
+	if answerStage(result.Answer) == app.StagePlanning {
+		writePlanningSwarmSummary(&b, style, result.AuditEvents)
+	}
 
 	task := displayTask(result)
 	if task != nil {
@@ -2638,6 +2862,131 @@ func renderChatResult(result chatResult, opts chatRenderOptions) string {
 	return b.String()
 }
 
+func writePlanningSwarmSummary(b *strings.Builder, style chatStyle, events []process.ProcessAuditEvent) {
+	items := planningSwarmItems(events)
+	if len(items) == 0 {
+		return
+	}
+	writeSectionHeader(b, style, "Planning swarm")
+	for _, item := range items {
+		b.WriteString("- ")
+		b.WriteString(style.label(item.Role))
+		b.WriteString(": ")
+		b.WriteString(renderMarkdownTerminalText(item.Summary, style))
+		stats := []string{}
+		if item.Findings != "" {
+			stats = append(stats, "findings="+item.Findings)
+		}
+		if item.PlanItems != "" {
+			stats = append(stats, "plan proposals="+item.PlanItems)
+		}
+		if item.Criteria != "" {
+			stats = append(stats, "criteria proposals="+item.Criteria)
+		}
+		if len(stats) > 0 {
+			b.WriteString(" (")
+			b.WriteString(strings.Join(stats, ", "))
+			b.WriteString(")")
+		}
+		b.WriteString("\n")
+		if item.TopFinding != "" {
+			b.WriteString("  finding: ")
+			b.WriteString(renderMarkdownTerminalText(item.TopFinding, style))
+			b.WriteString("\n")
+		}
+		if item.ProposedPlan != "" {
+			b.WriteString("  proposed plan: ")
+			b.WriteString(renderMarkdownTerminalText(item.ProposedPlan, style))
+			b.WriteString("\n")
+		}
+		if item.ProposedCriteria != "" {
+			b.WriteString("  proposed criteria: ")
+			b.WriteString(renderMarkdownTerminalText(item.ProposedCriteria, style))
+			b.WriteString("\n")
+		}
+	}
+}
+
+type planningSwarmDisplayItem struct {
+	Role             string
+	Summary          string
+	Findings         string
+	PlanItems        string
+	Criteria         string
+	TopFinding       string
+	ProposedPlan     string
+	ProposedCriteria string
+}
+
+func planningSwarmItems(events []process.ProcessAuditEvent) []planningSwarmDisplayItem {
+	seen := map[string]bool{}
+	out := []planningSwarmDisplayItem{}
+	for _, event := range events {
+		if event.Decision != "planning_specialist_summary" || strings.TrimSpace(event.AgentRole) == "" {
+			continue
+		}
+		role := strings.TrimSpace(event.AgentRole)
+		if seen[role] {
+			continue
+		}
+		seen[role] = true
+		item := compactPlanningSummary(event.Reason)
+		item.Role = role
+		out = append(out, item)
+	}
+	return out
+}
+
+func compactPlanningSummary(reason string) planningSwarmDisplayItem {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return planningSwarmDisplayItem{Summary: "review completed"}
+	}
+	fields := semicolonFields(reason)
+	if len(fields) == 0 {
+		return planningSwarmDisplayItem{Summary: reason}
+	}
+	item := planningSwarmDisplayItem{
+		Summary:          firstNonEmpty(fields["summary"], reason),
+		Findings:         fields["findings"],
+		PlanItems:        fields["plan_items"],
+		Criteria:         fields["criteria"],
+		TopFinding:       fields["top_finding"],
+		ProposedPlan:     fields["proposed_plan"],
+		ProposedCriteria: fields["proposed_criteria"],
+	}
+	if item.Summary == reason {
+		parts := strings.Split(reason, ";")
+		item.Summary = strings.TrimSpace(parts[0])
+	}
+	return item
+}
+
+func semicolonFields(reason string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(reason, ";") {
+		key, value, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(items ...string) string {
+	for _, item := range items {
+		if strings.TrimSpace(item) != "" {
+			return strings.TrimSpace(item)
+		}
+	}
+	return ""
+}
+
 func renderAssistantAnswer(answer string, style chatStyle) string {
 	answer = strings.TrimSpace(answer)
 	if answer == "" {
@@ -2646,7 +2995,22 @@ func renderAssistantAnswer(answer string, style chatStyle) string {
 	if text, ok := renderStructuredStageAnswer(answer, style); ok {
 		return text
 	}
-	return safeTerminalText(answer) + "\n"
+	return renderMarkdownTerminalText(answer, style) + "\n"
+}
+
+func answerStage(answer string) app.TaskStage {
+	cleaned := cleanStructuredAnswer(answer)
+	chunks, ok := structuredJSONChunks(cleaned)
+	if !ok || len(chunks) != 1 {
+		return ""
+	}
+	var stageField struct {
+		Stage app.TaskStage `json:"stage"`
+	}
+	if err := json.Unmarshal([]byte(chunks[0]), &stageField); err != nil {
+		return ""
+	}
+	return stageField.Stage
 }
 
 func renderStructuredStageAnswer(answer string, style chatStyle) (string, bool) {
@@ -2917,7 +3281,7 @@ func writeField(b *strings.Builder, style chatStyle, label, value string) {
 	}
 	b.WriteString(style.label(label))
 	b.WriteString(": ")
-	b.WriteString(safeTerminalText(value))
+	b.WriteString(renderMarkdownTerminalText(value, style))
 	b.WriteString("\n")
 }
 
@@ -2939,8 +3303,120 @@ func writeBlock(b *strings.Builder, style chatStyle, title, value string) {
 	}
 	b.WriteString(style.label(title))
 	b.WriteString(":\n")
-	b.WriteString(safeTerminalText(value))
+	b.WriteString(renderMarkdownTerminalText(value, style))
 	b.WriteString("\n")
+}
+
+func renderMarkdownTerminalText(text string, style chatStyle) string {
+	text = safeTerminalText(text)
+	if !style.color || !strings.Contains(text, "```") {
+		return text
+	}
+	var b strings.Builder
+	remaining := text
+	inCode := false
+	lang := ""
+	for {
+		idx := strings.Index(remaining, "```")
+		if idx < 0 {
+			if inCode {
+				b.WriteString(highlightCode(remaining, lang, style))
+			} else {
+				b.WriteString(remaining)
+			}
+			break
+		}
+		if inCode {
+			b.WriteString(highlightCode(remaining[:idx], lang, style))
+			b.WriteString(style.dim("```"))
+			remaining = remaining[idx+3:]
+			inCode = false
+			lang = ""
+			continue
+		}
+		b.WriteString(remaining[:idx])
+		remaining = remaining[idx+3:]
+		firstLine, rest, ok := strings.Cut(remaining, "\n")
+		if !ok {
+			b.WriteString(style.dim("```"))
+			b.WriteString(remaining)
+			break
+		}
+		lang = strings.TrimSpace(firstLine)
+		b.WriteString(style.dim("```" + lang))
+		b.WriteString("\n")
+		remaining = rest
+		inCode = true
+	}
+	return b.String()
+}
+
+func highlightCode(code, lang string, style chatStyle) string {
+	if strings.EqualFold(strings.TrimSpace(lang), "go") || strings.TrimSpace(lang) == "" {
+		return highlightGoCode(code, style)
+	}
+	return style.paint("38;5;250", code)
+}
+
+func highlightGoCode(code string, style chatStyle) string {
+	keywords := map[string]bool{
+		"break": true, "case": true, "chan": true, "const": true, "continue": true, "default": true,
+		"defer": true, "else": true, "fallthrough": true, "for": true, "func": true, "go": true,
+		"goto": true, "if": true, "import": true, "interface": true, "map": true, "package": true,
+		"range": true, "return": true, "select": true, "struct": true, "switch": true, "type": true, "var": true,
+	}
+	var b strings.Builder
+	for i := 0; i < len(code); {
+		if i+1 < len(code) && code[i] == '/' && code[i+1] == '/' {
+			end := strings.IndexByte(code[i:], '\n')
+			if end < 0 {
+				b.WriteString(style.paint("38;5;244", code[i:]))
+				break
+			}
+			b.WriteString(style.paint("38;5;244", code[i:i+end]))
+			i += end
+			continue
+		}
+		if code[i] == '"' || code[i] == '`' {
+			quote := code[i]
+			j := i + 1
+			for j < len(code) {
+				if code[j] == quote && (quote == '`' || code[j-1] != '\\') {
+					j++
+					break
+				}
+				j++
+			}
+			b.WriteString(style.paint("38;5;214", code[i:j]))
+			i = j
+			continue
+		}
+		if isIdentStart(code[i]) {
+			j := i + 1
+			for j < len(code) && isIdentPart(code[j]) {
+				j++
+			}
+			word := code[i:j]
+			if keywords[word] {
+				b.WriteString(style.paint("38;5;81", word))
+			} else {
+				b.WriteString(word)
+			}
+			i = j
+			continue
+		}
+		b.WriteByte(code[i])
+		i++
+	}
+	return b.String()
+}
+
+func isIdentStart(b byte) bool {
+	return b == '_' || b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
+func isIdentPart(b byte) bool {
+	return isIdentStart(b) || b >= '0' && b <= '9'
 }
 
 func writeListBlock(b *strings.Builder, style chatStyle, title string, items []string, limit int) {

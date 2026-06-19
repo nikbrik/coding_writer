@@ -82,12 +82,13 @@ func (s *PlanningSwarm) Run(ctx context.Context, sessionID string, task *app.Tas
 					Role:        role,
 					Stage:       app.StagePlanning,
 					ActionKind:  ActionPlanTask,
-					Instruction: "Review and improve planning draft from your specialty. Return specialist review JSON.",
+					Instruction: planningSpecialistInstruction(role, false),
 				},
 			}, round, "agent_call", "agent_accepted", &review)
 			if err != nil {
 				review = specialistReviewFromError(role, err)
 			}
+			review.Role = PlanningSpecialistRole(role)
 			reviews = append(reviews, review)
 		}
 		reviewPayload, err := json.Marshal(map[string]any{
@@ -153,12 +154,13 @@ func (s *PlanningSwarm) revalidateMergedPlan(ctx context.Context, sessionID stri
 				Role:        role,
 				Stage:       app.StagePlanning,
 				ActionKind:  ActionPlanTask,
-				Instruction: "Revalidate the merged planning schema from your specialty. Return specialist review JSON. Only critical/high findings block final approval.",
+				Instruction: planningSpecialistInstruction(role, true),
 			},
 		}, round, "agent_revalidation_call", "agent_revalidation_accepted", &review)
 		if err != nil {
 			review = specialistReviewFromError(role, err)
 		}
+		review.Role = PlanningSpecialistRole(role)
 		reviews = append(reviews, review)
 	}
 	return reviews, nil
@@ -193,6 +195,32 @@ func (s *PlanningSwarm) runDecodedAgent(ctx context.Context, input AgentRunInput
 func (s *PlanningSwarm) audit(role AgentRole, microtaskID string, round int, decision string) {
 	if s != nil && s.Audit != nil {
 		s.Audit(role, microtaskID, round, decision)
+	}
+}
+
+func planningSpecialistInstruction(role AgentRole, revalidation bool) string {
+	prefix := "Review the planning draft from your specialty."
+	if revalidation {
+		prefix = "Revalidate the merged planning schema from your specialty. Only critical/high findings block final approval."
+	}
+	base := prefix + ` Return SpecialistReview JSON only with keys role, summary, findings, proposed_plan, proposed_acceptance_criteria.
+Do not restate the user's task as the summary. Summary must state your review verdict and concrete contribution.
+If everything is acceptable, say what you checked and return findings=[].
+If something is missing, add a finding with severity, area, problem, fix and evidence.
+Use proposed_plan/proposed_acceptance_criteria only for concrete changes you want the orchestrator to merge.`
+	switch role {
+	case AgentRoleRequirementsSpecialist:
+		return base + "\nFocus: ambiguity, missing requirements, acceptance criteria completeness, user-visible constraints, open questions."
+	case AgentRoleCodeResearchSpecialist:
+		return base + "\nFocus: likely files/packages/APIs, implementation surface, existing project conventions, whether the plan names concrete artifacts without inventing tool results."
+	case AgentRoleArchitectureSpecialist:
+		return base + "\nFocus: module boundaries, state/lifecycle impact, maintainability, whether proposed steps fit the current architecture."
+	case AgentRoleTestValidationSpecialist:
+		return base + "\nFocus: test coverage, exact verification evidence needed, edge cases, and whether acceptance criteria are objectively checkable."
+	case AgentRoleRiskRegressionSpecialist:
+		return base + "\nFocus: regressions, unsafe assumptions, scope creep, false completion risk, and rollback/recovery concerns."
+	default:
+		return base
 	}
 }
 

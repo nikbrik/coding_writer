@@ -50,6 +50,7 @@ type ExchangeInput struct {
 	RequireMemoryProposal bool
 	SkipSemanticIntent    bool
 	SkipPromptImprovement bool
+	SkipInputInvariants   bool
 }
 
 // RunExchange executes the gated process loop.
@@ -99,7 +100,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		_ = c.saveAudit(sessionID, taskPtr, stage, action, "prompt_improvement_skipped", []string{"explicit internal skip"}, "", "", c.Model)
 	}
 	semanticSignal := "none"
-	if c.Invariants != nil {
+	if c.Invariants != nil && !input.SkipInputInvariants {
 		violations, err := c.checkInvariantPolicy(ctx, sessionID, "input", originalInput, taskPtr, stage, action, !input.RenderOnly)
 		if err != nil {
 			return nil, err
@@ -757,14 +758,18 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 	fallback := &ExchangeResult{Answer: "planning proposal approved", Model: c.Model, Proposal: noSaveProposal(sessionID), Transition: transition}
 	next := input
 	next.SessionID = sessionID
-	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks в поле deliverable дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker. Не возвращай только progress metadata."
+	next.Input = "Продолжи выполнение текущего шага утвержденного плана. Не повторяй исходные требования. Если текущий шаг является только подготовкой окружения/каталога/пакета, объедини его со следующим implementation/test artifact из approved plan и верни этот конкретный artifact сейчас. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks в поле deliverable дай код для текущего шага в fenced code block или unified diff, который пользователь может применить. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker. Не возвращай только progress metadata."
 	next.RenderOnly = false
 	next.ActionKind = ActionExecutePlanStep
 	next.TrustedEvidence = nil
 	next.SkipSemanticIntent = true
+	next.SkipPromptImprovement = true
+	next.SkipInputInvariants = true
 	result, err := c.RunExchange(ctx, next)
 	if err != nil {
-		fallback.Warnings = append(fallback.Warnings, "execution continuation skipped: "+app.AsError(err).Code)
+		if !c.taskLeftExecution() {
+			fallback.Warnings = append(fallback.Warnings, "execution continuation skipped: "+app.AsError(err).Code)
+		}
 		return fallback, nil
 	}
 	if result == nil {
@@ -780,12 +785,14 @@ func (c *ProcessController) continueAfterPlanningApproval(ctx context.Context, i
 		if !ok || parsed.NextSignal != "continue_execution" || hasNonEmpty(parsed.Blockers) {
 			break
 		}
-		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks дай код для текущего шага в fenced code block или unified diff. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker."
+		next.Input = "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя. Если текущий шаг является только подготовкой окружения/каталога/пакета, объедини его со следующим implementation/test artifact из approved plan и верни этот конкретный artifact сейчас. Если нет trusted_evidence, не заявляй, что файлы созданы, код изменен, команды или тесты запущены; completed_steps и changed_artifacts должны быть пустыми, verification должна быть [\"not run\"], next_signal должен быть continue_execution, пока план не исчерпан. Для implementation code tasks дай код для текущего шага в fenced code block или unified diff. Для read-only verification tasks не выдумывай code diff; если нужен trusted tool evidence, дай явный blocker."
 		next.ActionKind = ActionExecutePlanStep
 		next.TrustedEvidence = nil
 		more, err := c.RunExchange(ctx, next)
 		if err != nil {
-			current.Warnings = append(current.Warnings, "execution auto-continue stopped: "+app.AsError(err).Code)
+			if !c.taskLeftExecution() {
+				current.Warnings = append(current.Warnings, "execution auto-continue stopped: "+app.AsError(err).Code)
+			}
 			break
 		}
 		if more == nil || strings.TrimSpace(more.Answer) == "" {
@@ -815,6 +822,14 @@ func (c *ProcessController) autoExecutionLimit(transition *TransitionResult) int
 		return 20
 	}
 	return limit
+}
+
+func (c *ProcessController) taskLeftExecution() bool {
+	if c == nil || c.Tasks == nil {
+		return false
+	}
+	state, err := c.Tasks.Current()
+	return err == nil && state.Stage != app.StageExecution
 }
 
 func parseExecutionAnswer(answer string) (*ExecutionOutput, bool) {
@@ -1442,6 +1457,10 @@ func (c *ProcessController) completePrimary(ctx context.Context, sessionID strin
 		if err != nil {
 			return providers.CompletionResponse{}, err
 		}
+		for _, review := range swarm.Reviews {
+			reason := planningSpecialistSummary(review)
+			_ = c.saveAudit(sessionID, task, stage, action, "planning_specialist_summary", nil, "", "", c.Model, auditAgent(AgentRole(review.Role), ""), auditReason(reason))
+		}
 		_ = c.saveAudit(sessionID, task, stage, action, "planning_swarm_final", nil, "", "", c.Model, auditReason(planningSwarmSummary(swarm)))
 		return providers.CompletionResponse{
 			Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: swarm.Raw, CreatedAt: time.Now().UTC()},
@@ -1507,6 +1526,40 @@ func intString(value int) string {
 
 func planningSwarmSummary(result PlanningSwarmResult) string {
 	return "rounds=" + intString(result.Rounds) + ";findings=" + intString(len(result.Findings)) + ";reviews=" + intString(len(result.Reviews))
+}
+
+func planningSpecialistSummary(review SpecialistReview) string {
+	summary := strings.TrimSpace(review.Summary)
+	if summary == "" {
+		summary = "no summary"
+	}
+	parts := []string{
+		"summary=" + summary,
+		"findings=" + intString(len(review.Findings)),
+		"plan_items=" + intString(len(review.ProposedPlan)),
+		"criteria=" + intString(len(review.ProposedAcceptanceCriteria)),
+	}
+	if len(review.Findings) > 0 {
+		finding := review.Findings[0]
+		top := strings.TrimSpace(string(finding.Severity))
+		if area := strings.TrimSpace(finding.Area); area != "" {
+			top += " " + area
+		}
+		if problem := strings.TrimSpace(finding.Problem); problem != "" {
+			top += ": " + problem
+		}
+		if fix := strings.TrimSpace(finding.Fix); fix != "" {
+			top += " -> " + fix
+		}
+		parts = append(parts, "top_finding="+top)
+	}
+	if len(review.ProposedPlan) > 0 {
+		parts = append(parts, "proposed_plan="+strings.TrimSpace(review.ProposedPlan[0]))
+	}
+	if len(review.ProposedAcceptanceCriteria) > 0 {
+		parts = append(parts, "proposed_criteria="+strings.TrimSpace(review.ProposedAcceptanceCriteria[0]))
+	}
+	return strings.Join(parts, ";")
 }
 
 func errorCategory(err error) string {

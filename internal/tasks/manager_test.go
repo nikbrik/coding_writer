@@ -140,6 +140,35 @@ func TestDoneStageUsesExpectedNoneNoStatusDone(t *testing.T) {
 	}
 }
 
+func TestReadyForDoneMarksPendingMicrotasksAccepted(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	if _, err := mgr.Start("test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.SavePendingPlanningProposal("plan", []string{"criteria"}, []string{"step one", "step two"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.RecordPlanningApproval("approved", "ok", 1, "go"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.ApprovePendingPlanningProposal(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Move(app.StageValidation); err != nil {
+		t.Fatal(err)
+	}
+	state, err := mgr.RecordAcceptedValidation("ready_for_done", []string{"app:evidence:v2:e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mt := range state.Microtasks {
+		if mt.Status != "accepted_validation" || mt.ResultSummary != "ready_for_done" || len(mt.EvidenceRefs) != 1 {
+			t.Fatalf("microtask not accepted by validation: %+v", mt)
+		}
+	}
+}
+
 func TestTaskLostUpdateGuard(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)

@@ -58,3 +58,34 @@ func TestDecodeSemanticJSONLooseIgnoresUnknownFields(t *testing.T) {
 		t.Fatalf("unexpected decoded review: %+v", out)
 	}
 }
+
+func TestDecodeInvariantValidationJSONAcceptsObjectOrArray(t *testing.T) {
+	var objectOut invariantValidationResult
+	if err := decodeInvariantValidationJSON(`{"violations":[{"invariant_id":"go","severity":"block","problem":"p","evidence":"e"}]}`, &objectOut); err != nil {
+		t.Fatalf("object decode failed: %v", err)
+	}
+	if len(objectOut.Violations) != 1 || objectOut.Violations[0].InvariantID != "go" {
+		t.Fatalf("unexpected object decode: %+v", objectOut)
+	}
+
+	var arrayOut invariantValidationResult
+	if err := decodeInvariantValidationJSON(`[{"invariant_id":"go","severity":"block","problem":"p","evidence":"e"}]`, &arrayOut); err != nil {
+		t.Fatalf("array decode failed: %v", err)
+	}
+	if len(arrayOut.Violations) != 1 || arrayOut.Violations[0].InvariantID != "go" {
+		t.Fatalf("unexpected array decode: %+v", arrayOut)
+	}
+}
+
+func TestInvariantValidationPromptAllowsNormalLifecycleRequests(t *testing.T) {
+	prompt := invariantValidationSystemPrompt()
+	for _, want := range []string{
+		"normal user request asking the assistant to check, validate, review, continue, or finish",
+		"application gate still owns the actual transition",
+		"does not forbid a user from asking to complete an active task",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("invariant prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}

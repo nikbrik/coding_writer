@@ -34,7 +34,7 @@ MVP/P0 должен реализовать foundation для coding-agent CLI:
 - invariant manager/checker: отдельное storage, prompt block, input/output enforcement.
 - lifecycle gate: application-level допуск переходов `planning -> execution -> validation -> done`;
 - prompt improvement перед provider call;
-- planning swarm для независимых планов и финального merged plan;
+- planning swarm для role-specific review планирования и финального merged plan; specialist outputs должны содержать verdict/contribution, findings и proposed plan/criteria changes, а не пересказ исходной задачи;
 - microtask agents для execution/review roles;
 - trusted evidence store: app-issued verification evidence создаётся автоматически через language-agnostic `VerificationResolver` after approved-plan approval or semantic intent signal; resolver uses exact approved command first, otherwise asks a structured verification planner/referee for strict JSON, and local command policy/sandbox remain the only execution authority. `--verify` остаётся explicit override/debug, а в provider уходит только bounded summary/hash.
 
@@ -147,7 +147,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - `planning -> execution` requires a concrete plan, acceptance criteria and a separate approval-validation record.
 - `execution -> validation` requires accepted execution output plus app-issued trusted evidence when criteria mention tests or verification.
 - `validation -> done` requires accepted validation output and criteria-matched trusted evidence; LLM text alone cannot mark a task done.
-- Planning swarm must produce specialist proposals and one final merged plan; audit must expose specialist roles and final plan event.
+- Planning swarm must produce role-specific specialist reviews and one final merged plan; audit and human output must expose specialist roles, concrete verdict/contribution, finding count and proposed changes when present.
 - Execution and review must run through role-scoped microtask agents, not generic untracked provider calls.
 - Prompt improvement may rewrite the outbound task prompt, but it must preserve the user's objective and stage policy.
 - Manual `/task move`, `/task step`, `/task expect`, storage edits and JSON edits are invalid as Day 15 acceptance proof.
@@ -174,7 +174,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 - CLI создаёт runtime storage, если его нет;
 - CLI проверяет наличие выбранной модели;
 - `assistant init` требует model id через `--model` или `ASSISTANT_MODEL`;
-- `assistant init` валидирует model id через provider и сохраняет config;
+- `assistant init` validates model id syntax locally and saves config without provider lookup;
 - CLI создаёт default profiles `student` и `senior`, если профилей нет;
 - активный профиль по умолчанию `student`, если другой не задан через config/env/flag.
 

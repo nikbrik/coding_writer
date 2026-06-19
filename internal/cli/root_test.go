@@ -158,6 +158,65 @@ func TestChatHumanRendererColorModeHighlightsSectionsAndLabels(t *testing.T) {
 	}
 }
 
+func TestChatHumanRendererColorModeHighlightsGoCodeBlocks(t *testing.T) {
+	text := renderChatResult(chatResult{
+		OK:     true,
+		Answer: "```go\nfunc ContainsDuplicate(nums []int) bool {\n\treturn false\n}\n```",
+	}, chatRenderOptions{Color: true})
+	for _, want := range []string{
+		"\x1b[2m```go\x1b[0m",
+		"\x1b[38;5;81mfunc\x1b[0m",
+		"\x1b[38;5;81mreturn\x1b[0m",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing syntax highlight %q in:\n%q", want, text)
+		}
+	}
+
+	plain := textChatResult(chatResult{
+		OK:     true,
+		Answer: "```go\nfunc ContainsDuplicate(nums []int) bool {\n\treturn false\n}\n```",
+	})
+	if strings.ContainsRune(plain, rune(0x1b)) {
+		t.Fatalf("plain renderer must not contain ANSI escapes: %q", plain)
+	}
+}
+
+func TestChatHumanRendererShowsPlanningSwarmSummaries(t *testing.T) {
+	text := textChatResult(chatResult{
+		OK:     true,
+		Answer: `{"stage":"planning","summary":"plan","assumptions":[],"acceptance_criteria":["criteria"],"plan":["step"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`,
+		AuditEvents: []process.ProcessAuditEvent{
+			{SessionID: "s1", TaskID: "t1", Decision: "planning_specialist_summary", AgentRole: "requirements_specialist", Reason: "summary=requirements reviewed;findings=0;plan_items=1;criteria=0;proposed_plan=Add explicit package path."},
+			{SessionID: "s1", TaskID: "t1", Decision: "planning_specialist_summary", AgentRole: "code_research_specialist", Reason: "summary=code surface reviewed;findings=1;plan_items=0;criteria=0;top_finding=medium package: missing package name -> add package containsduplicate"},
+		},
+	})
+	for _, want := range []string{
+		"== Planning swarm ==",
+		"requirements_specialist: requirements reviewed (findings=0, plan proposals=1, criteria proposals=0)",
+		"proposed plan: Add explicit package path.",
+		"code_research_specialist: code surface reviewed (findings=1, plan proposals=0, criteria proposals=0)",
+		"finding: medium package: missing package name -> add package containsduplicate",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestChatHumanRendererDoesNotRepeatPlanningSwarmAfterPlanning(t *testing.T) {
+	text := textChatResult(chatResult{
+		OK:     true,
+		Answer: `{"stage":"validation","summary":"verified","checks":["tests passed"],"findings":[],"missing_evidence":[],"verdict":"pass","ready_for_done":true}`,
+		AuditEvents: []process.ProcessAuditEvent{
+			{SessionID: "s1", TaskID: "t1", Decision: "planning_specialist_summary", AgentRole: "requirements_specialist", Reason: "requirements reviewed;findings=0"},
+		},
+	})
+	if strings.Contains(text, "== Planning swarm ==") {
+		t.Fatalf("planning swarm should not repeat after planning:\n%s", text)
+	}
+}
+
 func TestChatHumanRendererFormatsMultipleStageJSONDocuments(t *testing.T) {
 	result := chatResult{
 		OK: true,
@@ -293,6 +352,132 @@ func TestAutoVerificationRequiresSemanticIntent(t *testing.T) {
 	}
 	if got != "go test ./manual_scratch/day14_stock_profit" {
 		t.Fatalf("semantic summarize_execution intent should trigger auto verification, got %q", got)
+	}
+}
+
+func TestAutoVerificationSkipsReadyValidationEvidence(t *testing.T) {
+	got, err := autoTrustedVerificationCommand(context.Background(), nil, "session_ready_done", "finish", app.TaskState{
+		ID:                 "task_ready",
+		Stage:              app.StageValidation,
+		Status:             app.TaskStatusActive,
+		ValidationStatus:   "ready_for_done",
+		ValidationEvidence: []string{"app:evidence:v2:e1"},
+	}, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("ready validation evidence should not rerun verification, got %q", got)
+	}
+}
+
+func TestExtractDeliverableFileBlocksUsesSingleTaskDirectory(t *testing.T) {
+	task := app.TaskState{
+		ID:        "task_1",
+		Objective: "Implement ContainsDuplicate in manual_scratch/day15_contains_duplicate.",
+		Plan:      []string{"Provide contains_duplicate.go", "Provide contains_duplicate_test.go"},
+	}
+	deliverable := "### contains_duplicate.go\n```go\npackage day15_contains_duplicate\n```\n\n### contains_duplicate_test.go\n```go\npackage day15_contains_duplicate\n```\n"
+
+	blocks := extractDeliverableFileBlocks(deliverable, task)
+	if len(blocks) != 2 {
+		t.Fatalf("want 2 blocks, got %#v", blocks)
+	}
+	if blocks[0].Path != "manual_scratch/day15_contains_duplicate/contains_duplicate.go" {
+		t.Fatalf("unexpected first path: %#v", blocks[0])
+	}
+	if blocks[1].Path != "manual_scratch/day15_contains_duplicate/contains_duplicate_test.go" {
+		t.Fatalf("unexpected second path: %#v", blocks[1])
+	}
+}
+
+func TestSafeWorkspacePathRejectsTraversal(t *testing.T) {
+	cwd := t.TempDir()
+	if _, err := safeWorkspacePath(cwd, "../outside.go"); err == nil || app.AsError(err).Code != "unsafe_artifact_path" {
+		t.Fatalf("want unsafe_artifact_path, got %v", err)
+	}
+}
+
+func TestMaterializeExecutionDeliverableWritesFiles(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	task := app.TaskState{
+		ID:        "task_1",
+		Objective: "Implement ContainsDuplicate in manual_scratch/day15_contains_duplicate.",
+	}
+	answer := `{"stage":"execution","summary":"prepared","deliverable":"### contains_duplicate.go\n` + "```go" + `\npackage day15_contains_duplicate\n` + "```" + `","current_step":"implement","completed_steps":[],"next_step":"tests","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+	written, err := materializeExecutionDeliverable(&process.ExchangeResult{Answer: answer}, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 1 || written[0] != "manual_scratch/day15_contains_duplicate/contains_duplicate.go" {
+		t.Fatalf("unexpected written paths: %#v", written)
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, written[0]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "package day15_contains_duplicate\n" {
+		t.Fatalf("unexpected file content: %q", string(data))
+	}
+}
+
+func TestMaterializeExecutionDeliverableHandlesCombinedExecutionAnswers(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	task := app.TaskState{ID: "task_1", Objective: "Implement in manual_scratch/day15_contains_duplicate."}
+	first := `{"stage":"execution","summary":"one","deliverable":"### contains_duplicate.go\n` + "```go" + `\npackage containsduplicate\n` + "```" + `","current_step":"one","completed_steps":[],"next_step":"two","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+	second := `{"stage":"execution","summary":"two","deliverable":"### contains_duplicate_test.go\n` + "```go" + `\npackage containsduplicate\n` + "```" + `","current_step":"two","completed_steps":[],"next_step":"verify","changed_artifacts":[],"verification":["not run"],"blockers":["Need tests"],"next_signal":"continue_execution"}`
+
+	written, err := materializeExecutionDeliverable(&process.ExchangeResult{Answer: first + "\n\n" + second}, task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(written) != 2 {
+		t.Fatalf("want 2 materialized files, got %#v", written)
+	}
+}
+
+func TestMaterializeExecutionDeliverableNormalizesGoPackageInDirectory(t *testing.T) {
+	cwd := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+
+	task := app.TaskState{ID: "task_1", Objective: "Implement in manual_scratch/day15_contains_duplicate."}
+	first := `{"stage":"execution","summary":"one","deliverable":"### manual_scratch/day15_contains_duplicate/contains_duplicate.go\n` + "```go" + `\npackage containsduplicate\n\nfunc ContainsDuplicate(nums []int) bool { return false }\n` + "```" + `","current_step":"one","completed_steps":[],"next_step":"two","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+	second := `{"stage":"execution","summary":"two","deliverable":"### manual_scratch/day15_contains_duplicate/contains_duplicate_test.go\n` + "```go" + `\npackage day15_contains_duplicate\n\nfunc TestPackageNamePlaceholder() {}\n` + "```" + `","current_step":"two","completed_steps":[],"next_step":"verify","changed_artifacts":[],"verification":["not run"],"blockers":[],"next_signal":"continue_execution"}`
+
+	if _, err := materializeExecutionDeliverable(&process.ExchangeResult{Answer: first + "\n\n" + second}, task); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(cwd, "manual_scratch/day15_contains_duplicate/contains_duplicate_test.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "package containsduplicate") {
+		t.Fatalf("package was not normalized:\n%s", string(data))
 	}
 }
 
@@ -1311,7 +1496,7 @@ func TestSemanticValidationEnabledDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestInitDisclosesProviderBeforeModelLookup(t *testing.T) {
+func TestInitDoesNotRequireProviderLookup(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "")
 	t.Setenv("OPENROUTER_API_KEY", "")
 	cmd := newRootCommand(&globalOptions{})
@@ -1322,8 +1507,8 @@ func TestInitDisclosesProviderBeforeModelLookup(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("init failed: %v output=%s stderr=%s", err, out.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Provider disclosure:") {
-		t.Fatalf("provider disclosure missing during init: %q", stderr.String())
+	if strings.Contains(stderr.String(), "Provider disclosure:") {
+		t.Fatalf("init should not contact provider or print disclosure: %q", stderr.String())
 	}
 }
 

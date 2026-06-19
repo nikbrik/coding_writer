@@ -474,56 +474,65 @@ assistant task status
 
 ### Demo setup
 
+Live demo:
+
 ```bash
-export ASSISTANT_STORAGE_DIR="$CW_ROOT/.assistant/storage/video-day15-controlled-lifecycle"
-test "$ASSISTANT_STORAGE_DIR" = "$CW_ROOT/.assistant/storage/video-day15-controlled-lifecycle" && rm -rf "$ASSISTANT_STORAGE_DIR"
-mkdir -p "$ASSISTANT_STORAGE_DIR"
-assistant init --model "$ASSISTANT_MODEL"
+export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
+scripts/day15-demo.sh
 ```
 
-Для live demo оставить реальный provider:
+Если раньше запускался старый setup и в shell остался плохой путь `/.assistant/...`, достаточно выполнить:
 
 ```bash
-unset ASSISTANT_PROVIDER
-unset ASSISTANT_LLM_VALIDATION
+unset ASSISTANT_STORAGE_DIR
+scripts/day15-demo.sh
 ```
 
-Для deterministic smoke можно использовать:
+Для deterministic rehearsal без OpenRouter:
 
 ```bash
-export ASSISTANT_PROVIDER=fake
-export ASSISTANT_LLM_VALIDATION=1
-export ASSISTANT_MODEL="fake/model"
+scripts/day15-demo.sh --fake
 ```
 
 ### Demo flow
 
-Основной visible flow начинается с одного `assistant chat`; дальше пользователь печатает сообщения внутри REPL. Пользователь не вводит команду проверки: приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
+Основной visible flow запускается одной командой. Скрипт только готовит storage/model/binary и открывает обычный `assistant chat`; в интерфейсе нет текста про Day 15 demo. Пользователь вводит обычные сообщения, не exact command проверки и не state-machine команды. Приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
 
 ```bash
-assistant chat
+scripts/day15-demo.sh
 ```
 
 Текст, который пользователь вводит внутри chat:
 
 ```text
-Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии.
+Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии. Отвечай по-русски
+
 Да, план принят. Приступай к выполнению.
+
 Готово к проверке: проверь результат.
+
 Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate.
+
 /exit
+```
+
+Для автоматизированной regression-проверки того же user flow:
+
+```bash
+scripts/day15-demo.sh --auto
 ```
 
 После visible flow можно показать state/audit как assertions, а не как основные пользовательские шаги:
 
 ```bash
-assistant task status --json
-assistant process audit --latest --json
+.assistant/bin/assistant task status --json
+.assistant/bin/assistant process audit --latest --json
 ```
 
 ### Acceptance proof на видео
 
 - первый chat request создает task в `planning`;
+- после planning видна секция `Planning swarm` с verdict/contribution по specialist roles, количеством findings/proposals и top finding/proposed change при наличии; это должен быть review планирования, а не пересказ исходной задачи;
 - human output после planning показывает pending plan/criteria, а не `execution`;
 - approval фразой переводит `planning -> execution`;
 - приложение само получает exact verification command через `VerificationResolver`, запускает allowlisted trusted verification и переводит `execution -> validation` без команды от пользователя;
@@ -549,7 +558,7 @@ DAY15_MANUAL_PASS ... events=...
 Дополнительно можно показать audit:
 
 ```bash
-assistant process audit --latest --json
+.assistant/bin/assistant process audit --latest --json
 ```
 
 Audit должен содержать события `prompt_improvement_call`, `planning_swarm_final`, `planning_approval_accepted`, `transitioned`, а также роли `requirements_specialist`, `code_research_specialist`, `architecture_specialist`, `test_validation_specialist`, `risk_regression_specialist`, `planning_orchestrator`, `executor`, `reviewer`.

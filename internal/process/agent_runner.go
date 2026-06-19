@@ -13,16 +13,16 @@ import (
 type AgentRole string
 
 const (
-	AgentRolePromptImprover            AgentRole = "prompt_improver"
-	AgentRolePlanOrchestrator          AgentRole = "planning_orchestrator"
-	AgentRoleRequirementsSpecialist    AgentRole = "requirements_specialist"
-	AgentRoleCodeResearchSpecialist    AgentRole = "code_research_specialist"
-	AgentRoleArchitectureSpecialist    AgentRole = "architecture_specialist"
-	AgentRoleTestValidationSpecialist  AgentRole = "test_validation_specialist"
-	AgentRoleRiskRegressionSpecialist  AgentRole = "risk_regression_specialist"
-	AgentRoleExecutor                  AgentRole = "executor"
-	AgentRoleReviewer                  AgentRole = "reviewer"
-	AgentRoleFinalizer                 AgentRole = "finalizer"
+	AgentRolePromptImprover           AgentRole = "prompt_improver"
+	AgentRolePlanOrchestrator         AgentRole = "planning_orchestrator"
+	AgentRoleRequirementsSpecialist   AgentRole = "requirements_specialist"
+	AgentRoleCodeResearchSpecialist   AgentRole = "code_research_specialist"
+	AgentRoleArchitectureSpecialist   AgentRole = "architecture_specialist"
+	AgentRoleTestValidationSpecialist AgentRole = "test_validation_specialist"
+	AgentRoleRiskRegressionSpecialist AgentRole = "risk_regression_specialist"
+	AgentRoleExecutor                 AgentRole = "executor"
+	AgentRoleReviewer                 AgentRole = "reviewer"
+	AgentRoleFinalizer                AgentRole = "finalizer"
 )
 
 type Microtask struct {
@@ -100,10 +100,15 @@ func microtaskTaskSummary(task *app.TaskState) map[string]any {
 	return map[string]any{
 		"id":                  task.ID,
 		"stage":               task.Stage,
+		"objective":           task.Objective,
 		"current_step":        task.CurrentStep,
 		"approved_plan_id":    task.ApprovedPlanID,
 		"acceptance_criteria": task.AcceptanceCriteria,
+		"plan":                task.Plan,
+		"microtasks":          task.Microtasks,
 		"completed_steps":     task.CompletedSteps,
+		"validation_status":   task.ValidationStatus,
+		"validation_evidence": task.ValidationEvidence,
 	}
 }
 

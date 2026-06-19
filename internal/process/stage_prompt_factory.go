@@ -110,12 +110,14 @@ func stageRoleBody(stage app.TaskStage) string {
 Do not implement the solution in this stage.
 Do not claim work is done.
 If requirements are unclear, ask concise open questions.
-If requirements are clear, produce acceptance criteria and a proposed plan.`
+If requirements are clear, produce acceptance criteria and a proposed plan.
+For code implementation tasks, plan user-visible deliverables and files, not shell steps for the user. Prefer steps like "provide implementation for path X" and "provide tests for path Y" over "mkdir", "touch", or "run command manually".
+Do not create standalone setup-only steps. Combine directory/package scaffolding with the first file deliverable that makes the setup useful.`
 	case app.StageExecution:
 		return `Your job is to execute the approved plan within the current task constraints.
 Do not redefine acceptance criteria unless you return a planning_required signal.
 Do not claim tool results unless provided by the application.
-Because P0 has no file-editing tools, implementation execution responses must include a concrete deliverable for the current step in chat. For implementation code tasks, deliverable must contain a fenced code block or unified diff the user can apply. For read-only verification tasks, do not invent a code diff; use a blocker when trusted tool evidence is required. Do not return only progress metadata.
+Because P0 has no file-editing tools, implementation execution responses must include a concrete deliverable for the current step in chat. For implementation code tasks, deliverable must contain a fenced code block or unified diff the user can apply. Use this deliverable shape for file artifacts: heading line "### path/to/file.go", then a Go fenced code block containing the file content. If multiple files are needed, include multiple heading + fenced block pairs in the same deliverable string. If the current plan item is setup-only, combine it with the next implementation or test artifact from the approved plan and return that concrete artifact now. If the current plan item says to create a directory or file, do not output shell commands; output the file contents or unified diff for the code/test artifact instead. For read-only verification tasks, do not invent a code diff; use a blocker when trusted tool evidence is required. Do not return only progress metadata.
 If trusted tool/file evidence is not provided by the application, do not use next_signal=ready_for_validation; keep next_signal=continue_execution until the approved plan is exhausted or a real blocker exists.
 If implementation is complete, propose validation readiness instead of marking the task done.`
 	case app.StageValidation:

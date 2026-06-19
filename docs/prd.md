@@ -76,8 +76,8 @@ P0 считается первым рабочим срезом Claude Code / Cod
 - если ключа нет, объясняет, как задать `OPENROUTER_API_KEY` через environment; hidden input не входит в P0;
 - ключ не сохраняется в репозиторий;
 - ассистент до первого provider call показывает, какие категории данных будут отправляться в OpenRouter;
-- `assistant init` требует active model (`--model` или `ASSISTANT_MODEL`) и валидирует model id через provider;
-- в live mode для model validation нужен `OPENROUTER_API_KEY`, в tests/demo можно включить fake provider через `ASSISTANT_PROVIDER=fake` или `ASSISTANT_FAKE_PROVIDER=1`;
+- `assistant init` требует active model (`--model` или `ASSISTANT_MODEL`) и локально валидирует только syntax model id, без provider lookup и без сетевого вызова;
+- provider/model lookup выполняется перед реальными provider actions, например `chat`, `/model`, memory propose; в live mode для этого нужен `OPENROUTER_API_KEY`, в tests/demo можно включить fake provider через `ASSISTANT_PROVIDER=fake` или `ASSISTANT_FAKE_PROVIDER=1`;
 - `assistant init` создаёт default profiles `student` и `senior`; интерактивное интервью профиля не реализовано в текущем коде, profile CRUD доступен через commands.
 
 ### 4.2. Обычный диалог
@@ -149,7 +149,7 @@ id: proposal_...
 
 - приложение распознаёт task-scoped intent и создаёт или продолжает active task без `/task start`;
 - prompt improver сохраняет исходную цель и формирует улучшенный рабочий prompt перед stage-specific call;
-- planning swarm из независимых specialist agents предлагает, критикует и merge-ит план с acceptance criteria;
+- planning swarm запускает role-specific specialist reviews, собирает findings/proposed changes и merge-ит финальный план с acceptance criteria;
 - пользователь подтверждает план обычной фразой в chat, например `одобряю, приступай`;
 - приложение валидирует approval, переводит `planning -> execution` и запускает role-scoped execution/review agents;
 - когда пользователь пишет `проверь`, `проверь и заверши` или аналогичную фразу, приложение запускает `VerificationResolver`: сначала ищет exact safe command в approved plan/criteria, а если её нет - вызывает structured verification planner/referee, который возвращает strict JSON с exact argv command;
@@ -208,7 +208,7 @@ PRD, FRD и architecture должны ссылаться на один canonical
 ### Day 15 lifecycle acceptance remains mandatory
 
 - основной Day 15 flow идёт через один `assistant chat` session, где пользователь пишет обычные сообщения внутри REPL; набор отдельных `assistant chat --once --input ...` команд не является primary demo;
-- planning stage должен собрать план и acceptance criteria через planning swarm, где audit показывает specialist proposals и финальный merged plan;
+- planning stage должен собрать план и acceptance criteria через planning swarm, где audit/human output показывают role-specific specialist reviews, findings/proposed changes и финальный merged plan;
 - переход `planning -> execution` требует пользовательского approval и отдельной application validation записи;
 - execution и review должны выполняться role-scoped microtask agents, а не неразличимым provider call;
 - trusted verification evidence для acceptance path должно быть выдано приложением автоматически после approval утвержденного плана или semantic intent signal из strict JSON referee: `VerificationResolver` берёт exact command из approved plan/criteria или вызывает structured verification planner/referee для exact argv command, затем локально проверяет allowlist/safety, запускает command и сохраняет evidence record для lifecycle gate;
@@ -422,7 +422,7 @@ Pause/resume contract:
 - попросить `проверь и заверши` без `--verify` и без команды `go test ...`;
 - убедиться, что приложение само получило exact command через `VerificationResolver`, выполнило только allowlisted verification и сохранило trusted evidence;
 - убедиться, что `validation -> done` произошёл только после accepted validation и app-issued trusted evidence;
-- проверить audit: prompt improvement, specialist proposals, approval validation, microtask agents, trusted evidence, lifecycle gate decision.
+- проверить audit: prompt improvement, specialist reviews, approval validation, microtask agents, trusted evidence, lifecycle gate decision.
 
 ## 11. Memory layers
 
@@ -660,6 +660,7 @@ Default human output:
 - `assistant chat` and `assistant chat --once --input <text>` print a structured transcript, not raw JSON;
 - output is grouped into visible sections: `Assistant`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal`, `Next`;
 - internal stage schemas are rendered into human text: planning summary/criteria/plan, execution summary/deliverable/next step, validation findings/checks/verdict, done summary/status;
+- planning output includes a visible `Planning swarm` review with each specialist role, concrete verdict/contribution, finding count, top finding and proposed plan/criteria changes when present; it must not degrade into specialists merely restating the user task, and the user must not inspect audit JSON to understand what agents discussed;
 - task state is compact: `stage`, `expected_action`, `current_step`, `status`, validation status and microtask count;
 - trusted verification is shown as a short evidence summary, for example `auto verification: go test ./pkg` and evidence ref count, not full evidence records;
 - memory proposal output lists proposed records in a compact table-like format and gives the next confirmation command after the records;
@@ -669,6 +670,7 @@ Default human output:
 Color and terminal behavior:
 
 - when stdout is an interactive terminal and `NO_COLOR`/`ASSISTANT_NO_COLOR` are not set, headings and labels use ANSI highlighting; state/evidence/warnings remain grouped in readable sections;
+- fenced code blocks use syntax-aware terminal highlighting for supported languages, including Go, in interactive color mode;
 - non-TTY output, redirected files and tests must not contain ANSI codes;
 - `--quiet` suppresses nonessential diagnostics but does not remove the main answer;
 - `--json` remains stable machine-readable output for tests/scripts and may include raw answer schema.
@@ -905,7 +907,7 @@ Day 14:
 Day 15:
 
 - prompt improver for task goals;
-- planning swarm with 5 specialist agents and merged plan;
+- planning swarm with 5 role-specific specialist reviews and merged plan;
 - user approval validation before execution;
 - role-scoped execution/review microtask agents;
 - automatic trusted verification via language-agnostic `VerificationResolver` after approved-plan execution starts or semantic `ready_for_validation`/`ready_for_done` intent signal;

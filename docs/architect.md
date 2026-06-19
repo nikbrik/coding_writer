@@ -40,7 +40,7 @@ Architecture, PRD и FRD must share one canonical contract for Day 11, Day 12, D
 - Deterministic process control must not bypass Day 11 memory proposal confirmation or Day 12 profile attachment.
 - Lifecycle gate owns Day 15 stage admission: planning approval, accepted execution, trusted evidence, accepted validation and terminal done.
 - Prompt improver may strengthen task prompts before provider calls, but must preserve the user objective and trusted stage policy.
-- Planning swarm creates specialist proposals plus one merged final plan before execution approval.
+- Planning swarm creates role-specific specialist reviews plus one merged final plan before execution approval. Specialist summaries must report concrete verdict/contribution, findings and proposed plan/criteria changes, not merely restate the user task.
 - Microtask agents provide role-scoped execution/review calls with audit roles, not untracked generic provider calls.
 - Trusted evidence store records app-issued verification evidence; provider-visible evidence is bounded and hash-backed.
 
@@ -1283,14 +1283,14 @@ Current user message
 
 ```text
 assistant init
-  -> no profiles found
-  -> ask profile id
-  -> ask language/style/detail
-  -> ask preferred answer format
-  -> ask constraints
-  -> save profiles/<id>.json
-  -> set active_profile_id in config.json
+  -> require --model or ASSISTANT_MODEL
+  -> validate model id syntax locally, no provider lookup
+  -> create config.json
+  -> create default profiles student/senior
+  -> set active_profile_id=student unless configured otherwise
 ```
+
+Interactive profile interview is not part of current P0. Profile customization is done through profile commands/files; default profiles keep first run scriptable.
 
 ### 9.2. Использование профиля
 
