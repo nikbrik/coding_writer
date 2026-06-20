@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "",
+  "task_name": "",
+  "session_id": "",
+  "state_directory": "",
+  "current_stage": "codebase_audit",
+  "contract_status": "not_created",
+  "unresolved_ambiguities": [],
+  "locked_decisions": [],
+  "deferred_items": [],
+  "active_plan_item": "",
+  "plan_items": [],
+  "touched_paths": [],
+  "forbidden_paths": [],
+  "protocol_owned_paths": [
+    ".agents/state/scope-lock/<session-id>/**"
+  ],
+  "irreversible_approvals": [],
+  "trusted_provenance_required": true,
+  "validation_status": "not_started",
+  "last_updated": ""
+}
