@@ -1,916 +1,497 @@
-# PRD: консольный помощник для работы с кодом в классе Claude Code / Codex CLI
+# PRD: TUI-first видение продукта
 
 ## 1. Контекст
 
-Проект недели: перейти от обычного режима "запрос-ответ" к минимальному помощнику с сохранённым состоянием. Конечная цель продукта шире: сделать консольный помощник для работы с кодом в том же классе продуктов, что Claude Code и Codex CLI.
+`coding_writer` развивается в terminal-first AI coding assistant для реальной работы в локальном репозитории.
 
-Это не обычный чат-бот, не демонстрация памяти и не набор отладочных команд вокруг LLM. Пользовательская модель должна быть такой: разработчик открывает репозиторий, запускает ассистента в терминале, формулирует задачу обычным языком, а ассистент автономно планирует работу, понимает состояние репозитория, предлагает и применяет изменения через контролируемый слой безопасности, запускает проверки, объясняет результат и ведёт задачу до завершения через понятный чат.
+Этот документ описывает будущее развитие продукта, а не текущее состояние реализации. Существующий контур управления считается фундаментом: chat loop, профили, память, task lifecycle, stage-aware prompts, invariants, audit, safe artifact materialization и trusted verification уже задают правильную архитектурную дисциплину. Следующий продуктовый шаг — сделать этот фундамент видимым и удобным через TUI.
 
-Текущий P0/MVP — это слой управления такого помощника: состояние, память, профиль, запросы с учётом этапа, проверки, журнал и проверка команд со стороны приложения. P0 уже умеет применять файлы из структурированного результата `execution`: только внутри рабочего репозитория, только через безопасные пути, только перед доверенной проверкой. P1 обязан расширить это до полноценной работы с репозиторием: читать файлы, показывать diff, подтверждать опасные изменения, запускать команды и восстанавливаться после ошибок, сохраняя всё взаимодействие внутри `assistant chat`.
+Главный сдвиг: `assistant chat` должен восприниматься не как строчный REPL и не как debug-консоль, а как полноценная рабочая среда в терминале. Пользователь видит задачу, план, diff, подтверждения, запущенные инструменты, доказательства проверки, предупреждения, предложения памяти и финальную сводку в одном управляемом интерфейсе.
 
-`day11.md`, `day12.md`, `day13.md`, `day14.md` и `day15.md` считаются жёсткими критериями приёмки. Лекция `03-memory-state-notes.md` задаёт архитектурные принципы: слои памяти, персонализация, конечный автомат задачи, инварианты, сборка запроса к модели, контролируемые переходы и сохранение состояния.
+## 2. Целевой образ продукта
 
-Текущее состояние кода на 2026-06-19:
+`coding_writer` — локальный TUI-first coding agent, который работает в репозитории через безопасный сценарий под управлением приложения: помогает понять задачу, ведёт план, показывает изменения, запускает проверки по разрешению, сохраняет evidence и доводит пользователя до проверенного результата.
 
-- Go module уже реализован: `go.mod`, entrypoint `cmd/assistant/main.go`, packages `internal/app`, `internal/cli`, `internal/providers`, `internal/memory`, `internal/profiles`, `internal/tasks`, `internal/prompting`, `internal/process`, `internal/storage`, `internal/validation`.
-- CLI построен на Cobra и поддерживает interactive REPL, `chat --once`, JSON output, rendered-prompt inspection, fake provider для deterministic tests и OpenRouter provider для live mode.
-- Day 11/12/13/14 покрыты приёмочными тестами: `tests/day_acceptance_test.go` и тестами управления процессом в `tests/process_acceptance_test.go`; Day 15 имеет live-сценарий в `docs/manual-testing-demo.md`, а `scripts/day15-demo.sh --fake --auto` остаётся стабильной проверкой регрессий.
-- Рабочий цикл уже реализован через `ProcessController`, `StagePolicyRegistry`, `StagePromptFactory`, проверки, ограниченный повтор, `TransitionGate`, `LifecycleGate`, уточнение запроса, обсуждение плана ролями, микрозадачи, хранилище доказательств проверки, смысловую проверку правил и `process_audit.jsonl`.
-
-## 2. Цель продукта
-
-Сделать CLI coding agent, который по пользовательскому ожиданию похож на Claude Code / Codex CLI по классу продукта: terminal chat + repo-aware autonomous work loop + controlled tools + explicit verification.
-
-Продукт должен:
-
-- принимает запросы пользователя в терминале;
-- использует OpenRouter API для вызова LLM;
-- даёт выбрать модель при запуске или через команду интерфейса;
-- работает как ассистент разработчика внутри репозитория, а не как отдельная утилита для абстрактных ответов;
-- держит user-facing happy path в `assistant chat`: пользователь ставит задачу, утверждает план, просит проверить/завершить; приложение само управляет state и verification;
-- применяет файлы из структурированного результата текущей задачи через безопасный слой путей и показывает их в секции `Files`;
-- в целевом продукте умеет читать файлы, показывать diff, подтверждать рискованные изменения, запускать команды и тесты через безопасный слой разрешений;
-- хранит память в отдельных слоях;
-- явно решает, какие данные куда сохранять, через отдельный LLM memory-classification step;
-- подключает профиль пользователя к каждому запросу;
-- демонстрирует разные ответы для разных профилей;
-- ведёт текущую задачу как конечный автомат: этап, текущий шаг, ожидаемое действие;
-- перед каждым task-scoped LLM call сообщает модели текущий `stage`, `current_step`, `expected_action`, разрешённое действие и роль этапа, чтобы code assistant не работал вслепую;
-- хранит active invariants отдельно от диалога, показывает их в prompt и блокирует conflict input/output до persistence;
-- автономно ведёт task lifecycle через application gates: планирование, approval, execution, validation и done без ручного управления внутренними state-командами;
-- использует обсуждение плана ролями, уточнение запроса, микрозадачи и доверенные доказательства проверки как контролируемые части процесса;
-- не требует от пользователя точных verification-команд в chat: пользователь выражает намерение, а приложение выводит безопасную allowlisted проверку из утверждённого плана и acceptance criteria.
-
-## 3. MVP
-
-MVP должен быть небольшим, но архитектурно правильным. Главная ценность P0 — не в количестве инструментов, а в фундаменте для помощника по коду: явное состояние, память, профиль, этапы работы, смысловая проверка, журнал и проверка команд со стороны приложения. Эти компоненты нужны, чтобы следующий слой чтения файлов, diff и shell-команд не превратился в небезопасную оболочку вокруг LLM.
-
-P0 считается первым рабочим срезом продукта класса Claude Code / Codex CLI, а не финальным продуктом. Поэтому любые решения по интерфейсу и архитектуре должны проверяться вопросом: помогает ли это разработчику решать задачи в репозитории через автономную работу в чате, или уводит продукт в сторону ручной отладочной утилиты?
-
-Минимальный сценарий:
-
-1. Пользователь запускает CLI.
-2. CLI проверяет OpenRouter API key.
-3. CLI предлагает выбрать или ввести модель.
-4. CLI предлагает выбрать профиль пользователя или создать новый.
-5. Пользователь задаёт вопрос по коду или архитектуре.
-6. Prompt builder собирает prompt из системных правил, process policy, stage-specific роли, профиля, рабочей памяти, краткосрочной истории и релевантной долговременной памяти.
-7. LLM отвечает внутри текущего stage contract.
-8. После принятого ответа ассистент запускает отдельный memory-classification prompt через OpenRouter.
-9. LLM выделяет факты из диалога и предлагает слой памяти для каждого факта: `short`, `work`, `long` или `ignore`.
-10. CLI показывает пользователю классификацию памяти.
-11. Пользователь подтверждает сохранение или правит выбранные слои.
-12. Приложение сохраняет факты в физически разные хранилища.
-13. При следующем запросе ассистент использует выбранные слои памяти.
-14. Если пользователь или provider output нарушает active invariant, приложение отказывает с `invariant_conflict`, invariant ID и evidence.
-15. Для работы над задачей пользователь формулирует цель в чате, подтверждает план и просит проверить или завершить обычной фразой; приложение само создаёт задачу, применяет файлы из структурированного результата, получает точную команду проверки через `VerificationResolver`, запускает только разрешённую проверку, применяет переходы этапов и доводит задачу до `done` только после принятой проверки.
-
-## 4. Пользовательские сценарии
-
-### 4.1. Первый запуск
-
-Пользователь запускает ассистента без конфигурации.
-
-Ожидаемое поведение:
-
-- ассистент проверяет `OPENROUTER_API_KEY`;
-- если ключа нет, объясняет, как задать `OPENROUTER_API_KEY` через environment; hidden input не входит в P0;
-- ключ не сохраняется в репозиторий;
-- ассистент до первого provider call показывает, какие категории данных будут отправляться в OpenRouter;
-- `assistant init` требует active model (`--model` или `ASSISTANT_MODEL`) и локально валидирует только syntax model id, без provider lookup и без сетевого вызова;
-- provider/model lookup выполняется перед реальными provider actions, например `chat`, `/model`, memory propose; в live mode для этого нужен `OPENROUTER_API_KEY`, в tests/demo можно включить fake provider через `ASSISTANT_PROVIDER=fake` или `ASSISTANT_FAKE_PROVIDER=1`;
-- `assistant init` создаёт default profiles `student` и `senior`; интерактивное интервью профиля не реализовано в текущем коде, profile CRUD доступен через commands.
-
-### 4.2. Обычный диалог
-
-Пользователь пишет запрос: например, `Спланируй модуль авторизации`.
-
-Ожидаемое поведение:
-
-- ассистент учитывает активный профиль;
-- ассистент учитывает текущую рабочую задачу, если она есть;
-- ассистент использует краткосрочный контекст текущего диалога;
-- ассистент не записывает всё подряд в долговременную память;
-- ассистент предлагает сохранить важные факты явно.
-
-### 4.3. Явная классификация и сохранение памяти
-
-Ассистент после ответа предлагает memory diff:
+Ключевое обещание:
 
 ```text
-== Memory proposal ==
-id: proposal_...
-- pmem_... [work] pending requirement: CLI должен поддерживать выбор модели OpenRouter.
-- pmem_... [long] pending preference: Пользователь предпочитает короткие ответы на русском.
-- pmem_... [short] pending context: В этом диалоге обсуждаем memory layers.
-- pmem_... [ignore] pending smalltalk: Пользователь сказал "спасибо".
-
-== Next ==
-- Review memory proposal; apply it only if these records should be saved.
-- CLI: assistant memory apply --proposal proposal_... --accept all
+Открой репозиторий, запусти assistant chat, работай с задачей в TUI.
+Все действия видны, подтверждаемы и воспроизводимы.
 ```
 
-Ожидаемое поведение:
+Продукт не должен развиваться как набор отдельных CLI-команд вокруг LLM. Команды, JSON-режимы, scripts и recovery helpers остаются полезными, но пользовательский happy path должен жить в интерактивном TUI.
 
-- `short` попадает в память текущей сессии;
-- `work` попадает в память текущей задачи;
-- `long` попадает в долговременный профиль, решения или знания;
-- `ignore` не сохраняется;
-- каждый слой хранится отдельно;
-- пользователь может посмотреть содержимое каждого слоя.
+## 3. Приоритеты развития
 
-Ручные команды тоже остаются доступны:
+### P0: TUI-first пользовательский опыт
 
-```text
-/save work Требование: CLI должен поддерживать выбор модели OpenRouter.
-/save long Предпочитаю короткие ответы на русском.
-/save short В этом диалоге обсуждаем только memory layers.
-```
+TUI — главный ближайший приоритет и основной критерий развития продукта.
 
-Но основной flow Day 11 должен проверять именно LLM-классификацию: модель через OpenRouter выбирает, какие факты в какой слой попадают.
+Цель P0: сделать `assistant chat` рабочей терминальной средой, где пользователь может вести coding task без чтения raw JSON, ручного управления FSM и переключения между несвязанными командами.
 
-### 4.4. Разные профили
+TUI должен включать:
 
-Пользователь создаёт два профиля:
+- постоянное поле ввода;
+- историю диалога и ленту событий задачи;
+- компактную панель текущего состояния: `stage`, `current_step`, `expected_action`, `status`;
+- видимые план и acceptance criteria;
+- встроенные подтверждения для плана, patch, verification command и других рискованных действий;
+- diff viewer для proposed/applied changes;
+- сворачиваемый вывод инструментов и ограниченные логи команд;
+- панель evidence: command, exit code, summary, evidence id;
+- warnings/errors с code, message и hint;
+- просмотр предложений памяти;
+- session resume;
+- обычный REPL как запасной режим для простых терминалов и автоматизации.
 
-- `student`: подробные объяснения, учебный тон, больше примеров;
-- `senior`: короткие ответы, инженерные trade-off, минимум объяснений.
+TUI не должен быть декоративной оболочкой. Он должен управлять продуктовым сценарием: показывать, что агент собирается сделать, что уже сделал, какие решения требуют подтверждения и почему задача ещё не завершена.
 
-Ожидаемое поведение:
+### P1+: всё остальное по требованию
 
-- один и тот же запрос даёт разные ответы;
-- различие возникает из-за подключённого профиля, а не ручного переписывания запроса;
-- ассистент автоматически учитывает стиль, формат и ограничения профиля.
+Все остальные направления добавляются по требованию: только когда конкретный пользовательский сценарий требует их для TUI-first рабочего процесса.
 
-### 4.5. Контролируемая coding task в chat
+Направления по требованию:
 
-Пользователь пишет обычным языком: `Нужно реализовать задачу X, проверь по критериям проекта`.
+- AgentRun ledger;
+- read/search tools;
+- PatchSet storage and preview/apply;
+- failed verification observation;
+- sandboxed command runner;
+- iterative repair loop;
+- git workflow;
+- context planner;
+- skills runtime;
+- multi-agent tool ownership;
+- CI/GitHub integration;
+- team memory and policy;
+- evaluation harness.
 
-Ожидаемое поведение:
+Важно: пункты из `PRODUCT-VISION-PLAN.md`, которые раньше выглядели как P0.5, не являются ближайшим обязательным срезом. AgentRun ledger, read/search tools, PatchSet и verification observation должны появляться позже, когда TUI-сценарий потребует их как часть понятного пользовательского опыта.
 
-- приложение распознаёт task-scoped intent и создаёт или продолжает active task без `/task start`;
-- prompt improver сохраняет исходную цель и формирует улучшенный рабочий prompt перед stage-specific call;
-- planning swarm запускает role-specific specialist reviews, собирает findings/proposed changes и merge-ит финальный план с acceptance criteria;
-- пользователь подтверждает план обычной фразой в chat, например `одобряю, приступай`;
-- приложение валидирует approval, переводит `planning -> execution` и запускает role-scoped execution/review agents;
-- когда пользователь пишет `проверь`, `проверь и заверши` или аналогичную фразу, приложение запускает `VerificationResolver`: сначала ищет exact safe command в approved plan/criteria, а если её нет - вызывает structured verification planner/referee, который возвращает strict JSON с exact argv command;
-- verification result сохраняется как trusted evidence: command digest, source, exit code, bounded summary и audit record;
-- `validation -> done` разрешён только application gate после accepted validation output и criteria-matched trusted evidence.
+## 4. Целевая пользовательская модель
 
-Жёсткие UX-ограничения:
+Основной сценарий:
 
-- пользователь не обязан вводить `/task move`, `/task step`, `/task expect`, править JSON/storage или управлять FSM руками;
-- пользователь не обязан знать или вводить точную команду `go test ...`, `npm test ...` или `--verify`;
-- если exact command отсутствует и structured verification planner не может вернуть безопасную allowlisted команду, ассистент уточняет acceptance criterion в chat или блокирует `done`, но не перекладывает управление state machine на пользователя;
-- `--verify` допустим только как debug/recovery override и не закрывает primary Day 15 demo.
+1. Разработчик открывает репозиторий.
+2. Запускает `assistant chat`.
+3. Видит TUI с текущей сессией, активным профилем, моделью и состоянием задачи.
+4. Формулирует цель обычным языком.
+5. Ассистент уточняет задачу, предлагает план и acceptance criteria.
+6. Пользователь подтверждает, отклоняет или просит изменить план прямо в TUI.
+7. Ассистент предлагает следующие действия, показывает diff или запрашивает разрешение на tool/verification step, если такой слой включён.
+8. Пользователь видит прогресс, evidence, предупреждения и финальную сводку в TUI.
+9. Завершение возможно только после validation под управлением приложения, trusted evidence и self-review.
 
-## 5. Canonical contract
+Пользователь не обязан:
 
-PRD, FRD и architecture должны ссылаться на один canonical contract для Day 11, Day 12, Day 13, Day 14 и Day 15.
+- читать raw JSON;
+- вручную дёргать `/task move`, `/task step`, `/task expect`;
+- редактировать storage;
+- знать точную verification command;
+- переключаться в отдельные debug-команды, чтобы понять состояние работы.
 
-### Task state
+## 5. Фундамент из текущего PRD
 
-- `stage`: `planning`, `execution`, `validation`, `done`.
-- `status`: `active`, `paused`.
-- `expected_action`: `user_input`, `llm_response`, `user_confirmation`, `none`.
-- `tool_result` не входит в P0, потому что MVP не выполняет tools; его можно вернуть только в P1 вместе с явным tool flow.
-- terminal completion фиксируется через `stage=done` и `expected_action=none`; `status=done` не используется в MVP.
+Текущее сильное ядро остаётся фундаментом для будущего TUI-first продукта.
 
-### Commands
+### Контур управления под управлением приложения
 
-- Top-level commands и slash commands должны описывать один и тот же canonical command tree.
-- Для P0 обязательны только команды, нужные для Day 11/12/13/14/15 demo path и deterministic smoke tests.
-- Canonical command matrix должен указывать P0/P1 статус, JSON/stdout/stderr поведение, LLM-call behavior и non-interactive эквиваленты для smoke tests.
+Приложение, а не модель, владеет:
 
-### Memory layers
+- task state;
+- transitions;
+- memory writes;
+- invariant checks;
+- provider/tool permissions;
+- verification gates;
+- persistence;
+- audit.
 
-- `short`, `work`, `long` are the only physical storage layers.
-- `ignore` exists only in the proposal/audit layer.
+LLM может предлагать план, изменения, выводы и next signals, но не мутирует authoritative state напрямую.
 
-### Process-control prompt contract
+### Слои памяти
 
-- Приложение, а не LLM, владеет `TaskState`, transitions, memory writes, provider/tool permissions and validation.
-- LLM обязана получать stage awareness в каждом task-scoped prompt: `stage`, `current_step`, `expected_action`, `status`, allowed next stages and selected `ActionKind`.
-- Base system prompt остаётся стабильным, но поверх него добавляется trusted stage-specific system prompt.
-- `planning` даёт LLM роль planner/requirements analyst и запрещает implementation.
-- `execution` даёт LLM роль implementer и запрещает менять acceptance criteria без возврата в planning.
-- `validation` даёт LLM роль strict reviewer/QA validator и запрещает fixes/new features внутри review step.
-- `done` даёт LLM роль terminal summarizer и запрещает task mutation.
-- LLM может предлагать `next_signal`, findings или transition proposal, но применяет transition только application `TransitionGate`.
-- Stage policy and process policy outrank profile, task state JSON, memory, short history, prompt audit data and user text when conflicts occur.
+Физические слои памяти сохраняются:
 
-### UX hard gate: no internals as required workflow
+- `short`: текущий диалог;
+- `work`: текущая задача;
+- `long`: профиль, решения, знания;
+- `ignore`: только proposal/audit слой, без физического durable storage.
 
-- Пользовательский happy path должен быть intent-driven: пользователь формулирует цель, а приложение само создаёт task, выбирает action, ведёт stage machine, обновляет current step и применяет валидные transitions.
-- Нельзя принимать сценарий, где пользователь обязан вручную дергать внутренности: `/task start`, `/task move`, `/task step`, `/task expect`, правки storage/JSON/files, прямые записи в memory/task state.
-- Такие команды могут оставаться только для inspect/recovery/debug/test, но не как обязательный путь выполнения Day acceptance.
-- Acceptance demo must prove agent-driven behavior, not operator-driven FSM manipulation.
+Memory writes должны оставаться явными: LLM memory-classification step предлагает записи, приложение проверяет safety, пользователь подтверждает.
 
-### Day 15 lifecycle acceptance remains mandatory
+### Профили
 
-- основной Day 15 flow идёт через один `assistant chat` session, где пользователь пишет обычные сообщения внутри REPL; набор отдельных `assistant chat --once --input ...` команд не является primary demo;
-- planning stage должен собрать план и acceptance criteria через planning swarm, где audit/human output показывают role-specific specialist reviews, findings/proposed changes и финальный merged plan;
-- переход `planning -> execution` требует пользовательского approval и отдельной application validation записи;
-- execution и review должны выполняться role-scoped microtask agents, а не неразличимым provider call;
-- trusted verification evidence для acceptance path должно быть выдано приложением автоматически после approval утвержденного плана или semantic intent signal из strict JSON referee: `VerificationResolver` берёт exact command из approved plan/criteria или вызывает structured verification planner/referee для exact argv command, затем локально проверяет allowlist/safety, запускает command и сохраняет evidence record для lifecycle gate;
-- пользовательский Day 15 demo не должен требовать `--verify` или точной test command в chat; explicit override допустим только для debug/recovery/regression;
-- `done` разрешён только после принятого validation output и criteria-matched app-issued trusted evidence;
-- prompt improvement допустим только как сохранение исходной цели и усиление prompt перед stage-specific call.
+Профиль остаётся обязательным блоком prompt context. Разные профили должны менять стиль, формат и ограничения ответа без ручного копирования пользователем.
 
-### Day 11 acceptance remains mandatory
+### Task lifecycle
 
-- минимум три типа памяти;
-- раздельное хранение;
-- LLM memory-classification step;
-- подтверждение пользователя;
-- inspect commands `/memory short|work|long`;
-- следующий ответ учитывает сохранённые данные.
-
-### Day 12 acceptance remains mandatory
-
-- профиль пользователя обязателен;
-- profile block подключается к каждому prompt автоматически;
-- одинаковый запрос в `student` и `senior` профилях должен давать разное rendered prompt behavior;
-- profile нельзя копировать вручную в запрос.
-
-### Day 13 acceptance remains mandatory
-
-- `stage`, `current_step`, `expected_action` обязательны;
-- transitions валидируются;
-- pause возможен на любом этапе;
-- resume восстанавливает context без повторного объяснения;
-- `current_step` и `expected_action` сохраняются и видны после restart.
-
-### Day 14 acceptance is mandatory
-
-- invariants are stored in `<storage_root>/invariants/project.jsonl`, separately from dialogue;
-- prompt contains `Invariant policy` and `id="invariants.active"`; invariant policy semantically outranks profile, memory, task, and user query;
-- conflict request, например `предложи переписать MVP на Python`, is refused before normal chat provider call with `stack.go` evidence after out-of-band invariant validation;
-- conflict output is refused as a hard gate before short-memory persistence and memory classifier;
-- invariant conflict matching is semantic: an LLM-based structured validator returns invariant violations; `forbidden_terms` are examples/fallback signals, not the final product decision;
-- non-conflicting Go request still runs normal Day11/12/13 flow.
-
-### Conflict scenario
-
-Пользователь просит: `предложи переписать MVP на Python`.
-
-Ожидаемое поведение:
-
-- приложение загружает `stack.go` invariant;
-- `InvariantValidator` получает input + active invariants и возвращает structured violation;
-- normal chat provider call не выполняется;
-- пользователь получает error/refusal `invariant_conflict` с `stack.go`, evidence и structured JSON violation data;
-- task state, memory и audit не мутируются, кроме process audit rejection.
-
-### Definition of ready for implementation
-
-- canonical contract согласован;
-- P0 vertical slice определён;
-- provider/storage/privacy/test rules описаны;
-- no open high-severity contract gaps.
-
-## 6. Критерии приёмки Day 11
-
-Задание: модель памяти ассистента.
-
-Обязательные требования:
-
-- есть минимум три типа памяти: краткосрочная, рабочая, долговременная;
-- разные типы памяти хранятся отдельно;
-- сохранение в слой происходит явно через LLM memory-classification step и подтверждение пользователя;
-- можно проверить, какие данные попали в каждый слой;
-- видно, как слои памяти влияют на ответы ассистента.
-
-Важно: эти критерии обязательны для реализации и не могут быть обойдены через упрощённый flow или manual-only fallback.
-
-Проверка:
-
-- создать сессию и дать ассистенту выделить факт для short-term memory;
-- создать задачу и дать ассистенту выделить требование для working memory;
-- сообщить предпочтение пользователя и дать ассистенту выделить его для long-term memory;
-- подтвердить memory proposal;
-- выполнить `/memory short`, `/memory work`, `/memory long`;
-- задать следующий вопрос и убедиться, что ответ учитывает сохранённые данные.
-
-## 7. Критерии приёмки Day 12
-
-Задание: персонализация ассистента.
-
-Обязательные требования:
-
-- есть профиль пользователя;
-- в профиле описаны стиль, формат и ограничения;
-- профиль подключается к каждому запросу;
-- можно проверить ответы для разных профилей;
-- ассистент учитывает профиль автоматически.
-
-Важно: Day 12 тоже обязателен. Profile block должен попадать в каждый prompt автоматически.
-
-Проверка:
-
-- создать профиль `student`;
-- создать профиль `senior`;
-- задать одинаковый запрос в обоих профилях;
-- убедиться, что ответы различаются по стилю, формату и глубине;
-- убедиться, что профиль добавляется в prompt без ручного копирования пользователем.
-
-## 8. Критерии приёмки Day 13
-
-Задание: реализовать состояние задачи как конечный автомат.
-
-Обязательные требования:
-
-- у задачи есть формализованный `stage`;
-- у задачи есть `current_step`;
-- у задачи есть `expected_action`;
-- переходы между этапами валидируются как finite state machine;
-- можно поставить задачу на паузу на любом этапе;
-- можно продолжить задачу без повторного объяснения контекста.
-
-Важно: Day 13 обязателен. Pause/resume и восстановление состояния должны быть частью implementation scope, а не future extension.
-
-Базовые состояния:
+Task state остаётся finite state machine:
 
 - `planning`;
 - `execution`;
 - `validation`;
 - `done`.
 
-`current_step` описывает конкретный шаг внутри stage. Например:
+Состояние включает `current_step`, `expected_action`, `status`, plan, criteria, validation state and evidence refs. Pause/resume должны работать как часть основного UX, а не только как debug helper.
 
-```text
-stage: planning
-current_step: сформировать acceptance criteria
-expected_action: user_confirmation
-```
+### Инварианты
 
-`expected_action` описывает, чего агент ждёт дальше:
+Active invariants остаются hard gate:
 
-- `user_input`: нужно уточнение от пользователя;
-- `llm_response`: нужно сгенерировать следующий ответ;
-- `user_confirmation`: нужно подтверждение пользователя;
-- `none`: задача завершена или явно не ждёт следующего действия.
+- хранятся отдельно от диалога и memory;
+- подключаются в prompt как higher-priority policy/data block;
+- конфликт user input блокируется до normal provider call;
+- конфликт provider output блокируется до memory persistence;
+- semantic conflict решает structured validator, а не keyword fallback.
 
-Pause/resume contract:
+### Доверенная проверка
 
-- `planning`, `execution`, `validation`: `/task pause` ставит `status=paused` и сохраняет `stage`, `current_step`, `expected_action`, plan и working memory;
-- `done`: `/task pause` является безопасным terminal no-op, не открывает задачу заново и сохраняет `stage=done`, `expected_action=none`;
-- `/task resume` восстанавливает контекст только для paused рабочих stages; для `done` возвращает terminal status без продолжения работы.
+Verification остаётся под управлением приложения:
 
-Проверка:
+- exact command из approved plan/criteria или structured verification planner/referee;
+- локальная policy проверяет argv, cwd, allowlist, path safety, timeout и output caps;
+- результат сохраняется как trusted evidence;
+- `done` невозможен без accepted validation и criteria-matched evidence, если критерии требуют проверки.
 
-- создать задачу;
-- перевести её в `planning`;
-- сохранить `current_step` и `expected_action`;
-- поставить задачу на паузу;
-- закрыть CLI;
-- снова открыть CLI;
-- выполнить `/task resume`;
-- убедиться, что ассистент восстановил stage, current step, expected action, план и рабочую память;
-- продолжить без повторного объяснения задачи.
+## 6. Контракт TUI
 
-## 9. Критерии приёмки Day 14
+TUI должен иметь стабильные области.
 
-Задание: инварианты и ограничения состояния.
+### Поле ввода
 
-Обязательные требования:
+Ввод пользователя всегда доступен. Пользователь пишет обычным языком, а не внутренними командами state machine. Slash commands могут существовать как shortcuts, но не должны быть обязательным сценарием.
 
-- active invariants хранятся отдельно от диалога, short history и обычной memory;
-- prompt builder явно подключает active invariants как higher-priority policy/data block;
-- конфликт user request с invariant блокируется до normal chat provider call;
-- конфликт provider output с invariant блокируется до memory persistence;
-- отказ содержит invariant ID, evidence и понятное объяснение для пользователя;
-- semantic conflict решает structured invariant validator, а не простой поиск слов.
+### Лента событий
 
-Важно: Day 14 обязателен. Invariants не являются подсказками "для сведения"; это hard gate перед provider call и перед persistence.
+Лента событий показывает:
 
-Проверка:
+- user goal;
+- prompt improvement;
+- planning;
+- approval request;
+- execution action;
+- proposed change;
+- verification;
+- repair;
+- validation;
+- done/blocker.
 
-- создать invariant проекта, например `stack.go`;
-- попросить решение, конфликтующее с invariant, например `перепиши MVP на Python`;
-- убедиться, что normal chat provider call не выполнен;
-- убедиться, что ответ содержит `invariant_conflict`, invariant ID и evidence;
-- убедиться, что task state и memory не мутировались, кроме audit rejection;
-- задать non-conflicting Go request и убедиться, что обычный Day11/12/13 flow работает.
+Каждое событие должно иметь краткую сводку, понятную пользователю. Сырые детали доступны через раскрытие события.
 
-## 10. Критерии приёмки Day 15
+### Панель состояния
 
-Задание: контролируемые переходы состояний и orchestrated task lifecycle.
+Панель состояния показывает:
 
-Обязательные требования:
-
-- task lifecycle имеет допустимые stages и allowed transitions: `planning`, `execution`, `validation`, `done`;
-- приложение не позволяет "перепрыгнуть" этап: implementation до approved plan запрещён, `done` без validation запрещён;
-- planning stage запускает prompt improver и planning swarm из 5 независимых specialist agents, после чего orchestrator merge-ит финальный план и acceptance criteria;
-- переход `planning -> execution` происходит только после пользовательского approval в chat и отдельной application validation записи;
-- execution и review выполняются role-scoped microtask agents с отдельными system prompts и ограниченным context;
-- validation использует trusted evidence от приложения, а не самооценку LLM;
-- если criteria требуют tests/verification, приложение само получает exact verification command через `VerificationResolver`, проверяет command локальной policy и сохраняет evidence;
-- основной пользовательский сценарий не требует `/task move`, `/task step`, `/task expect`, direct storage edits, JSON edits, `--verify` или точной test command от пользователя;
-- pause/resume сохраняет stage, current step, expected action, plan, criteria and working memory;
-- invalid transition даёт понятный отказ и audit record без повреждения state.
-
-Важно: Day 15 проверяет именно code assistant chat. CLI/debug-команды могут существовать, но acceptance должен доказывать agent-driven lifecycle, а не operator-driven FSM.
-
-Проверка:
-
-- запустить primary Day 15 user-facing flow через один interactive `assistant chat` session без `--json`;
-- в live manual demo использовать OpenRouter model `google/gemini-3.1-flash-lite`; fake provider допустим только для deterministic regression;
-- дать task goal обычным языком, без `/task start`;
-- дождаться planning swarm output с plan и acceptance criteria;
-- подтвердить план обычной фразой в chat;
-- убедиться, что приложение само перешло в execution и запустило role-scoped agents;
-- попросить `проверь и заверши` без `--verify` и без команды `go test ...`;
-- убедиться, что приложение само получило exact command через `VerificationResolver`, выполнило только allowlisted verification и сохранило trusted evidence;
-- убедиться, что `validation -> done` произошёл только после accepted validation и app-issued trusted evidence;
-- проверить audit: prompt improvement, specialist reviews, approval validation, microtask agents, trusted evidence, lifecycle gate decision.
-
-## 11. Memory layers
-
-### 11.1. Short-term memory
-
-Назначение: текущий диалог.
-
-Содержимое:
-
-- последние сообщения пользователя и ассистента;
-- временные уточнения внутри текущей сессии;
-- факты, которые нужны только до завершения диалога;
-- локальный контекст, который можно потерять без вреда для будущих задач.
-
-Правило сохранения:
-
-- добавляется автоматически как история сообщений;
-- отдельный LLM memory-classifier может предложить сохранить краткую заметку в `short`;
-- ручная команда `/save short ...` добавляет краткую заметку без классификации;
-- после закрытия сессии может архивироваться, но не становится долговременной памятью без явного действия.
-
-### 11.2. Working memory
-
-Назначение: данные текущей задачи.
-
-Содержимое:
-
-- цель задачи;
-- stage задачи;
+- active model;
+- profile;
+- task id;
+- stage;
 - current step;
 - expected action;
-- pause/resume status;
-- текущий план;
-- acceptance criteria;
-- выбранные файлы и ограничения задачи;
-- промежуточные решения;
-- открытые вопросы;
-- validation status.
+- status;
+- latest evidence;
+- pending approval.
 
-Правило сохранения:
+### Панель плана и критериев
 
-- для task-scoped работы приложение создаёт и обновляет task state из natural chat, approved plan, lifecycle gates and process evidence;
-- пользователь может явно сохранить рабочий факт через `/save work ...` или подтвердить LLM proposal `[work]`;
-- `/task start`, `/task step`, `/task expect` и `/task move` остаются debug/recovery/test helpers, но не являются правилом сохранения для primary Day 15 flow;
-- ассистент выделяет требования, acceptance criteria, решения и open questions отдельным memory-classification prompt, когда это именно memory write;
-- ассистент не сохраняет пользовательские рабочие факты silently; authoritative process state, plan, criteria, validation and evidence сохраняются process controller после gates;
-- при завершении задачи часть working memory можно перенести в long-term decisions.
+План и acceptance criteria видны как управляемые списки. Пользователь может подтвердить, отклонить или попросить изменить их без ручного редактирования JSON.
 
-### 11.3. Long-term memory
+### Панель diff
 
-Назначение: профиль, решения, знания.
+Когда появится patch layer, diff panel станет главным способом проверки изменений. До появления PatchSet TUI всё равно должен иметь место для будущего diff workflow и показывать текущие materialized files в понятном виде.
 
-Содержимое:
+### Панель доказательств
 
-- стиль общения пользователя;
-- предпочитаемый формат ответа;
-- технологические ограничения;
-- долговременные решения проекта;
-- повторно используемые знания;
-- запреты и инварианты.
-
-Правило сохранения:
-
-- только явно через `/save long ...`, профильное интервью или подтверждённый LLM proposal `[long]`;
-- не хранить секреты, API keys, токены, приватные данные;
-- записи должны быть короткими и пригодными для prompt builder.
-
-## 12. LLM memory classification
-
-После каждого значимого ответа ассистент запускает отдельный запрос к той же выбранной модели OpenRouter или к дешёвой модели, выбранной для memory tasks. Перед любым classifier/provider call локальный pre-provider checker обязан заблокировать или отредактировать secret-like данные.
-
-Цель этого запроса: не отвечать пользователю, а структурировать память.
-
-Вход classifier prompt:
-
-- последнее сообщение пользователя;
-- последний ответ ассистента;
-- active profile;
-- current task state;
-- текущие правила memory layers;
-- запрет сохранять секреты;
-- требование вернуть строгий JSON.
-
-Classifier disablement:
-
-- отключение classifier calls допустимо только как privacy/debug/offline режим;
-- такой режим не закрывает Day 11 acceptance;
-- deterministic tests могут использовать fake provider, но обязаны проходить тот же `MemoryClassifier -> proposal -> user confirmation -> apply` flow.
-
-Выход classifier prompt:
-
-```json
-{
-  "records": [
-    {
-      "layer": "work",
-      "kind": "requirement",
-      "content": "CLI должен поддерживать выбор модели OpenRouter.",
-      "reason": "Это требование текущей задачи."
-    },
-    {
-      "layer": "long",
-      "kind": "preference",
-      "content": "Пользователь предпочитает короткие ответы на русском.",
-      "reason": "Это стабильное предпочтение профиля."
-    },
-    {
-      "layer": "ignore",
-      "kind": "smalltalk",
-      "content": "Пользователь поблагодарил ассистента.",
-      "reason": "Не влияет на будущие ответы."
-    }
-  ]
-}
-```
-
-Сохранение происходит только после локальной проверки и подтверждения:
-
-1. LLM предлагает records.
-2. Invariant checker удаляет или блокирует секреты.
-3. CLI показывает memory proposal.
-4. Пользователь подтверждает, редактирует или отклоняет.
-5. Memory manager сохраняет records в отдельные хранилища.
-
-Так выполняется критерий `вы явно выбираете, что и куда сохраняется`: выбор делает LLM в отдельном классификационном шаге, а приложение делает этот выбор видимым и проверяемым.
-
-## 13. Персонализация
-
-Профиль пользователя должен состоять минимум из трёх групп данных:
-
-- `style`: кратко или подробно, тон, язык ответа, степень объяснений;
-- `format`: списки, пошаговый план, кодовые примеры, структура ответа;
-- `constraints`: стек, запреты, правила проекта, границы домена.
-
-Пример профиля:
-
-```json
-{
-  "id": "student",
-  "displayName": "Student profile",
-  "style": {
-    "language": "ru",
-    "detail": "high",
-    "tone": "teacher"
-  },
-  "format": {
-    "preferSteps": true,
-    "preferExamples": true,
-    "avoidLongTheory": false
-  },
-  "constraints": [
-    "Объяснять термины при первом использовании",
-    "Не пропускать архитектурные причины решений"
-  ]
-}
-```
-
-## 14. CLI interface
-
-Минимальные команды запуска:
+Панель доказательств показывает проверку как продуктовый результат:
 
 ```text
-assistant init
-assistant chat
-assistant chat --once --input <text>
-assistant chat --once --input <text> --json
-assistant chat --once --input <text> --verify "<argv command>" --json   # debug/recovery override only
-assistant chat --once --render-prompt --input <text> --json
-assistant chat --profile student --model openai/gpt-4.1-mini
-assistant profiles [list]
-assistant profiles show [id]
-assistant profiles set <id>
-assistant profiles create <id> [--display-name <name>] [--style k=v] [--format k=v] [--constraint <text>]
-assistant memory list <short|work|long> [--json] [--session <id>] [--task <id>] [--all-profiles]
-assistant memory propose [--latest] [--json]
-assistant memory apply [--proposal <id>] --accept all [--json]
-assistant memory proposals [--session <id>] [--json]
-assistant task status --json
-assistant task pause
-assistant task resume
-assistant task start <title>          # debug/recovery/test helper
-assistant task move <stage>           # debug/recovery/test helper
-assistant task step <text>            # debug/recovery/test helper
-assistant task expect <action>        # debug/recovery/test helper
-assistant process audit [--latest|--limit <n>] [--json]
-assistant privacy
-assistant privacy purge --audit [--transcripts] --yes
+command: go test ./...
+exit: 0
+summary: passed
+evidence: ev_...
 ```
 
-Команды внутри диалога:
+Полные ограниченные логи раскрываются по запросу.
 
-```text
-/help                         Показать команды
-/model                        Выбрать модель
-/profile                      Переключить профиль
-/profile create               Создать профиль
-/task start <title>           Debug: создать task вручную
-/task status                  Показать состояние задачи
-/task step <text>             Debug: установить current step вручную
-/task expect <action>         Debug: установить expected action вручную
-/task move <stage>            Debug: перейти в stage вручную
-/task plan <text>             Добавить пункт плана в REPL
-/task criteria <text>         Добавить acceptance criterion в REPL
-/task pause                   Поставить задачу на паузу
-/task resume                  Продолжить задачу после паузы
-/save short <text>            Сохранить в short-term memory
-/save work <text>             Сохранить в working memory
-/save long <text>             Сохранить в long-term memory
-/memory propose               Запустить LLM-классификацию памяти вручную
-/memory apply                 Сохранить последний memory proposal
-/memory short                 Показать short-term memory
-/memory work                  Показать working memory
-/memory long                  Показать long-term memory
-/process audit                Показать последний process audit event
-/privacy                      Показать privacy/provider/storage summary
-/clear short                  Очистить краткосрочный слой текущей сессии
-/exit                         Завершить CLI
-```
+### Панель предложений памяти
 
-Current P0 command boundary:
+Memory proposal показывается после значимых шагов:
 
-- user-facing P0 включает `assistant chat`, `assistant chat --once --input <text>`, `assistant chat --once --input <text> --json`, `assistant chat --once --render-prompt --input <text> --json`, `assistant memory list|propose|apply|proposals`, `assistant profiles list|show|set|create`, `assistant task status|pause|resume`, `assistant process audit`, `assistant privacy`;
-- user-facing Day 15 P0 path использует один natural `assistant chat` REPL session; если acceptance criteria требуют test/verification evidence, приложение запускает `VerificationResolver` после user approval утвержденного плана или strict semantic check/finish intent, затем выполняет только locally allowlisted argv command;
-- `assistant chat --once --input <text> --verify "<argv command>" --json` является explicit debug/recovery override, а не happy path и не обязательная пользовательская команда;
-- `assistant task start|move|step|expect` и matching slash commands остаются debug/recovery/test helpers, не acceptance path;
-- `/task plan` и `/task criteria`, а также top-level `assistant task plan|criteria`, реализованы как conveniences для plan/acceptance criteria;
-- `/task done`, `/task stage`, `/task decision` и top-level `assistant task done|stage|decision` не реализованы в текущем коде.
+- layer;
+- kind;
+- content;
+- reason;
+- accept/reject/edit action.
 
-### 14.1. CLI chat UX/UI contract
+## 7. Дорожная карта по требованию
 
-User-facing chat output must be readable by default. Raw process JSON is an internal contract and an automation format, not the default human interface.
+### 7.1. AgentRun ledger
 
-Default human output:
+Добавлять, когда TUI начнёт показывать run/turn/tool timeline и потребуется durable backend для resume, audit и навигации по evidence.
 
-- `assistant chat` and `assistant chat --once --input <text>` print a structured transcript, not raw JSON;
-- output is grouped into visible sections: `Assistant`, `Task`, `Transition`, `Evidence`, `Warnings`, `Memory proposal`, `Next`;
-- internal stage schemas are rendered into human text: planning summary/criteria/plan, execution summary/deliverable/next step, validation findings/checks/verdict, done summary/status;
-- planning output includes a visible `Planning swarm` review with each specialist role, concrete verdict/contribution, finding count, top finding and proposed plan/criteria changes when present; it must not degrade into specialists merely restating the user task, and the user must not inspect audit JSON to understand what agents discussed;
-- task state is compact: `stage`, `expected_action`, `current_step`, `status`, validation status and microtask count;
-- trusted verification is shown as a short evidence summary, for example `auto verification: go test ./pkg` and evidence ref count, not full evidence records;
-- memory proposal output lists proposed records in a compact table-like format and gives the next confirmation command after the records;
-- errors print `code: message` plus `hint`, never a JSON envelope unless `--json` is explicitly set;
-- long lists are bounded in human mode; full raw details stay available through `--json`, `task status --json` and `process audit --json`.
+Цель:
 
-Color and terminal behavior:
+- `AgentRun`;
+- `AgentTurn`;
+- `ToolCall`;
+- `ToolObservation`;
+- `PatchSet`;
+- command/evidence refs.
 
-- when stdout is an interactive terminal and `NO_COLOR`/`ASSISTANT_NO_COLOR` are not set, headings and labels use ANSI highlighting; state/evidence/warnings remain grouped in readable sections;
-- fenced code blocks use syntax-aware terminal highlighting for supported languages, including Go, in interactive color mode;
-- non-TTY output, redirected files and tests must not contain ANSI codes;
-- `--quiet` suppresses nonessential diagnostics but does not remove the main answer;
-- `--json` remains stable machine-readable output for tests/scripts and may include raw answer schema.
+Не делать ledger ради внутренней полноты. Делать как storage model для TUI timeline и воспроизводимого просмотра сессии.
 
-Day 15 UX acceptance:
+### 7.2. Read/search tools
 
-- during planning the user sees the proposed plan and acceptance criteria as readable lists;
-- after approval the user sees execution deliverable and next step without reading raw JSON;
-- during validation the user sees findings, passed checks, missing evidence and verdict as sections;
-- when lifecycle moves, the user sees `from -> to` and the new expected action;
-- no primary Day 15 demo step requires the user to inspect JSON to know what happened.
+Добавлять, когда пользовательский TUI workflow требует реального repo context: объяснить архитектуру, найти место изменения, проверить usage, собрать context pack.
 
-## 15. OpenRouter requirements
+Минимальные tools:
+
+- `workspace.list_files`;
+- `workspace.read_file`;
+- `workspace.search_text`;
+- `workspace.project_map`;
+- `workspace.git_status`;
+- `workspace.git_diff`.
+
+Policy:
+
+- path safety;
+- output caps;
+- binary rejection;
+- secret redaction;
+- audit-visible observations;
+- `ast-index` preferred, `rg` fallback для plain text.
+
+### 7.3. PatchSet и diff workflow
+
+Добавлять, когда TUI diff panel становится основным сценарием редактирования.
 
 Требования:
 
-- поддержать `OPENROUTER_API_KEY` из environment;
-- для MVP считать env-only policy канонической; hidden input или local key file не должны стать default path без отдельного threat model;
-- не сохранять ключ в git, config, profiles, memory files, prompt audit или audit trail;
-- проверять chat/classifier payload локальным pre-provider secret scanner до отправки в OpenRouter;
-- дать выбрать модель из списка или ввести model id;
-- хранить выбранную модель в локальном config;
-- позволять сменить модель через `/model`;
-- использовать OpenRouter не только для основного ответа, но и для memory-classification prompt;
-- явно сообщать пользователю, какие категории данных отправляются во внешний provider;
-- custom base URL поддерживается через `--openrouter-base-url` или `ASSISTANT_OPENROUTER_BASE_URL`; non-default URL требует сохранённого trust list или one-shot флаг `--trust-openrouter-base-url`;
-- raw transcripts не пишутся в P0; rendered prompts сохраняются как metadata/hash by default, а raw prompt audit включается только через `ASSISTANT_RAW_PROMPT_AUDIT=1`; purge доступен через `assistant privacy purge --audit --yes`.
+- unified diff parsing;
+- preview before apply;
+- approval before apply;
+- dirty file check;
+- rollback metadata;
+- safe path validation;
+- affected files summary;
+- conflict handling.
 
-Минимальная интеграция:
+Fenced file materialization остаётся compatibility path, но целевой UX — patch/diff workflow.
 
-- endpoint: `https://openrouter.ai/api/v1/chat/completions`;
-- model id передаётся в поле `model`;
-- prompt отправляется как chat messages;
-- ошибки API показываются в CLI без падения приложения.
+### 7.4. Verification observation and repair
 
-## 16. Prompt builder
+Добавлять, когда TUI должен показывать failed command output и вести repair loop.
 
-Prompt builder должен собирать контекст слоями, а не добавлять всё подряд.
+Требования:
 
-Базовый порядок блоков:
+- command output как bounded observation;
+- failure classification;
+- retry budget;
+- repair iteration;
+- final self-review;
+- blocker state для unsafe command или missing environment.
 
-1. System role ассистента.
-2. Правила безопасности и запрет сохранять секреты.
-3. Trusted process-control policy: приложение владеет state, transitions, memory writes and validation.
-4. Trusted stage-specific policy: роль этапа, allowed actions, forbidden actions and output schema.
-5. Активный профиль пользователя.
-6. Инварианты профиля и проекта.
-7. Task state: stage, current step, expected action, status, allowed transitions.
-8. Working memory текущей задачи.
-9. Релевантная long-term memory.
-10. Short-term history текущего диалога.
-11. Текущий запрос пользователя.
+Не возвращаться к language/path heuristics для выбора команд. Verification command selection остаётся exact approved command или structured planner/referee.
 
-Важно:
+### 7.5. Sandboxed command runner
 
-- профиль подключается к каждому запросу;
-- short-term history ограничивается размером окна;
-- long-term memory подмешивается выборочно;
-- task state имеет больший приоритет, чем рабочая память и случайная история диалога;
-- агент должен выполнять работу, соответствующую текущему stage и expected action;
-- code assistant должен знать текущий этап и свою роль на этом этапе до provider call;
-- validation/review stage должен быть prompt-level ролью ревьюера, а не обычным generic assistant ответом.
+Добавлять, когда trusted verification станет недостаточно для рабочих задач.
 
-Контракт безопасности:
+Требования:
 
-- profile, memory, task state, short history, prompt audit data и classifier output являются untrusted data;
-- такие блоки должны быть serialized/quoted/tagged как данные, а не инструкции;
-- canonical prompt schema должен задавать block id, block type, source, trust label, escaping rules и порядок блоков;
-- system/application/security policy всегда выше пользовательского и сохранённого контекста.
-- trusted stage policy не заменяет profile block: Day 12 по-прежнему требует active profile в каждом prompt.
+- exact argv only;
+- cwd inside repo;
+- env allowlist;
+- timeout/output caps;
+- approval levels;
+- destructive command block by default;
+- background process monitor for dev servers.
 
-## 17. State machine
+### 7.6. Git workflow
 
-Для Day 13 MVP обязан хранить состояние задачи как конечный автомат.
+Добавлять, когда TUI сможет безопасно показывать diff and evidence.
 
-Task state состоит минимум из:
+Сценарии:
 
-- `stage`: этап задачи;
-- `current_step`: конкретный шаг внутри этапа;
-- `expected_action`: что должно произойти дальше;
-- `status`: `active` или `paused`;
-- `updated_at`: время последнего изменения.
+- summarize diff;
+- split changes by intent;
+- generate commit message;
+- stage selected files after approval;
+- commit after approval;
+- PR summary;
+- CI inspection later.
 
-Базовые стадии:
+### 7.7. Skills runtime
 
-- `planning`: планирование;
-- `execution`: выполнение;
-- `validation`: проверка;
-- `done`: завершение.
+Добавлять, когда product flow потребует reusable workflows внутри assistant, а не только в repo harness.
 
-Разрешённые переходы:
+Требования:
 
-- `planning -> execution`;
-- `execution -> validation`;
-- `validation -> execution`;
-- `validation -> done`;
-- `execution -> planning`, если появились новые требования.
+- discover `.agents/skills`;
+- load `SKILL.md` progressively;
+- expose loaded skill in TUI timeline;
+- run optional scripts only through policy and approval;
+- keep context budget bounded.
 
-Пауза не является отдельной стадией. Это `status=paused` поверх любого stage. При resume ассистент восстанавливает последний stage, current step, expected action, working memory и продолжает без повторного объяснения.
+### 7.8. Multi-agent tool ownership
 
-`status=done` не используется в MVP; completion фиксируется через `stage=done` и `expected_action=none`.
+Добавлять только когда роли дают measurable artifacts.
 
-Process-control rule: LLM не выбирает текущий stage сама. Приложение читает persisted `TaskState`, выбирает stage-specific policy, сообщает модели роль этапа и принимает или отклоняет output. Любой переход stage проходит через deterministic allowed transitions и application gate.
+Целевые роли:
 
-Пример task state:
+- researcher: cited context pack;
+- planner: plan and criteria;
+- implementer: patch proposal;
+- reviewer: findings;
+- verifier: command plan and evidence evaluation;
+- finalizer: summary and follow-ups.
 
-```json
-{
-  "stage": "planning",
-  "current_step": "сформировать архитектурный план MVP",
-  "expected_action": "user_confirmation",
-  "status": "active"
-}
+Если роль не производит уникальный artifact, её не нужно выделять.
+
+## 8. Модель команд CLI и TUI
+
+Основной запуск:
+
+```text
+assistant chat
+assistant chat --tui
+assistant chat --plain
+assistant chat --once --input <text>
+assistant chat --once --input <text> --json
 ```
 
-## 18. Инварианты
+Целевое поведение по умолчанию: интерактивный TUI, если терминал поддерживает его. Обычный REPL остаётся запасным режимом.
 
-Инварианты нужны как постоянные ограничения, которые не должны теряться между запросами.
+Стабильные inspect/recovery команды:
 
-Примеры для этого ассистента:
+```text
+assistant profiles list|show|set|create
+assistant memory list|propose|apply|proposals
+assistant task status|pause|resume
+assistant process audit
+assistant privacy
+```
 
-- не сохранять секреты в память;
-- не коммитить и не менять файлы без явной команды пользователя;
-- не смешивать memory layers;
-- не сохранять LLM memory proposal без показа пользователю;
-- не подменять профиль пользователя текущим запросом;
-- не переходить между stage без проверки allowed transitions;
-- не продолжать paused-задачу без восстановления current_step и expected_action;
-- не игнорировать ограничения active profile;
-- при конфликте user request и long-term constraints явно сообщить о конфликте.
+Debug helpers допустимы, но не являются основным сценарием:
 
-Инварианты проверяются отдельным LLM-вызовом со строгим JSON-ответом. Локальные проверки допустимы только для hard gates: секреты, небезопасные значения, ошибки схемы, fallback или prefilter. Смысловой конфликт с правилом нельзя решать простым поиском слов.
+```text
+assistant task start
+assistant task move
+assistant task step
+assistant task expect
+assistant chat --once --verify "<argv command>" --json
+```
 
-## 19. Non-goals MVP
+В TUI slash commands могут быть shortcuts:
 
-В MVP/P0 не нужно делать перечисленное ниже. Это не product non-goals; для аналога Claude Code / Codex CLI часть этих пунктов является обязательным P1/P2 roadmap.
+```text
+/model
+/profile
+/task status
+/task pause
+/task resume
+/memory
+/diff
+/evidence
+/runs
+/privacy
+/exit
+```
 
-- полноценный IDE agent с глубокими IDE integrations;
-- автоматическое редактирование файлов как default path без approval/tool safety layer;
-- RAG по всему репозиторию как production-quality subsystem;
-- vector database;
-- general-purpose multi-agent orchestration beyond the Day 15 planning/execution/validation control loop;
-- web UI;
-- сложную авторизацию;
-- автоматическую долговременную память без подтверждения;
-- silent memory writes без LLM proposal и без audit trail.
+Но пользовательский сценарий должен работать без знания внутренних state-machine команд.
 
-## 20. Метрики готовности
+## 9. Provider и privacy
 
-MVP считается готовым, если:
+OpenRouter остаётся provider path:
 
-- CLI запускается и отвечает через OpenRouter;
-- модель можно выбрать в интерфейсе;
-- три memory layers физически разделены;
-- LLM memory-classifier предлагает, какие факты в какой слой сохранить;
-- пользователь видит и подтверждает memory proposal;
-- содержимое каждого слоя можно вывести;
-- профиль подключается к каждому prompt;
-- два разных профиля дают разные ответы на один запрос;
-- задача хранит stage, current step и expected action;
-- LLM получает stage-aware prompt с ролью текущего этапа;
-- задачу можно поставить на паузу и продолжить без повторного объяснения;
-- приложение autonomously ведёт lifecycle без ручных `/task move|step|expect` в основном flow;
-- `done` требует accepted validation и app-issued trusted evidence, когда criteria упоминают tests/verification;
-- основной Day 15 demo проходит без `--verify` и без точной test command от пользователя;
-- planning swarm, prompt improver, microtask agents и process audit доступны как контролируемые Day 15 primitives;
-- API key не попадает в репозиторий и memory files;
-- invariant checker и validation loop реализованы как обязательная часть current MVP.
+- `OPENROUTER_API_KEY` из environment;
+- key не сохраняется в repo, profiles, memory, audit or prompt logs;
+- selected model хранится локально;
+- memory classifier может использовать основную или отдельную configured модель;
+- перед provider call выполняется secret scanner;
+- raw prompt audit выключен по умолчанию;
+- purge commands доступны для audit/transcripts.
 
-P1 readiness after MVP:
+TUI должен явно показывать provider/model и privacy summary до первого внешнего call в новой сессии.
 
-- user-facing chat can inspect repository files through controlled read tools;
-- assistant can propose and apply patches with explicit permission gates;
-- assistant can run allowlisted shell/test commands and attach trusted evidence automatically;
-- task flow remains inside `assistant chat`, not debug commands;
-- diffs, test failures and recovery steps are readable in the chat transcript.
+## 10. Контракт prompt и context
 
-## 21. Test and eval matrix
+Prompt builder остаётся layered:
 
-Реализация должна иметь детерминированный набор проверок, который подтверждает Day 11/12/13/14/15 без reliance on live LLM eyeballing.
+1. system role;
+2. security rules;
+3. trusted process-control policy;
+4. trusted stage-specific policy;
+5. profile;
+6. invariants;
+7. task state;
+8. working memory;
+9. relevant long-term memory;
+10. short-term history;
+11. current user request.
 
-Минимум:
+Untrusted blocks должны быть serialized/tagged as data. Stage and process policy outrank profile, memory, task text, short history and user text when conflicts occur.
 
-- fake provider fixtures;
-- golden prompt rendering tests;
-- storage failure/corruption tests;
-- provider timeout/error tests;
-- pre-provider secret leak tests for chat and classifier payloads;
-- duplicate proposal apply tests;
-- forbidden transition tests;
-- golden prompt tests for planning/execution/validation/done stage roles;
-- process gate tests proving wrong-stage output is rejected before accepted persistence;
-- lifecycle gate tests for approval validation, trusted evidence and validation-to-done;
-- Day 15 manual chat-driven script proof;
-- race/locking/atomic-write/symlink/path-safety tests for file storage;
-- non-interactive CLI JSON/exit-code smoke tests;
-- prompt-injection/redaction tests for profile/memory/task/short history/prompt audit.
+TUI не должен менять этот контракт. Он только делает state, approvals и evidence видимыми.
 
-Каждый обязательный Day 11/12/13/14/15 критерий должен иметь либо автоматический тест, либо явно отмеченный manual demo proof.
+## 11. Критерии соответствия этому направлению
 
-## 22. Roadmap недели
+Будущее развитие считается aligned, если:
 
-Day 11:
+- TUI стоит первым приоритетом в roadmap и продуктовых решениях;
+- line REPL and JSON remain fallback/automation modes;
+- internal commands не становятся обязательным пользовательским workflow;
+- текущий memory/profile/task/invariant/verification foundation сохранён;
+- AgentRun/read/search/PatchSet/command/git/skills явно помечены как работа по требованию;
+- feature не добавляется только потому, что это “как у Claude Code/Codex CLI”;
+- каждая новая возможность улучшает TUI-first сценарий работы над задачей в репозитории.
 
-- memory storage;
-- short-term, working, long-term layers;
-- LLM memory-classification prompt;
-- команды `/save`, `/memory propose`, `/memory apply`, `/memory`;
-- демонстрация влияния памяти на ответ.
+## 12. Не цели ближайшего среза
 
-Day 12:
+Не делать сейчас:
 
-- user profiles;
-- profile interview;
-- подключение профиля к каждому prompt;
-- проверка разных ответов для разных профилей.
+- обязательный AgentRun ledger before TUI;
+- read/search tools как отдельный backend project без TUI use case;
+- PatchSet rewrite до появления нормального diff UX;
+- general shell access;
+- git commit/PR automation before diff/approval UX;
+- CI/GitHub integration;
+- team/org policy system;
+- eval harness;
+- новый runtime или переписывание Go core.
 
-Day 13:
+## 13. Продуктовые риски
 
-- task state machine;
-- stage, current step, expected action;
-- allowed transitions;
-- pause/resume на любом этапе;
-- продолжение без повторного объяснения.
+### Риск: TUI станет просто красивым log viewer
 
-Day 14:
+Снижение риска: approvals, state, plan, diff, evidence и memory review должны быть actionable внутри TUI.
 
-- active invariants in separate storage;
-- invariant policy in prompt;
-- semantic invariant validation before provider call and persistence;
-- conflict refusal with invariant ID and evidence;
-- non-conflicting requests continue normal flow.
+### Риск: продукт снова уйдёт в debug CLI
 
-Day 15:
+Снижение риска: команды, которые раскрывают internals, должны оставаться inspect/recovery. Primary task flow остаётся natural chat внутри TUI.
 
-- prompt improver for task goals;
-- planning swarm with 5 role-specific specialist reviews and merged plan;
-- user approval validation before execution;
-- role-scoped execution/review microtask agents;
-- automatic trusted verification via language-agnostic `VerificationResolver` after approved-plan execution starts or semantic `ready_for_validation`/`ready_for_done` intent signal;
-- lifecycle gates for `planning -> execution -> validation -> done`;
-- chat-first manual demo without `--verify` or user-supplied test command.
+### Риск: tool layer появится без safety model
+
+Снижение риска: LLM не получает direct shell. Только typed requests, application policy, bounded observations, approvals and audit.
+
+### Риск: roadmap начнёт копировать конкурентов поверхностно
+
+Снижение риска: сохранить отличие продукта: deterministic control plane, explicit lifecycle, memory confirmation, invariant gates, trusted evidence.
+
+### Риск: слишком ранний backend rewrite
+
+Снижение риска: добавлять backend primitives только когда они нужны TUI-сценарию. Сначала пользовательский опыт, затем durable model.
+
+## 14. Итоговое направление
+
+`coding_writer` не нужно переписывать с нуля. Его главная сила — строгий контур управления под управлением приложения. Но следующий продуктовый шаг не AgentRun ledger и не patch backend сам по себе. Следующий шаг — TUI-first рабочий опыт, где этот контур управления становится видимым, управляемым и полезным для разработчика.
+
+Формула развития:
+
+```text
+Текущий фундамент: lifecycle + memory + profile + invariants + verification.
+Следующий приоритет: TUI-first workflow.
+Всё остальное: возможности по требованию вокруг этого workflow.
+```
