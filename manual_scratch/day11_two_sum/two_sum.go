@@ -1,5 +1,7 @@
 package main
 
+func main() {}
+
 func TwoSum(nums []int, target int) []int {
 	seen := make(map[int]int)
 	for i, num := range nums {
