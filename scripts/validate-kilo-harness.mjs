@@ -246,6 +246,15 @@ function validateSharedLayer() {
     ".agents/rules/goal-loop.md",
   ]);
   validateContains(".agents/docs/evolve.md", [".agents/skills", ".agents/learnings"]);
+  validateContains(".agents/docs/evolve.md", [
+    "Root cause gate",
+    "Harness improvement design",
+    "PRODUCT-BUG",
+    "DOC-BUG",
+    "VALIDATOR",
+    "Harness Value Test",
+    "BUGS/",
+  ]);
   validateContains(".agents/skills/evolve/SKILL.md", [".agents/docs/evolve.md"]);
   validateContains(".agents/skills/consensus-orchestrator/SKILL.md", [
     ".agents/docs/consensus-orchestrator.md",

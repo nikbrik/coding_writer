@@ -511,6 +511,19 @@ type chatResult struct {
 }
 
 func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
+	if !renderOnly {
+		var result chatResult
+		err := withChatTurnLock(rt, sessionID, func() error {
+			var runErr error
+			result, runErr = runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand)
+			return runErr
+		})
+		return result, err
+	}
+	return runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand)
+}
+
+func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
 	if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
@@ -596,6 +609,32 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 	}
 	result.AuditEvents = chatAuditEvents(rt.StorageDir, sessionID, result.Task)
 	return result, nil
+}
+
+func withChatTurnLock(rt *runtime, sessionID string, fn func() error) error {
+	if rt == nil || strings.TrimSpace(rt.StorageDir) == "" {
+		return fn()
+	}
+	key := "session_" + sessionID
+	if task, err := rt.Tasks.Current(); err == nil && strings.TrimSpace(task.ID) != "" {
+		key = "task_" + task.ID
+	}
+	if err := storage.ValidateID(key); err != nil {
+		return app.NewError(app.CategoryValidation, "unsafe_turn_lock_id", "unsafe chat turn lock id", err)
+	}
+	path, err := storage.SafeJoin(rt.StorageDir, "turns", key+".lock")
+	if err != nil {
+		return app.NewError(app.CategoryValidation, "unsafe_turn_lock_path", "unsafe chat turn lock path", err)
+	}
+	err = storage.WithFileLock(path, true, fn)
+	if err == nil {
+		return nil
+	}
+	var storageErr *storage.Error
+	if errors.As(err, &storageErr) && storageErr.Code == "lock_timeout" {
+		return app.ErrorWithHint(app.CategoryCLI, "turn_in_progress", "another chat turn is already updating this task; wait for it to finish and retry", "the application serializes state-mutating chat turns per task/session", err)
+	}
+	return err
 }
 
 func dropExecutionAutoContinueWarnings(warnings []string) []string {

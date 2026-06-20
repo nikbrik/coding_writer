@@ -64,4 +64,10 @@
 **Reason**: Captured live-only Day 15 fixes for approved-plan command inference and reviewer variance under app-owned trusted evidence.
 
 ---
+## 2026-06-20 | evolve root-cause bug gate
+**Applied**: VALIDATOR-001, PRODUCT-BUG-001
+**Files**: .agents/docs/evolve.md, scripts/validate-kilo-harness.mjs, BUGS/README.md, BUGS/app-session-task-overlapping-turns.md
+**Reason**: Product defects must be tracked as bugs and harness evolution must preserve root-cause, bug, validator, and Harness Value Test guardrails.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

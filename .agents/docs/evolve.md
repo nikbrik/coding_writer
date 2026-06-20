@@ -1,5 +1,11 @@
 # evolve — Harness Evolution Skill
 
+Главная цель `evolve` — улучшать agent harness как систему: правила,
+скиллы, проверки, adapters, learnings и known errors должны делать будущую
+работу агента надежнее. `evolve` не должен превращать баги продукта,
+пробелы документации или слабую архитектуру приложения в инструкции
+"обходить проблему осторожнее".
+
 ## Когда использовать
 - После завершения большой фичи, рефакторинга, сложной отладки
 - Когда агент был поправлен пользователем 2+ раза за сессию
@@ -103,7 +109,81 @@ Anti-bloat:
 
 ---
 
-## ФАЗА 3 — Классификация
+## ФАЗА 3 — Root cause gate
+
+Перед выбором типа proposal классифицируй root cause каждого сигнала:
+
+- `product_bug` → дефект приложения, UX, state machine, API contract,
+  verifier, persistence, execution, concurrency, security или tests.
+- `docs_gap` → пользовательская/product документация неполная, вводит в
+  заблуждение или не описывает expected behavior.
+- `agent_process_error` → агент нарушил уже существующее правило, skill,
+  acceptance criteria или explicit user instruction.
+- `harness_gap` → в harness нет правила, skill, validator, adapter,
+  checklist или memory, которые должны были направить агента правильно.
+- `environment_issue` → локальная среда, сеть, sandbox, provider outage,
+  missing secret или tool limitation.
+
+Критическое правило:
+
+- Не кодируй `product_bug` или `docs_gap` как агентское правило вида
+  "обходить X", "ждать Y", "не трогать Z", если правильный fix должен быть
+  в продукте или документации.
+- Для `product_bug` основной proposal должен быть `PRODUCT-BUG`.
+- Для `docs_gap` основной proposal должен быть `DOC-BUG`.
+- `LEARNING`/`ERROR` для workaround допустим только как вторичный proposal и
+  обязан ссылаться на основной `PRODUCT-BUG`/`DOC-BUG`.
+- Если root cause смешанный, раздели proposals: продуктовый bug отдельно,
+  harness improvement отдельно.
+
+Пример:
+
+- Плохо: `LEARNING: demo harness должен ждать обновления state`.
+- Хорошо: `PRODUCT-BUG: app lacks per-session turn serialization`.
+- Допустимо дополнительно: `ERROR: demo harness exposed race before product
+  serialization existed`.
+
+---
+
+## ФАЗА 4 — Harness improvement design
+
+Для каждого сигнала, который действительно относится к harness, продумай
+долгосрочное улучшение, а не только запись в память.
+
+Задай вопросы:
+
+- Какой guardrail предотвратит этот класс ошибок в будущем?
+- Достаточно ли learning, или нужен validator/test/checklist/skill/rule?
+- Можно ли автоматически обнаружить нарушение до того, как пользователь его
+  увидит?
+- Как proposal будет проверяться: validator, grep-safe invariant, test,
+  checklist или review gate?
+- Не маскирует ли proposal баг продукта вместо того, чтобы поднять его как
+  bug?
+
+Предпочитай сильные harness changes:
+
+- `validator` → новая/усиленная проверка harness, schemas, skill metadata,
+  forbidden patterns, proposal quality.
+- `skill` → repeatable workflow с clear trigger, steps, verification.
+- `rule` → короткое обязательное правило для критичного поведения.
+- `learning` → reusable pattern, если автоматизировать пока рано.
+- `error` → known failure с repro/fix, не как замена product fix.
+- `product-bug` / `doc-bug` → backlog item в `BUGS/` с repro и acceptance criteria.
+
+Каждый non-bug proposal должен проходить Harness Value Test:
+
+```text
+Does this make future agent work more correct, safer, faster, or easier to
+verify without hiding a product/documentation defect?
+```
+
+Если ответ "нет" или "только помогает обходить баг", proposal должен стать
+`PRODUCT-BUG`, `DOC-BUG` или быть отброшен.
+
+---
+
+## ФАЗА 5 — Классификация
 
 Scope:
 - `project` → `.agents/rules/[category].md`, `AGENTS.md`, `.agents/skills/`, `.agents/learnings/`, runtime adapters when needed
@@ -115,7 +195,10 @@ Scope:
 - `skill` → новый `.agents/skills/[name]/SKILL.md`
 - `learning` → `.agents/learnings/LEARNINGS.md`
 - `error` → `.agents/learnings/ERRORS.md`
+- `validator` → новая или измененная автоматическая проверка harness
 - `promote` → existing learning с `Recurrence-Count >= 3` становится rule proposal
+- `product-bug` → дефект продукта в `BUGS/` или issue tracker
+- `doc-bug` → дефект документации в `BUGS/` или docs backlog
 
 Promotion в `AGENTS.md` или `.agents/rules/*`, если:
 - signal встретился 3+ раза, или
@@ -124,7 +207,7 @@ Promotion в `AGENTS.md` или `.agents/rules/*`, если:
 
 ---
 
-## ФАЗА 4 — Dedupe и recurrence
+## ФАЗА 6 — Dedupe и recurrence
 
 Для каждого learning/error вычисли `pattern-key`:
 - lowercase kebab-case;
@@ -146,7 +229,7 @@ Promotion в `AGENTS.md` или `.agents/rules/*`, если:
 
 ---
 
-## ФАЗА 5 — Proposal format
+## ФАЗА 7 — Proposal format
 
 Выводи machine-readable блок и краткое human summary:
 
@@ -158,6 +241,13 @@ Date: [YYYY-MM-DD]
 Mode: dry-run
 Signals: [N] | Proposals: [M]
 ══════════════════════════════════════════════════
+
+Root causes:
+  product_bug: [N]
+  docs_gap: [N]
+  agent_process_error: [N]
+  harness_gap: [N]
+  environment_issue: [N]
 
 [RULE-001]
 priority: HIGH
@@ -175,6 +265,35 @@ target: .agents/learnings/LEARNINGS.md
 pattern-key: [kebab-case]
 recurrence-count: [N]
 summary: [1 строка]
+harness-value: [почему это улучшает harness, а не обходит баг]
+
+[VALIDATOR-001]
+priority: HIGH
+action: create | update
+target: scripts/validate-kilo-harness.mjs
+pattern-key: [kebab-case]
+summary: [1 строка]
+verifies: [какой invariant/check будет ловиться автоматически]
+
+[PRODUCT-BUG-001]
+priority: HIGH
+action: create
+target: BUGS/[pattern-key].md
+pattern-key: [kebab-case]
+summary: [1 строка]
+symptom: [что видит пользователь]
+expected: [что должно быть]
+repro: [короткий repro без секретов]
+acceptance: [как понять, что баг исправлен]
+
+[DOC-BUG-001]
+priority: MEDIUM
+action: create
+target: BUGS/[pattern-key].md
+pattern-key: [kebab-case]
+summary: [1 строка]
+missing-doc: [что должно быть описано]
+acceptance: [как понять, что документация исправлена]
 
 [PROMOTE-001]
 priority: HIGH
@@ -192,13 +311,13 @@ Apply controls:
 ```
 
 Stable IDs:
-- prefix by type: `RULE`, `SKILL`, `LEARNING`, `ERROR`, `PROMOTE`;
+- prefix by type: `RULE`, `SKILL`, `LEARNING`, `ERROR`, `VALIDATOR`, `PRODUCT-BUG`, `DOC-BUG`, `PROMOTE`;
 - number from 001 in displayed order per type;
 - keep IDs stable while user edits the current proposal.
 
 ---
 
-## ФАЗА 6 — Apply rules
+## ФАЗА 8 — Apply rules
 
 Before any write:
 1. Re-read target file.
@@ -207,7 +326,11 @@ Before any write:
 4. Apply only selected IDs.
 5. Never delete existing learnings/errors.
 6. For new skills, validate no duplicate `name`.
-7. Append changelog entry after successful apply.
+7. For `PRODUCT-BUG`/`DOC-BUG`, create target file if missing with stable
+   append-only sections and enough repro/acceptance detail to act on.
+8. For `VALIDATOR`, include at least one self-check or explain why existing
+   validator coverage is sufficient.
+9. Append changelog entry after successful apply.
 
 Changelog target: `.agents/learnings/HARNESS_CHANGELOG.md`
 
@@ -226,6 +349,14 @@ After writes:
 - run `node scripts/validate-kilo-harness.mjs` when available;
 - run `ast-index update` when available;
 - report created/updated counts and validation result.
+
+Apply-mode quality gate:
+
+- Do not apply a proposal that fails the Harness Value Test.
+- Do not apply a workaround-only learning when the root cause is an open
+  `product_bug`/`docs_gap` and no corresponding bug proposal exists.
+- If user says `apply all`, still skip proposals that violate these gates and
+  report why they were not applied.
 
 ---
 

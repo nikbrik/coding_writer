@@ -1,6 +1,6 @@
 ---
 name: evolve
-description: Post-task harness evolution. Analyzes the current session, emits dry-run proposals with stable IDs, deduplicates learnings by pattern-key, and applies only explicitly approved updates to shared rules, skills, learnings, and runtime adapters.
+description: Post-task harness evolution. Analyzes root causes, separates product/docs bugs from harness gaps, designs durable guardrails, emits dry-run proposals with stable IDs, and applies only explicitly approved updates to shared rules, skills, validators, learnings, bugs, and runtime adapters.
 ---
 
 # evolve

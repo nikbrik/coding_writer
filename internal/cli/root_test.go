@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/memory"
@@ -35,6 +37,126 @@ func moveRuntimeTaskToDone(t *testing.T, rt *runtime) app.TaskState {
 		t.Fatal(err)
 	}
 	return state
+}
+
+type blockingChatProvider struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+
+	mu        sync.Mutex
+	chatCalls int
+}
+
+func newBlockingChatProvider() *blockingChatProvider {
+	return &blockingChatProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+}
+
+func (p *blockingChatProvider) ListModels(ctx context.Context) ([]string, error) {
+	return []string{"fake/model"}, nil
+}
+
+func (p *blockingChatProvider) Complete(ctx context.Context, req providers.CompletionRequest) (providers.CompletionResponse, error) {
+	if req.Purpose != providers.PurposeChat {
+		return providers.NewFakeProvider().Complete(ctx, req)
+	}
+	p.mu.Lock()
+	p.chatCalls++
+	call := p.chatCalls
+	p.mu.Unlock()
+	if call == 1 {
+		p.once.Do(func() { close(p.started) })
+		select {
+		case <-ctx.Done():
+			return providers.CompletionResponse{}, ctx.Err()
+		case <-p.release:
+		}
+	}
+	return providers.CompletionResponse{
+		Message: app.ChatMessage{
+			ID:      app.NewID("msg"),
+			Role:    app.RoleAssistant,
+			Content: `{"stage":"execution","summary":"trusted evidence accepted","deliverable":"prepared output","current_step":"review trusted evidence","completed_steps":["review trusted evidence"],"next_step":"","changed_artifacts":["artifact.txt"],"verification":["go version"],"blockers":[],"next_signal":"ready_for_validation"}`,
+		},
+		Model:      req.Model,
+		ProviderID: "blocking_fake",
+	}, nil
+}
+
+func (p *blockingChatProvider) ChatCalls() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.chatCalls
+}
+
+func TestChatTurnsSerializeAndBlockStaleStateMutation(t *testing.T) {
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "off")
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := newBlockingChatProvider()
+	rt.Provider = provider
+	if _, err := rt.Tasks.Start("serialize terminal turn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.MoveWithPlanningOutput("verify task", []string{"trusted evidence is reviewed"}, []string{"review trusted evidence"}, nil, app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := runChatExchange(context.Background(), rt, "session_overlap", "continue execution", false, true, "go version")
+		firstErr <- err
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first turn did not reach provider")
+	}
+
+	secondErr := make(chan error, 1)
+	go func() {
+		_, err := runChatExchange(context.Background(), rt, "session_overlap", "verify and finish", false, true, "")
+		secondErr <- err
+	}()
+	select {
+	case err := <-secondErr:
+		t.Fatalf("second turn completed while first turn was still mutating state: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if calls := provider.ChatCalls(); calls != 1 {
+		t.Fatalf("overlapping turn reached provider before lock release; chat calls=%d", calls)
+	}
+
+	close(provider.release)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first turn failed: %v", err)
+	}
+	if err := <-secondErr; err != nil {
+		t.Fatalf("second turn should act on fresh post-first state, got %v", err)
+	}
+	if calls := provider.ChatCalls(); calls != 1 {
+		t.Fatalf("fresh queued second turn should not call stale execution provider, chat calls=%d", calls)
+	}
+	state, err := rt.Tasks.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Stage != app.StageDone {
+		t.Fatalf("queued turns should complete task without stale execution mutation, got stage %s", state.Stage)
+	}
+	_, err = runChatExchange(context.Background(), rt, "session_overlap", "implement another change", false, true, "")
+	if app.AsError(err).Code != "task_done" {
+		t.Fatalf("terminal task should reject later mutation, got %v", err)
+	}
+	if calls := provider.ChatCalls(); calls != 1 {
+		t.Fatalf("terminal mutation attempt should not call provider, chat calls=%d", calls)
+	}
 }
 
 func TestChatOnceRenderPromptJSONUsesFakeProviderAndProfile(t *testing.T) {
