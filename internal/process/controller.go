@@ -1018,6 +1018,12 @@ func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedPr
 		autoReason = "planning intent started task"
 		stage = app.StagePlanning
 	}
+	if taskPtr != nil && taskPtr.Status == app.TaskStatusPaused && action == ActionPlanTask {
+		autoStartTitle = taskTitleFromPlanningIntent(input.Input)
+		autoReason = "planning intent started new task from paused task"
+		taskPtr = nil
+		stage = app.StagePlanning
+	}
 	if taskPtr != nil && taskPtr.Stage == app.StageExecution && action == ActionPlanTask {
 		autoStage = app.StagePlanning
 		autoReason = "planning intent requires planning stage"

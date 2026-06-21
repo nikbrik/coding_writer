@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -77,32 +77,37 @@ type Model struct {
 	width  int
 	height int
 
-	input    textinput.Model
+	input    textarea.Model
 	timeline viewport.Model
 	spinner  spinner.Model
 	active   Pane
 	busy     bool
 
-	task             *app.TaskState
-	proposal         *app.MemoryProposal
-	evidence         []EvidenceView
-	events           []timelineEvent
-	audit            []process.ProcessAuditEvent
-	warnings         []string
-	appliedArtifacts []string
-	contextExpanded  bool
-	err              *app.Error
-	modelPicker      *modelPickerState
-	contextPicker    *contextPickerState
-	slashCursor      int
+	task               *app.TaskState
+	proposal           *app.MemoryProposal
+	evidence           []EvidenceView
+	events             []timelineEvent
+	audit              []process.ProcessAuditEvent
+	warnings           []string
+	appliedArtifacts   []string
+	contextExpanded    bool
+	timelineAnchorTop  bool
+	timelineAnchorLine int
+	timelineAnchorSet  bool
+	lastUserInput      string
+	err                *app.Error
+	modelPicker        *modelPickerState
+	contextPicker      *contextPickerState
+	slashCursor        int
 }
 
 type initialLoadedMsg struct {
-	mode     string
-	task     *app.TaskState
-	audit    []process.ProcessAuditEvent
-	proposal *app.MemoryProposal
-	err      error
+	mode       string
+	task       *app.TaskState
+	audit      []process.ProcessAuditEvent
+	proposal   *app.MemoryProposal
+	transcript []TranscriptEntry
+	err        error
 }
 
 type exchangeFinishedMsg struct {
@@ -145,18 +150,22 @@ type favoriteToggledMsg struct {
 
 func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) error {
 	m := NewModel(ctx, backend)
-	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen()}
+	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out)}
 	_, err := tea.NewProgram(m, opts...).Run()
 	return err
 }
 
 func NewModel(ctx context.Context, backend Backend) Model {
-	ti := textinput.New()
+	ti := textarea.New()
 	ti.Focus()
 	ti.Prompt = "> "
-	ti.Placeholder = "Опишите задачу..."
+	ti.ShowLineNumbers = false
+	ti.EndOfBufferCharacter = ' '
+	ti.Placeholder = "Type a task..."
 	ti.CharLimit = 4096
-	ti.Width = 80
+	ti.MaxHeight = 6
+	ti.SetWidth(80)
+	ti.SetHeight(1)
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Line
@@ -178,7 +187,7 @@ func NewModel(ctx context.Context, backend Backend) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadInitial(), m.spinner.Tick)
+	return tea.Batch(tea.ClearScreen, m.loadInitial(), m.spinner.Tick)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -203,9 +212,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.proposal = msg.proposal
 		switch msg.mode {
 		case "history":
+			m.events = nil
 			m.contextExpanded = true
-			m.appendResumeState()
-			m.appendStartupAudit(m.audit)
+			if len(msg.transcript) > 0 {
+				m.appendTranscript(msg.transcript)
+			} else {
+				m.appendResumeState()
+				m.appendStartupAudit(m.audit)
+			}
+			m.timelineAnchorTop = true
 			if m.proposal != nil && pendingProposalRecords(*m.proposal) > 0 {
 				m.appendEvent("memory", stageOfTask(m.task), "pending memory proposal", fmt.Sprintf("%d records", pendingProposalRecords(*m.proposal)), "info")
 			}
@@ -226,6 +241,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.err = nil
 		m.applyResponse(msg.resp)
+		if shouldAutoContinueAfterPlanningApproval(msg.resp) {
+			m.busy = true
+			m.input.Blur()
+			m.appendEvent("system", stageOfTask(m.task), "execution started", "approved plan is running", "info")
+			cmds = append(cmds, m.runExchange(executionContinuationInput()))
+		}
 	case slashFinishedMsg:
 		m.busy = false
 		m.input.SetValue("")
@@ -308,6 +329,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelPicker.favorites = favoriteMap(msg.config.FavoriteModels)
 			m.modelPicker.rebuild()
 		}
+	case tea.MouseMsg:
+		if m.contextPicker == nil && m.modelPicker == nil && isMouseWheel(msg) && m.mouseScrollsTimeline(msg) {
+			var cmd tea.Cmd
+			m.timeline, cmd = m.timeline.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
 	case tea.KeyMsg:
 		if m.contextPicker != nil {
 			next, cmd := m.updateContextPicker(msg)
@@ -345,6 +375,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.moveSlashCursor(1)
 				break
 			}
+		case "pgup", "ctrl+u":
+			if m.active == PaneTimeline {
+				m.timeline.ViewUp()
+				break
+			}
+		case "pgdown", "ctrl+d":
+			if m.active == PaneTimeline {
+				m.timeline.ViewDown()
+				break
+			}
+		case "home":
+			if m.active == PaneTimeline && m.input.Value() == "" {
+				m.timeline.GotoTop()
+				break
+			}
+		case "end":
+			if m.active == PaneTimeline && m.input.Value() == "" {
+				m.timeline.GotoBottom()
+				break
+			}
 		case "tab":
 			m.active = (m.active + 1) % 5
 		case "shift+tab":
@@ -359,15 +409,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.approvePlan())
 				} else if m.hasPendingMemory() {
 					cmds = append(cmds, m.applyMemory(true))
+				} else if m.canContinueExecution() {
+					m.busy = true
+					m.input.Blur()
+					m.appendEvent("system", stageOfTask(m.task), "execution continued", "running next approved step", "info")
+					cmds = append(cmds, m.runExchange(executionContinuationInput()))
 				}
 				break
 			}
 			if text == "/exit" || text == "/quit" {
 				return m, tea.Quit
 			}
-			m.appendEvent("user", stageOfTask(m.task), "user input", text, "info")
+			if !strings.HasPrefix(text, "/") {
+				m.lastUserInput = text
+				m.anchorNextTimelineEvent()
+				m.appendUserEvent(text)
+			} else {
+				m.appendEvent("user", stageOfTask(m.task), "command", text, "info")
+			}
 			m.busy = true
 			m.input.Blur()
+			m.input.SetValue("")
 			if text == "/model" {
 				m.modelPicker = newModelPickerState(ModelCatalog{
 					Models:    fallbackModelIDs(),
@@ -412,7 +474,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		m.clampSlashCursor()
 	}
-	m.updateViewport()
+	m.resize()
 	return m, tea.Batch(cmds...)
 }
 
@@ -447,18 +509,43 @@ func (m Model) View() string {
 }
 
 func (m *Model) resize() {
-	inputHeight := 1
+	inputHeight := m.inputHeight()
 	headerHeight := 2
 	footerHeight := 1
 	bodyHeight := max(4, m.height-headerHeight-footerHeight-inputHeight)
-	m.input.Width = max(20, m.width-2)
+	m.input.SetWidth(max(20, m.width-2))
+	m.input.SetHeight(inputHeight)
 	m.timeline.Width = max(20, m.width-2)
 	m.timeline.Height = bodyHeight
 	m.updateViewport()
 }
 
+func isMouseWheel(msg tea.MouseMsg) bool {
+	return msg.Action == tea.MouseActionPress && (msg.Button == tea.MouseButtonWheelUp || msg.Button == tea.MouseButtonWheelDown)
+}
+
+func (m Model) mouseScrollsTimeline(msg tea.MouseMsg) bool {
+	return m.active == PaneTimeline
+}
+
+func (m Model) inputHeight() int {
+	width := max(1, m.width-6)
+	value := m.input.Value()
+	if value == "" {
+		return 1
+	}
+	lines := strings.Split(value, "\n")
+	height := 0
+	for _, line := range lines {
+		lineWidth := len([]rune(line))
+		height += max(1, (lineWidth+width-1)/width)
+	}
+	return min(max(1, height), 6)
+}
+
 func (m Model) headerView() string {
 	cfg := m.backend.Config()
+	build := m.backend.BuildInfo()
 	task := "none"
 	stage := "-"
 	expected := "-"
@@ -474,8 +561,8 @@ func (m Model) headerView() string {
 		busy = " " + m.spinner.View() + " model call"
 	}
 	title := styleTitle().Render("codingwriter")
-	line := fmt.Sprintf("%s | model=%s | profile=%s | task=%s | stage=%s | expected=%s | status=%s%s",
-		title, emptyDash(cfg.ActiveModel), emptyDash(cfg.ActiveProfileID), task, stage, expected, status, busy)
+	line := fmt.Sprintf("%s %s | model=%s | profile=%s | task=%s | stage=%s | expected=%s | status=%s%s",
+		title, shortBuildVersion(build), emptyDash(cfg.ActiveModel), emptyDash(cfg.ActiveProfileID), task, stage, expected, status, busy)
 	return trimWidth(line, m.width) + "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Render(strings.Repeat("─", max(1, m.width)))
 }
 
@@ -483,7 +570,11 @@ func (m Model) bodyView() string {
 	if m.width >= 120 {
 		leftW := m.width * 60 / 100
 		rightW := m.width - leftW - 1
-		left := lipgloss.NewStyle().Width(leftW).Height(m.timeline.Height).Render(m.timeline.View())
+		leftText := m.timeline.View()
+		if strings.TrimSpace(leftText) == "" {
+			leftText = m.timelineFallbackView(leftW)
+		}
+		left := lipgloss.NewStyle().Width(leftW).Height(m.timeline.Height).Render(leftText)
 		right := lipgloss.NewStyle().Width(rightW).Height(m.timeline.Height).Render(m.sidebarView(rightW))
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, "│", right)
 	}
@@ -497,19 +588,39 @@ func (m Model) bodyView() string {
 	case PaneFiles:
 		return m.filesView(m.width)
 	default:
-		return m.timeline.View()
+		view := m.timeline.View()
+		if strings.TrimSpace(view) == "" {
+			return m.timelineFallbackView(m.width)
+		}
+		return view
 	}
+}
+
+func (m Model) timelineFallbackView(width int) string {
+	title, detail := m.nextAction()
+	lines := []string{
+		fmt.Sprintf("%s %s", renderEventPrefix(timelineEvent{Kind: "next", Stage: stageOfTask(m.task)}), eventTitleStyle(timelineEvent{Kind: "next"}).Render(title)),
+	}
+	if detail != "" {
+		lines = append(lines, wrap(eventSummaryStyle(timelineEvent{Kind: "next"}).Render(detail), max(20, width-2))...)
+	}
+	if m.task != nil && m.task.ID != "" {
+		lines = append(lines, fmt.Sprintf("task: %s | stage=%s | expected=%s | status=%s", shortID(m.task.ID), m.task.Stage, m.task.ExpectedAction, m.task.Status))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) sidebarView(width int) string {
 	if !m.contextExpanded {
 		return strings.Join([]string{
 			m.statusView(width),
+			m.nextActionView(width),
 			m.freshChatView(width),
 		}, "\n")
 	}
 	sections := []string{
 		m.statusView(width),
+		m.nextActionView(width),
 		m.planView(width),
 		m.evidenceView(width),
 		m.memoryView(width),
@@ -537,7 +648,7 @@ func (m Model) footerView() string {
 	} else if m.hasPendingMemory() {
 		approval = " | memory: a accept all, r reject all"
 	}
-	line := fmt.Sprintf("tab pane=%s | enter send | /exit quit | p pause/resume%s", pane, approval)
+	line := fmt.Sprintf("tab pane=%s | pgup/pgdown scroll | home/end top/bottom | enter send | /exit quit | p pause/resume%s", pane, approval)
 	if m.err != nil && m.err.Hint != "" {
 		line += " | hint: " + m.err.Hint
 	}
@@ -599,8 +710,10 @@ func (m *Model) clampSlashCursor() {
 
 func (m Model) statusView(width int) string {
 	cfg := m.backend.Config()
+	build := m.backend.BuildInfo()
 	lines := []string{section("Status")}
 	lines = append(lines,
+		"version: "+shortBuildVersion(build),
 		"storage: "+emptyDash(m.backend.StorageDir()),
 		"model: "+emptyDash(cfg.ActiveModel),
 		"profile: "+emptyDash(cfg.ActiveProfileID),
@@ -608,6 +721,9 @@ func (m Model) statusView(width int) string {
 		"started: "+tuiSessionTime(m.startedAt),
 		fmt.Sprintf("latest audit: %d", len(m.audit)),
 	)
+	if strings.TrimSpace(m.lastUserInput) != "" {
+		lines = append(lines, "last input: "+truncate(safe(m.lastUserInput), 120))
+	}
 	if m.task == nil || m.task.ID == "" {
 		lines = append(lines, "task: none", "stage: -", "expected: -")
 		return boxed(width, lines)
@@ -637,6 +753,18 @@ func (m Model) statusView(width int) string {
 		lines = append(lines, fmt.Sprintf("pending memory: %d", pendingProposalRecords(*m.proposal)))
 	}
 	return boxed(width, lines)
+}
+
+func shortBuildVersion(info BuildInfo) string {
+	version := strings.TrimSpace(info.Version)
+	if version == "" {
+		version = "dev"
+	}
+	commit := strings.TrimSpace(info.Commit)
+	if commit == "" || commit == "unknown" {
+		return "v" + version
+	}
+	return "v" + version + "+" + shortID(commit)
 }
 
 func matchingSlashCommands(query string) []slashCommandItem {
@@ -751,6 +879,7 @@ func slashCommandCatalog() []slashCommandItem {
 		{Command: "/clear short", Description: "clear current chat memory"},
 		{Command: "/privacy", Description: "show privacy/storage summary"},
 		{Command: "/process audit", Description: "show process audit"},
+		{Command: "/help", Description: "show available commands"},
 		{Command: "/exit", Description: "quit TUI"},
 	}
 }
@@ -766,6 +895,94 @@ func (m Model) freshChatView(width int) string {
 		lines = append(lines, "current task/work is preserved")
 	}
 	return boxed(width, lines)
+}
+
+func (m Model) nextActionView(width int) string {
+	title, detail := m.nextAction()
+	lines := []string{section("Next action"), title}
+	if strings.TrimSpace(detail) != "" {
+		lines = append(lines, detail)
+	}
+	return boxed(width, lines)
+}
+
+func (m Model) nextAction() (string, string) {
+	if m.busy {
+		return "Wait for model response.", ""
+	}
+	if m.contextPicker != nil {
+		return "Choose an item.", "Use arrows, then Enter."
+	}
+	if m.modelPicker != nil {
+		return "Choose model.", "Type to filter, Enter to select."
+	}
+	if m.hasPendingPlan() {
+		return "Review pending plan.", "Press a to approve, r to reject."
+	}
+	if m.hasPendingMemory() {
+		return "Review memory proposal.", "Press a to accept all, r to reject all."
+	}
+	if m.task != nil && m.task.Status == app.TaskStatusPaused {
+		return "Task is paused.", "Press p to resume, or type a new task."
+	}
+	if m.task != nil && m.task.Stage == app.StagePlanning {
+		return "Continue planning.", "Answer the question, or type approval."
+	}
+	if m.task != nil && m.task.Stage == app.StageExecution {
+		if m.executionContinuationFailed() {
+			return "Execution blocked.", "Provider output failed validation; revise the instruction or inspect /process audit."
+		}
+		if m.task.ExpectedAction == app.ExpectedLLMResponse {
+			return "Continue execution.", "Press Enter to run the next approved step."
+		}
+		return "Continue execution.", "Send the next instruction."
+	}
+	if m.task != nil && m.task.Stage == app.StageValidation {
+		return "Validate result.", "Send validation feedback or final approval."
+	}
+	if m.task != nil && m.task.Stage == app.StageDone {
+		return "Task is done.", "Type /new for a new chat or /task for saved tasks."
+	}
+	return "Type a coding task.", "Use /help or / for commands."
+}
+
+func (m Model) canContinueExecution() bool {
+	return m.task != nil && m.task.Stage == app.StageExecution && m.task.Status != app.TaskStatusPaused && m.task.ExpectedAction == app.ExpectedLLMResponse && !m.executionContinuationFailed()
+}
+
+func (m Model) executionContinuationFailed() bool {
+	if m.err != nil && m.err.Code == "validation_failed" {
+		return true
+	}
+	return hasExecutionContinuationFailure(m.warnings)
+}
+
+func shouldAutoContinueAfterPlanningApproval(resp ChatResponse) bool {
+	if resp.Transition == nil || !resp.Transition.Moved || resp.Transition.From != app.StagePlanning || resp.Transition.To != app.StageExecution {
+		return false
+	}
+	if resp.Task == nil || resp.Task.Stage != app.StageExecution || resp.Task.Status == app.TaskStatusPaused {
+		return false
+	}
+	if hasExecutionContinuationFailure(resp.Warnings) {
+		return false
+	}
+	return strings.TrimSpace(resp.Answer) == "planning proposal approved"
+}
+
+func hasExecutionContinuationFailure(warnings []string) bool {
+	for _, warning := range warnings {
+		normalized := strings.ToLower(strings.TrimSpace(warning))
+		if strings.Contains(normalized, "execution continuation skipped: validation_failed") ||
+			strings.Contains(normalized, "execution auto-continue stopped: validation_failed") {
+			return true
+		}
+	}
+	return false
+}
+
+func executionContinuationInput() string {
+	return "Продолжай выполнение следующего шага утвержденного плана автоматически. Не жди дополнительной команды пользователя."
 }
 
 func (m Model) planView(width int) string {
@@ -892,6 +1109,9 @@ func (m *Model) loadSessionContext(sessionID string) tea.Cmd {
 		}
 		if audit, err := m.backend.LatestAudit(80); err == nil {
 			msg.audit = filterAuditForStartup(audit, msg.task, sessionID)
+		}
+		if transcript, err := m.backend.Transcript(m.ctx, sessionID); err == nil {
+			msg.transcript = transcript
 		}
 		if proposal, ok, err := m.backend.LatestPendingProposal(m.ctx, sessionID); err == nil && ok {
 			msg.proposal = &proposal
@@ -1072,7 +1292,7 @@ func (m *Model) applyResponse(resp ChatResponse) {
 	m.audit = resp.AuditEvents
 	m.warnings = append(m.warnings, resp.Warnings...)
 	m.appliedArtifacts = appendUnique(m.appliedArtifacts, resp.AppliedArtifacts...)
-	m.appendEvent("assistant", stageOfTask(m.task), "assistant answer", summarizeAnswer(resp.Answer), "info")
+	m.appendResponseAuditSummary(resp.AuditEvents)
 	if resp.Transition != nil {
 		m.appendEvent("transition", resp.Transition.To, "transition", fmt.Sprintf("%s -> %s: %s", resp.Transition.From, resp.Transition.To, resp.Transition.Reason), "info")
 	}
@@ -1082,10 +1302,20 @@ func (m *Model) applyResponse(resp ChatResponse) {
 	for _, file := range resp.AppliedArtifacts {
 		m.appendEvent("files", stageOfTask(m.task), "applied file", file, "info")
 	}
-	for _, event := range resp.AuditEvents {
-		m.appendAuditEvent(event)
+	if summary := summarizeAnswer(resp.Answer); summary != "" {
+		m.appendEvent("assistant", stageOfTask(m.task), "assistant answer", summary, "info")
 	}
+	title, detail := m.nextAction()
+	m.appendEvent("next", stageOfTask(m.task), title, detail, "info")
 	m.refreshEvidence()
+}
+
+func (m *Model) appendResponseAuditSummary(events []process.ProcessAuditEvent) {
+	if len(events) == 0 {
+		return
+	}
+	last := events[len(events)-1]
+	m.appendEvent("audit", last.Stage, "audit summary", startupAuditSummary(events, last), auditSeverity(last))
 }
 
 func (m *Model) rebuildFromState() {
@@ -1148,6 +1378,26 @@ func (m *Model) appendResumeState() {
 	}
 	parts = append(parts, fmt.Sprintf("loaded audit=%d", len(m.audit)))
 	m.appendEvent("startup", stage, "chat resumed", strings.Join(parts, " | "), "info")
+}
+
+func (m *Model) appendTranscript(entries []TranscriptEntry) {
+	for _, entry := range entries {
+		content := strings.TrimSpace(entry.Content)
+		if content == "" {
+			continue
+		}
+		switch entry.Role {
+		case app.RoleUser:
+			title := "you: " + truncate(safe(content), 96)
+			summary := ""
+			if len([]rune(content)) > 96 {
+				summary = content
+			}
+			m.events = append(m.events, timelineEvent{At: entry.CreatedAt, Kind: "user", Stage: stageOfTask(m.task), Title: title, Summary: summary, Severity: "info"})
+		case app.RoleAssistant:
+			m.events = append(m.events, timelineEvent{At: entry.CreatedAt, Kind: "assistant", Stage: stageOfTask(m.task), Title: "assistant answer", Summary: summarizeAnswer(content), Severity: "info"})
+		}
+	}
 }
 
 func filterAuditForStartup(events []process.ProcessAuditEvent, task *app.TaskState, sessionID string) []process.ProcessAuditEvent {
@@ -1247,6 +1497,16 @@ func (m *Model) appendEvent(kind string, stage app.TaskStage, title, summary, se
 	m.events = append(m.events, timelineEvent{At: time.Now().UTC(), Kind: kind, Stage: stage, Title: title, Summary: summary, Severity: severity})
 }
 
+func (m *Model) appendUserEvent(text string) {
+	clean := safe(text)
+	title := "you: " + truncate(clean, 96)
+	summary := ""
+	if len([]rune(clean)) > 96 {
+		summary = clean
+	}
+	m.appendEvent("user", stageOfTask(m.task), title, summary, "info")
+}
+
 func (m *Model) appendAuditEvent(event process.ProcessAuditEvent) {
 	title := event.Decision
 	if event.AgentRole != "" {
@@ -1263,20 +1523,39 @@ func (m *Model) appendAuditEvent(event process.ProcessAuditEvent) {
 }
 
 func (m *Model) updateViewport() {
+	wasAtBottom := m.timeline.AtBottom()
+	lines := m.renderTimelineLines(m.events)
+	if len(lines) == 0 {
+		lines = append(lines, "Опишите coding task. План, progress, files и evidence появятся здесь.")
+	}
+	m.timeline.SetContent(strings.Join(lines, "\n"))
+	if m.timelineAnchorTop {
+		m.timeline.GotoTop()
+		m.timelineAnchorTop = false
+	} else if m.timelineAnchorSet {
+		m.timeline.SetYOffset(m.timelineAnchorLine)
+		m.timelineAnchorSet = false
+	} else if wasAtBottom || m.timeline.PastBottom() {
+		m.timeline.GotoBottom()
+	}
+	m.input.Placeholder = placeholder(m.task)
+}
+
+func (m *Model) anchorNextTimelineEvent() {
+	m.timelineAnchorLine = len(m.renderTimelineLines(m.events))
+	m.timelineAnchorSet = true
+}
+
+func (m Model) renderTimelineLines(events []timelineEvent) []string {
 	lines := []string{}
-	for _, ev := range m.events {
+	for _, ev := range events {
 		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
 		if ev.Summary != "" {
 			summary := eventSummaryStyle(ev).Render(safe(ev.Summary))
 			lines = append(lines, wrap(summary, max(20, m.timeline.Width-2))...)
 		}
 	}
-	if len(lines) == 0 {
-		lines = append(lines, "Опишите coding task. План, progress, files и evidence появятся здесь.")
-	}
-	m.timeline.SetContent(strings.Join(lines, "\n"))
-	m.timeline.GotoBottom()
-	m.input.Placeholder = placeholder(m.task)
+	return lines
 }
 
 func auditSeverity(event process.ProcessAuditEvent) string {
@@ -1951,41 +2230,70 @@ func summarizeAnswer(answer string) string {
 		}
 		var obj map[string]any
 		if json.Unmarshal([]byte(part), &obj) == nil {
-			fields := []string{}
-			for _, key := range []string{"stage", "summary", "current_step", "readiness", "next_signal", "verdict"} {
-				if value, ok := obj[key]; ok && fmt.Sprint(value) != "" {
-					fields = append(fields, fmt.Sprintf("%s=%s", key, fmt.Sprint(value)))
-				}
-			}
-			if deliverable, ok := obj["deliverable"].(string); ok && deliverable != "" {
-				fields = append(fields, "deliverable="+truncate(deliverable, 240))
-			}
-			if len(fields) > 0 {
-				out = append(out, strings.Join(fields, " | "))
+			if summary := userFacingJSONSummary(obj); summary != "" {
+				out = append(out, summary)
 				continue
 			}
+			out = append(out, "Structured response received.")
+			continue
 		}
-		out = append(out, truncate(part, 600))
+		if looksLikeStructuredAnswer(part) {
+			out = append(out, "Structured response received.")
+			continue
+		}
+		out = append(out, part)
 	}
 	return strings.Join(out, "\n")
 }
 
+func userFacingJSONSummary(obj map[string]any) string {
+	lines := []string{}
+	for _, key := range []string{"summary", "verdict"} {
+		if value, ok := obj[key]; ok && strings.TrimSpace(fmt.Sprint(value)) != "" {
+			lines = append(lines, truncate(strings.TrimSpace(fmt.Sprint(value)), 360))
+			break
+		}
+	}
+	if deliverable, ok := obj["deliverable"].(string); ok && strings.TrimSpace(deliverable) != "" {
+		lines = append(lines, "Deliverable prepared.")
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+func looksLikeStructuredAnswer(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+		return true
+	}
+	lower := strings.ToLower(trimmed)
+	signals := 0
+	for _, marker := range []string{"stage=", "summary=", "current_step=", "next_signal=", "deliverable="} {
+		if strings.Contains(lower, marker) {
+			signals++
+		}
+	}
+	return signals >= 2
+}
+
 func placeholder(task *app.TaskState) string {
 	if task == nil || task.ID == "" {
-		return "Опишите задачу..."
+		return "Type a task..."
 	}
 	if task.PendingPlanning != nil {
-		return "Подтвердите план или напишите правки..."
+		return "Approve plan or type changes..."
 	}
 	switch task.Stage {
 	case app.StageExecution:
-		return "Следующее действие..."
+		return "Next action..."
 	case app.StageValidation:
-		return "Попросите проверить или завершить..."
+		return "Ask to verify or finish..."
 	case app.StageDone:
-		return "Новая задача..."
+		return "New task..."
 	default:
-		return "Опишите следующий шаг..."
+		return "Type the next step..."
 	}
 }
 
@@ -2052,7 +2360,7 @@ func safe(text string) string {
 }
 
 func wrap(text string, width int) []string {
-	if width <= 0 || len(text) <= width {
+	if width <= 0 || len([]rune(text)) <= width {
 		return []string{text}
 	}
 	words := strings.Fields(text)
@@ -2066,7 +2374,7 @@ func wrap(text string, width int) []string {
 			current = word
 			continue
 		}
-		if len(current)+1+len(word) > width {
+		if len([]rune(current))+1+len([]rune(word)) > width {
 			lines = append(lines, current)
 			current = word
 		} else {
@@ -2080,13 +2388,14 @@ func wrap(text string, width int) []string {
 }
 
 func trimWidth(text string, width int) string {
-	if width <= 0 || len(text) <= width {
+	runes := []rune(text)
+	if width <= 0 || len(runes) <= width {
 		return text
 	}
 	if width <= 1 {
-		return text[:width]
+		return string(runes[:width])
 	}
-	return text[:width-1] + "…"
+	return string(runes[:width-1]) + "…"
 }
 
 func shortID(id string) string {

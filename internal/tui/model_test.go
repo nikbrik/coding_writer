@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,8 +18,10 @@ import (
 
 type fakeBackend struct {
 	config     app.AppConfig
+	build      BuildInfo
 	task       *app.TaskState
 	proposal   *app.MemoryProposal
+	transcript []TranscriptEntry
 	audit      []process.ProcessAuditEvent
 	auditCalls int
 	responses  []ChatResponse
@@ -28,12 +31,21 @@ type fakeBackend struct {
 }
 
 func (f *fakeBackend) Config() app.AppConfig { return f.config }
-func (f *fakeBackend) StorageDir() string    { return "/tmp/fake" }
+func (f *fakeBackend) BuildInfo() BuildInfo {
+	if f.build.Version == "" {
+		return BuildInfo{Version: "0.1.0", Commit: "testcommit"}
+	}
+	return f.build
+}
+func (f *fakeBackend) StorageDir() string { return "/tmp/fake" }
 func (f *fakeBackend) CurrentTask() (app.TaskState, bool, error) {
 	if f.task == nil {
 		return app.TaskState{}, false, nil
 	}
 	return *f.task, true, nil
+}
+func (f *fakeBackend) Transcript(ctx context.Context, sessionID string) ([]TranscriptEntry, error) {
+	return append([]TranscriptEntry(nil), f.transcript...), nil
 }
 func (f *fakeBackend) LatestAudit(limit int) ([]process.ProcessAuditEvent, error) {
 	f.auditCalls++
@@ -155,7 +167,8 @@ func TestModelExchangeUpdatesCodingWorkspaceView(t *testing.T) {
 	m := NewModel(context.Background(), fake)
 	m.width = 120
 	m.height = 40
-	m.input.SetValue("Спланируй задачу")
+	userInput := "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go"
+	m.input.SetValue(userInput)
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
@@ -166,13 +179,137 @@ func TestModelExchangeUpdatesCodingWorkspaceView(t *testing.T) {
 	next, _ = m.Update(msg)
 	m = next.(Model)
 	view := m.View()
-	for _, want := range []string{"codingwriter", "Status", "Plan", "Files", "plan ready", "applied:"} {
+	for _, want := range []string{"codingwriter", "Status", "Plan", "Files", "plan ready", "applied:", "last input:", "Contains Duplicate"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
 	}
 	if strings.Contains(view, `"stage"`) {
 		t.Fatalf("TUI leaked raw stage JSON:\n%s", view)
+	}
+}
+
+func TestSubmitClearsInputImmediately(t *testing.T) {
+	fake := &fakeBackend{
+		responses: []ChatResponse{{OK: true, Answer: "ok"}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.input.SetValue(strings.Repeat("длинный prompt ", 12))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("submit should start exchange")
+	}
+	if got := strings.TrimSpace(m.input.Value()); got != "" {
+		t.Fatalf("input should clear immediately, got %q", got)
+	}
+}
+
+func TestSubmitLongTaskAnchorsTimelineAtMessageBeginning(t *testing.T) {
+	fake := &fakeBackend{
+		responses: []ChatResponse{{OK: true, Answer: "ok"}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.width = 100
+	m.height = 8
+	m.resize()
+	for i := 0; i < 12; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("old event %02d", i), "stale", "info")
+	}
+	m.updateViewport()
+	m.timeline.GotoBottom()
+	longTask := "BEGIN_NEW_TASK Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. " +
+		strings.Repeat("Нужны tests для empty, single, duplicate positive, duplicate negative, no duplicate. ", 8) +
+		"END_NEW_TASK"
+	m.input.SetValue(longTask)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+
+	if !m.busy || cmd == nil {
+		t.Fatal("long task submit should start exchange")
+	}
+	view := m.View()
+	if !strings.Contains(view, "BEGIN_NEW_TASK") {
+		t.Fatalf("new chat did not show beginning of submitted task:\n%s", view)
+	}
+	for _, blocked := range []string{"END_NEW_TASK", "old event"} {
+		if strings.Contains(view, blocked) {
+			t.Fatalf("new chat viewport leaked %q instead of submitted task beginning:\n%s", blocked, view)
+		}
+	}
+}
+
+func TestExchangeCompactsAuditAndEndsWithNextAction(t *testing.T) {
+	task := app.TaskState{
+		ID:              "task_demo",
+		Title:           "Contains Duplicate",
+		Stage:           app.StagePlanning,
+		ExpectedAction:  app.ExpectedUserConfirmation,
+		Status:          app.TaskStatusActive,
+		PendingPlanning: &app.PlanningProposalState{ID: "plan_1", Summary: "plan", Plan: []string{"implement"}},
+	}
+	fake := &fakeBackend{
+		responses: []ChatResponse{{
+			OK:     true,
+			Answer: `{"stage":"planning","summary":"plan ready","readiness":"ready_for_execution_proposal"}`,
+			Task:   &task,
+			AuditEvents: []process.ProcessAuditEvent{
+				{Stage: app.StagePlanning, ActionKind: process.ActionPlanTask, Decision: "semantic_output_call"},
+				{Stage: app.StagePlanning, ActionKind: process.ActionPlanTask, Decision: "accepted"},
+				{Stage: app.StagePlanning, ActionKind: process.ActionPlanTask, Decision: "provider_call"},
+			},
+		}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.input.SetValue("plan task")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(cmd().(exchangeFinishedMsg))
+	m = next.(Model)
+
+	if len(m.events) == 0 || m.events[len(m.events)-1].Kind != "next" {
+		t.Fatalf("last event should be next action, got %#v", m.events)
+	}
+	if m.events[len(m.events)-1].Title != "Review pending plan." {
+		t.Fatalf("wrong next action: %#v", m.events[len(m.events)-1])
+	}
+	auditEvents := 0
+	for _, event := range m.events {
+		if event.Kind == "audit" {
+			auditEvents++
+		}
+		if event.Title == "semantic_output_call" || event.Title == "provider_call" {
+			t.Fatalf("raw audit event leaked into timeline: %#v", event)
+		}
+	}
+	if auditEvents != 1 {
+		t.Fatalf("audit should be compacted to one summary, got %d events: %#v", auditEvents, m.events)
+	}
+}
+
+func TestSummarizeAnswerHidesStructuredControlFields(t *testing.T) {
+	answerBytes, err := json.Marshal(map[string]any{
+		"stage":        "execution",
+		"summary":      "Implemented table-driven tests for ContainsDuplicate.",
+		"current_step": "Написать табличные тесты",
+		"next_signal":  "continue_execution",
+		"deliverable":  "### manual_scratch/day15_contains_duplicate/solution_test.go\n```go\npackage main\n```",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := summarizeAnswer(string(answerBytes))
+	for _, blocked := range []string{"stage=", "current_step=", "next_signal=", "deliverable=", "package main"} {
+		if strings.Contains(got, blocked) {
+			t.Fatalf("structured control field leaked %q in %q", blocked, got)
+		}
+	}
+	for _, want := range []string{"Implemented table-driven tests for ContainsDuplicate.", "Deliverable prepared."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary missing %q in %q", want, got)
+		}
 	}
 }
 
@@ -223,6 +360,114 @@ func TestPlanningApprovalShortcuts(t *testing.T) {
 		msg := cmd().(exchangeFinishedMsg)
 		if msg.err != nil {
 			t.Fatalf("approval command failed: %v", msg.err)
+		}
+	}
+}
+
+func TestPlanningApprovalOnlyAutoContinuesExecution(t *testing.T) {
+	executionTask := app.TaskState{
+		ID:             "task_exec",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedLLMResponse,
+		Status:         app.TaskStatusActive,
+	}
+	fake := &fakeBackend{}
+	m := NewModel(context.Background(), fake)
+	msg := exchangeFinishedMsg{resp: ChatResponse{
+		OK:     true,
+		Answer: "planning proposal approved",
+		Task:   &executionTask,
+		Transition: &process.TransitionResult{
+			Moved: true,
+			From:  app.StagePlanning,
+			To:    app.StageExecution,
+			State: executionTask,
+		},
+	}}
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("approval-only response should auto-continue execution")
+	}
+	finished := cmd().(exchangeFinishedMsg)
+	if !strings.Contains(finished.input, "Продолжай выполнение") {
+		t.Fatalf("wrong auto-continue input: %q", finished.input)
+	}
+	if len(m.events) == 0 || m.events[len(m.events)-1].Title != "execution started" {
+		t.Fatalf("missing execution started event: %#v", m.events)
+	}
+}
+
+func TestPlanningApprovalValidationFailureDoesNotAutoContinue(t *testing.T) {
+	executionTask := app.TaskState{
+		ID:             "task_exec",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedLLMResponse,
+		Status:         app.TaskStatusActive,
+	}
+	m := NewModel(context.Background(), &fakeBackend{})
+	msg := exchangeFinishedMsg{resp: ChatResponse{
+		OK:       true,
+		Answer:   "planning proposal approved",
+		Task:     &executionTask,
+		Warnings: []string{"execution continuation skipped: validation_failed"},
+		Transition: &process.TransitionResult{
+			Moved: true,
+			From:  app.StagePlanning,
+			To:    app.StageExecution,
+			State: executionTask,
+		},
+	}}
+	next, cmd := m.Update(msg)
+	m = next.(Model)
+	if m.busy || cmd != nil {
+		t.Fatalf("validation failure must not auto-continue: busy=%v cmd=%v", m.busy, cmd != nil)
+	}
+	title, detail := m.nextAction()
+	if title != "Execution blocked." || !strings.Contains(detail, "validation") {
+		t.Fatalf("wrong next action: title=%q detail=%q", title, detail)
+	}
+}
+
+func TestEmptyEnterContinuesExecutionWhenLLMResponseExpected(t *testing.T) {
+	task := app.TaskState{
+		ID:             "task_exec",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedLLMResponse,
+		Status:         app.TaskStatusActive,
+	}
+	fake := &fakeBackend{}
+	m := NewModel(context.Background(), fake)
+	m.task = &task
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("empty enter should continue execution")
+	}
+	finished := cmd().(exchangeFinishedMsg)
+	if !strings.Contains(finished.input, "Продолжай выполнение") {
+		t.Fatalf("wrong continuation input: %q", finished.input)
+	}
+}
+
+func TestEmptyEnterDoesNotContinueAfterValidationFailure(t *testing.T) {
+	task := app.TaskState{
+		ID:             "task_exec",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedLLMResponse,
+		Status:         app.TaskStatusActive,
+	}
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.task = &task
+	m.warnings = []string{"execution continuation skipped: validation_failed"}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.busy {
+		t.Fatal("empty enter must not loop after validation failure")
+	}
+	for _, event := range m.events {
+		if event.Title == "execution continued" {
+			t.Fatalf("unexpected execution continuation event: %#v", m.events)
 		}
 	}
 }
@@ -394,13 +639,16 @@ func TestSlashCompletionUsesFirstVisibleMatch(t *testing.T) {
 	}
 }
 
-func TestFreshStartupShowsActiveModelInStatus(t *testing.T) {
-	fake := &fakeBackend{config: app.AppConfig{ActiveModel: "openai/gpt-4.1-mini", ActiveProfileID: "student"}}
+func TestFreshStartupShowsActiveModelAndVersionInStatus(t *testing.T) {
+	fake := &fakeBackend{
+		config: app.AppConfig{ActiveModel: "openai/gpt-4.1-mini", ActiveProfileID: "student"},
+		build:  BuildInfo{Version: "1.2.3", Commit: "abcdef123456", BuildDate: "2026-06-21T10:00:00Z"},
+	}
 	m := NewModel(context.Background(), fake)
 	m.width = 120
 	m.height = 40
 	view := m.View()
-	for _, want := range []string{"model: openai/gpt-4.1-mini", "profile: student", "New chat"} {
+	for _, want := range []string{"codingwriter v1.2.3+abcdef123456", "version: v1.2.3+abcdef123456", "model: openai/gpt-4.1-mini", "profile: student", "New chat"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("fresh view missing %q:\n%s", want, view)
 		}
@@ -458,6 +706,194 @@ func TestModelPickerScrollsLongCatalog(t *testing.T) {
 	}
 	if !strings.Contains(view, "41/41") {
 		t.Fatalf("scroll position missing:\n%s", view)
+	}
+}
+
+func TestTimelineScrollsAndKeepsManualPosition(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 80
+	m.height = 10
+	m.resize()
+	for i := 0; i < 30; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), strings.Repeat("details ", 4), "info")
+	}
+	m.updateViewport()
+	if !strings.Contains(m.View(), "event-29") {
+		t.Fatalf("timeline did not start at bottom:\n%s", m.View())
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = next.(Model)
+	if !strings.Contains(m.View(), "event-00") {
+		t.Fatalf("home did not scroll to top:\n%s", m.View())
+	}
+
+	m.appendEvent("audit", app.StagePlanning, "event-30", "new event", "info")
+	m.updateViewport()
+	if !strings.Contains(m.View(), "event-00") || strings.Contains(m.View(), "event-30") {
+		t.Fatalf("manual scroll position was not preserved:\n%s", m.View())
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(Model)
+	if !strings.Contains(m.View(), "event-30") {
+		t.Fatalf("end did not scroll to bottom:\n%s", m.View())
+	}
+}
+
+func TestTimelineMouseWheelScrolls(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 140
+	m.height = 10
+	m.resize()
+	for i := 0; i < 30; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), strings.Repeat("details ", 3), "info")
+	}
+	m.updateViewport()
+	before := m.timeline.YOffset
+	next, _ := m.Update(tea.MouseMsg{X: 2, Y: 3, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = next.(Model)
+	if m.timeline.YOffset >= before {
+		t.Fatalf("mouse wheel did not scroll up: before=%d after=%d", before, m.timeline.YOffset)
+	}
+}
+
+func TestTimelineMouseWheelScrollsFromRightPane(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 140
+	m.height = 10
+	m.resize()
+	for i := 0; i < 30; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), strings.Repeat("details ", 3), "info")
+	}
+	m.updateViewport()
+	before := m.timeline.YOffset
+	next, _ := m.Update(tea.MouseMsg{X: 120, Y: 3, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = next.(Model)
+	if m.timeline.YOffset >= before {
+		t.Fatalf("right-pane wheel did not scroll timeline: before=%d after=%d", before, m.timeline.YOffset)
+	}
+}
+
+func TestTimelineResizeClampsPastBottom(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 80
+	m.height = 8
+	m.resize()
+	for i := 0; i < 12; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), "detail", "info")
+	}
+	m.updateViewport()
+	m.timeline.GotoBottom()
+	m.timeline.Height = 30
+	if !m.timeline.PastBottom() {
+		t.Fatal("test setup should put timeline past bottom")
+	}
+	m.height = 30
+	m.resize()
+	if m.timeline.PastBottom() {
+		t.Fatalf("resize left timeline past bottom: offset=%d", m.timeline.YOffset)
+	}
+	if strings.TrimSpace(m.timeline.View()) == "" {
+		t.Fatalf("timeline rendered blank after resize")
+	}
+}
+
+func TestTimelineShortContentDoesNotAddLeadingPadding(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 100
+	m.height = 20
+	m.resize()
+	m.appendEvent("assistant", app.StagePlanning, "assistant answer", "short answer", "info")
+	m.updateViewport()
+	lines := strings.Split(m.timeline.View(), "\n")
+	firstContent := -1
+	for i, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			firstContent = i
+			break
+		}
+	}
+	if firstContent != 0 {
+		t.Fatalf("short timeline content has leading padding, firstContent=%d view=\n%s", firstContent, m.timeline.View())
+	}
+}
+
+func TestTimelineBlankViewportFallsBackToNextAction(t *testing.T) {
+	task := app.TaskState{
+		ID:             "task_exec",
+		Stage:          app.StageExecution,
+		ExpectedAction: app.ExpectedLLMResponse,
+		Status:         app.TaskStatusActive,
+	}
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 140
+	m.height = 20
+	m.task = &task
+	m.timeline.SetContent("")
+	m.timeline.Height = 10
+
+	view := m.bodyView()
+	for _, want := range []string{"Continue execution.", "Press Enter to run the next approved step.", "task_exec"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("fallback view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestTrimAndWrapAreRuneSafe(t *testing.T) {
+	input := "Сигнатура функции ContainsDuplicate(nums []int) bool"
+	trimmed := trimWidth(input, 18)
+	if strings.Contains(trimmed, "�") || strings.Contains(trimmed, "?") {
+		t.Fatalf("trimWidth corrupted utf8: %q", trimmed)
+	}
+	for _, line := range wrap(input, 12) {
+		if strings.Contains(line, "�") || strings.Contains(line, "?") {
+			t.Fatalf("wrap corrupted utf8: %q", line)
+		}
+	}
+}
+
+func TestNextActionExplainsPendingPlan(t *testing.T) {
+	task := app.TaskState{
+		ID:              "task_plan",
+		Stage:           app.StagePlanning,
+		ExpectedAction:  app.ExpectedUserConfirmation,
+		Status:          app.TaskStatusActive,
+		PendingPlanning: &app.PlanningProposalState{ID: "plan_1", Summary: "plan", Plan: []string{"step"}},
+	}
+	m := NewModel(context.Background(), &fakeBackend{task: &task})
+	m.width = 140
+	m.height = 30
+	m.task = &task
+	m.contextExpanded = true
+	m.resize()
+
+	view := m.View()
+	for _, want := range []string{"Next action", "Review pending plan.", "Press a to approve, r to reject."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("next action view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestInputHeightExpandsForLongText(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 60
+	m.height = 20
+	m.resize()
+	if got := m.inputHeight(); got != 1 {
+		t.Fatalf("empty input height=%d want 1", got)
+	}
+	m.input.SetValue(strings.Repeat("длинный текст ", 12))
+	m.resize()
+	if got := m.inputHeight(); got <= 1 {
+		t.Fatalf("long input did not expand, height=%d", got)
+	}
+	m.input.SetValue(strings.Repeat("very long text ", 200))
+	m.resize()
+	if got := m.inputHeight(); got != 6 {
+		t.Fatalf("long input height=%d want max 6", got)
 	}
 }
 
@@ -534,6 +970,84 @@ func TestProfileNewPickerCreatesProfileFromInput(t *testing.T) {
 	m = next.(Model)
 	if fake.config.ActiveProfileID != "custom" {
 		t.Fatalf("profile not created/selected: %+v", fake.config)
+	}
+}
+
+func TestResumeLoadsFullTranscriptIntoTimeline(t *testing.T) {
+	fake := &fakeBackend{
+		config: app.AppConfig{ActiveProfileID: "student"},
+		transcript: []TranscriptEntry{
+			{Role: app.RoleUser, Content: "first user request", CreatedAt: time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)},
+			{Role: app.RoleAssistant, Content: "first assistant answer with full details", CreatedAt: time.Date(2026, 6, 21, 10, 1, 0, 0, time.UTC)},
+			{Role: app.RoleUser, Content: "second user request that must stay visible", CreatedAt: time.Date(2026, 6, 21, 10, 2, 0, 0, time.UTC)},
+			{Role: app.RoleAssistant, Content: "second assistant answer", CreatedAt: time.Date(2026, 6, 21, 10, 3, 0, 0, time.UTC)},
+		},
+	}
+	m := NewModel(context.Background(), fake)
+	m.appendEvent("user", "", "old current chat event", "must be cleared on resume", "info")
+	m.sessionID = "session_old"
+	msg := m.loadSessionContext("session_old")().(initialLoadedMsg)
+	next, _ := m.Update(msg)
+	m = next.(Model)
+	view := m.View()
+	for _, want := range []string{"first user request", "first assistant answer with full details", "second user request that must stay visible", "second assistant answer"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("resumed transcript missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "must be cleared on resume") {
+		t.Fatalf("resume mixed old current timeline with transcript:\n%s", view)
+	}
+}
+
+func TestResumeAnchorsLongTranscriptAtBeginning(t *testing.T) {
+	transcript := []TranscriptEntry{
+		{Role: app.RoleUser, Content: "BEGIN_CHAT_MARKER Спланируй и реши задачу полностью", CreatedAt: time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)},
+	}
+	for i := 0; i < 24; i++ {
+		transcript = append(transcript, TranscriptEntry{
+			Role:      app.RoleAssistant,
+			Content:   fmt.Sprintf("middle assistant event %02d with enough text to fill the viewport", i),
+			CreatedAt: time.Date(2026, 6, 21, 10, i+1, 0, 0, time.UTC),
+		})
+	}
+	transcript = append(transcript, TranscriptEntry{
+		Role:      app.RoleAssistant,
+		Content:   "END_CHAT_MARKER final answer at the bottom",
+		CreatedAt: time.Date(2026, 6, 21, 11, 0, 0, 0, time.UTC),
+	})
+	fake := &fakeBackend{
+		config:     app.AppConfig{ActiveProfileID: "student"},
+		transcript: transcript,
+		audit: []process.ProcessAuditEvent{
+			{SessionID: "session_old", Decision: "rejected", ValidatorErrors: []string{"ready_for_validation requires trusted evidence"}},
+		},
+	}
+	m := NewModel(context.Background(), fake)
+	m.width = 100
+	m.height = 10
+	m.resize()
+	for i := 0; i < 10; i++ {
+		m.appendEvent("audit", app.StageExecution, fmt.Sprintf("old event %02d", i), "stale", "info")
+	}
+	m.updateViewport()
+	m.timeline.GotoBottom()
+
+	msg := m.loadSessionContext("session_old")().(initialLoadedMsg)
+	next, _ := m.Update(msg)
+	m = next.(Model)
+
+	if m.timeline.YOffset != 0 {
+		t.Fatalf("resume should anchor transcript at top, got offset=%d", m.timeline.YOffset)
+	}
+	view := m.View()
+	if !strings.Contains(view, "BEGIN_CHAT_MARKER") {
+		t.Fatalf("resume did not show beginning of transcript:\n%s", view)
+	}
+	for _, blocked := range []string{"END_CHAT_MARKER", "old event", "restored audit history"} {
+		if strings.Contains(view, blocked) {
+			t.Fatalf("resume viewport leaked %q instead of chat beginning:\n%s", blocked, view)
+		}
 	}
 }
 

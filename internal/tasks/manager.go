@@ -61,7 +61,7 @@ func (m *Manager) Start(title string) (app.TaskState, error) {
 	if validation.HasSecret(title) {
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "secret_blocked", "secret-like task content cannot be saved", nil)
 	}
-	if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone {
+	if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone && current.State.Status != app.TaskStatusPaused {
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "task_already_exists", "a current task already exists; finish or archive it before starting a new one", nil)
 	}
 	now := time.Now().UTC()
@@ -770,7 +770,7 @@ func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnap
 			if err := m.ensureCurrentUnchanged(*expected); err != nil {
 				return err
 			}
-		} else if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone && current.State.ID != state.ID {
+		} else if current, err := m.currentSnapshot(); err == nil && current.State.Stage != app.StageDone && current.State.Status != app.TaskStatusPaused && current.State.ID != state.ID {
 			return app.NewError(app.CategoryValidation, "task_already_exists", "a current task already exists; finish or archive it before starting a new one", nil)
 		} else if err != nil {
 			appErr := app.AsError(err)

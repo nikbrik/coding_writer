@@ -255,6 +255,33 @@ func TestProcessControllerPausedTaskBlocksChat(t *testing.T) {
 	}
 }
 
+func TestProcessControllerPausedTaskAllowsNewPlanningTask(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	paused, err := ctrl.Tasks.Start("paused task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ctrl.Tasks.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	fake.ChatResponse = `{"stage":"planning","summary":"planning answer","assumptions":[],"acceptance_criteria":["tests pass"],"plan":["implement contains duplicate"],"open_questions":[],"readiness":"ready_for_execution_proposal"}`
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s_new", Input: "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Transition == nil || res.Transition.State.ID == paused.ID || !strings.Contains(res.Transition.State.Title, "Contains Duplicate") {
+		t.Fatalf("new planning task not started: %+v", res.Transition)
+	}
+	old, err := ctrl.Tasks.Get(paused.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Status != app.TaskStatusPaused {
+		t.Fatalf("old paused task not preserved: %+v", old)
+	}
+}
+
 func TestProcessControllerProcessGatePrecedesInvariantConflict(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

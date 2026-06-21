@@ -11,8 +11,10 @@ import (
 
 type Backend interface {
 	Config() app.AppConfig
+	BuildInfo() BuildInfo
 	StorageDir() string
 	CurrentTask() (app.TaskState, bool, error)
+	Transcript(ctx context.Context, sessionID string) ([]TranscriptEntry, error)
 	LatestAudit(limit int) ([]process.ProcessAuditEvent, error)
 	LatestPendingProposal(ctx context.Context, sessionID string) (app.MemoryProposal, bool, error)
 	ListModels(ctx context.Context) (ModelCatalog, error)
@@ -33,6 +35,12 @@ type Backend interface {
 	PauseTask() (app.TaskState, error)
 	ResumeTask() (app.TaskState, error)
 	Evidence(ctx context.Context, taskID, sessionID string, refs []string) ([]EvidenceView, error)
+}
+
+type BuildInfo struct {
+	Version   string
+	Commit    string
+	BuildDate string
 }
 
 type Options struct {
@@ -68,6 +76,12 @@ type ChatResponse struct {
 	Task             *app.TaskState
 	AuditEvents      []process.ProcessAuditEvent
 	RenderedPromptID string
+}
+
+type TranscriptEntry struct {
+	Role      app.ChatRole
+	Content   string
+	CreatedAt time.Time
 }
 
 type SlashResponse struct {

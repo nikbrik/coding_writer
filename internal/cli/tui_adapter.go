@@ -28,6 +28,10 @@ func (b *ChatBackend) Config() app.AppConfig {
 	return b.rt.Config
 }
 
+func (b *ChatBackend) BuildInfo() tui.BuildInfo {
+	return tui.BuildInfo{Version: Version, Commit: Commit, BuildDate: BuildDate}
+}
+
 func (b *ChatBackend) StorageDir() string {
 	if b == nil || b.rt == nil {
 		return ""
@@ -45,6 +49,27 @@ func (b *ChatBackend) CurrentTask() (app.TaskState, bool, error) {
 		return app.TaskState{}, false, err
 	}
 	return task, true, nil
+}
+
+func (b *ChatBackend) Transcript(ctx context.Context, sessionID string) ([]tui.TranscriptEntry, error) {
+	records, err := b.rt.Memory.List(ctx, app.LayerShort, sessionID, "")
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Code == "session_missing" || appErr.Code == "memory_read" {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]tui.TranscriptEntry, 0, len(records))
+	for _, record := range records {
+		switch record.Kind {
+		case "history_user", "message_user":
+			out = append(out, tui.TranscriptEntry{Role: app.RoleUser, Content: record.Content, CreatedAt: record.CreatedAt})
+		case "history_assistant", "message_assistant":
+			out = append(out, tui.TranscriptEntry{Role: app.RoleAssistant, Content: record.Content, CreatedAt: record.CreatedAt})
+		}
+	}
+	return out, nil
 }
 
 func (b *ChatBackend) LatestAudit(limit int) ([]process.ProcessAuditEvent, error) {

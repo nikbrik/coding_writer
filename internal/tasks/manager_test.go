@@ -139,6 +139,32 @@ func TestPausedTaskSelectionUpdatesOnlyLastSessionID(t *testing.T) {
 	}
 }
 
+func TestStartCanReplacePausedCurrentTask(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	paused, err := mgr.Start("paused task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := mgr.Start("new task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ID == paused.ID || next.Title != "new task" {
+		t.Fatalf("new task not started: %+v", next)
+	}
+	old, err := mgr.Get(paused.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if old.Status != app.TaskStatusPaused {
+		t.Fatalf("old paused task not preserved: %+v", old)
+	}
+}
+
 func TestTaskPlanCriteriaPersistAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)
