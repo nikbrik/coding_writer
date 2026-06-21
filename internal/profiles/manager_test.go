@@ -46,6 +46,51 @@ func TestDefaultProfilesAndSwitch(t *testing.T) {
 	}
 }
 
+func TestCreateDefaultProfileUsesExactSafeDefaultsAndActivates(t *testing.T) {
+	dir := t.TempDir()
+	cfgMgr := app.NewConfigManager(dir)
+	if err := cfgMgr.EnsureStorageTree(); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(dir, cfgMgr)
+	profile, err := mgr.CreateDefault("custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ID != "custom" || profile.DisplayName != "custom" || profile.DefaultModel != "" {
+		t.Fatalf("bad identity defaults: %+v", profile)
+	}
+	if len(profile.Style) != 2 || profile.Style["language"] != "ru" || profile.Style["tone"] != "direct" {
+		t.Fatalf("bad style defaults: %+v", profile.Style)
+	}
+	if len(profile.ResponseFormat) != 1 || profile.ResponseFormat["structure"] != "concise" {
+		t.Fatalf("bad response defaults: %+v", profile.ResponseFormat)
+	}
+	wantConstraints := []string{"follow user preferences", "do not inherit hidden state", "do not copy long memory"}
+	if strings.Join(profile.Constraints, "|") != strings.Join(wantConstraints, "|") {
+		t.Fatalf("bad constraints: %+v", profile.Constraints)
+	}
+	cfg, err := cfgMgr.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ActiveProfileID != "custom" {
+		t.Fatalf("created profile not active: %+v", cfg)
+	}
+}
+
+func TestProfileRejectsReservedNewID(t *testing.T) {
+	dir := t.TempDir()
+	cfgMgr := app.NewConfigManager(dir)
+	if err := cfgMgr.EnsureStorageTree(); err != nil {
+		t.Fatal(err)
+	}
+	mgr := NewManager(dir, cfgMgr)
+	if _, err := mgr.CreateDefault("new"); err == nil || !strings.Contains(err.Error(), "reserved_profile_id") {
+		t.Fatalf("want reserved_profile_id, got %v", err)
+	}
+}
+
 func TestProfileRenderDeterministicAndTagged(t *testing.T) {
 	profile := DefaultProfiles(time.Now().UTC())[0]
 	one, err := Render(profile)

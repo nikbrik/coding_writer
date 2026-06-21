@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,6 +25,12 @@ type currentSnapshot struct {
 	MTime time.Time
 	Size  int64
 	Hash  [sha256.Size]byte
+}
+
+type TaskSummary struct {
+	State     app.TaskState
+	IsCurrent bool
+	Archived  bool
 }
 
 func NewManager(storageDir string) *Manager { return &Manager{StorageDir: storageDir} }
@@ -82,6 +90,130 @@ func (m *Manager) Current() (app.TaskState, error) {
 		return app.TaskState{}, err
 	}
 	return snapshot.State, nil
+}
+
+func (m *Manager) ListTasks() ([]TaskSummary, error) {
+	tasksDir, err := storage.SafeJoin(m.StorageDir, "tasks")
+	if err != nil {
+		return nil, app.NewError(app.CategoryValidation, "unsafe_task_path", "unsafe task path", err)
+	}
+	entries, err := os.ReadDir(tasksDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, app.NewError(app.CategoryStorage, "tasks_list", err.Error(), err)
+	}
+	currentID := ""
+	if current, err := m.Current(); err == nil {
+		currentID = current.ID
+	}
+	var out []TaskSummary
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || entry.Name() == "current.json" {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".json")
+		state, err := m.Get(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TaskSummary{State: state, IsCurrent: state.ID == currentID, Archived: state.ArchivedAt != nil})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Archived != out[j].Archived {
+			return !out[i].Archived
+		}
+		return out[i].State.UpdatedAt.After(out[j].State.UpdatedAt)
+	})
+	return out, nil
+}
+
+func (m *Manager) Get(id string) (app.TaskState, error) {
+	path, err := m.taskPath(id)
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	var state app.TaskState
+	if err := storage.ReadJSON(path, &state); err != nil {
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "open") {
+			return state, app.NewError(app.CategoryValidation, "unknown_task", "unknown task", err)
+		}
+		return state, app.NewError(app.CategoryStorage, "task_read", err.Error(), err)
+	}
+	if err := ValidateState(state); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+func (m *Manager) SelectTask(id, sessionID string) (app.TaskState, error) {
+	state, err := m.Get(id)
+	if err != nil {
+		return state, err
+	}
+	if state.ArchivedAt != nil {
+		return state, app.ErrorWithHint(app.CategoryValidation, "task_archived", "task is archived", "restore task before selecting it", nil)
+	}
+	if state.Stage != app.StageDone && strings.TrimSpace(sessionID) != "" {
+		state.LastSessionID = strings.TrimSpace(sessionID)
+	}
+	return state, m.saveSelectedCurrent(state)
+}
+
+func (m *Manager) ClearCurrentFocus() error {
+	currentPath, err := m.currentPath()
+	if err != nil {
+		return err
+	}
+	if err := storage.EnsureNoSymlinkParents(currentPath); err != nil {
+		return app.NewError(app.CategoryStorage, "task_clear_focus", err.Error(), err)
+	}
+	if err := storage.RejectSymlinkTarget(currentPath); err != nil {
+		return app.NewError(app.CategoryStorage, "task_clear_focus", err.Error(), err)
+	}
+	if err := os.Remove(currentPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return app.NewError(app.CategoryStorage, "task_clear_focus", err.Error(), err)
+	}
+	return nil
+}
+
+func (m *Manager) ArchiveTaskMetadata(id string) (app.TaskState, error) {
+	state, err := m.Get(id)
+	if err != nil {
+		return state, err
+	}
+	now := time.Now().UTC()
+	state.ArchivedAt = &now
+	state.UpdatedAt = now
+	if err := m.saveTaskSnapshot(state); err != nil {
+		return state, err
+	}
+	if current, err := m.Current(); err == nil && current.ID == state.ID {
+		if err := m.ClearCurrentFocus(); err != nil {
+			return state, err
+		}
+	}
+	return state, nil
+}
+
+func (m *Manager) RestoreArchivedTask(id, sessionID string) (app.TaskState, error) {
+	state, err := m.Get(id)
+	if err != nil {
+		return state, err
+	}
+	if state.ArchivedAt == nil {
+		return state, app.NewError(app.CategoryValidation, "task_not_archived", "task is not archived", nil)
+	}
+	state.ArchivedAt = nil
+	if state.Stage != app.StageDone && strings.TrimSpace(sessionID) != "" {
+		state.LastSessionID = strings.TrimSpace(sessionID)
+	}
+	state.UpdatedAt = time.Now().UTC()
+	if err := m.saveTaskSnapshot(state); err != nil {
+		return state, err
+	}
+	return state, m.saveSelectedCurrent(state)
 }
 
 func (m *Manager) currentSnapshot() (currentSnapshot, error) {
@@ -446,10 +578,17 @@ func (m *Manager) SetLastSessionID(sessionID string) (app.TaskState, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return app.TaskState{}, app.NewError(app.CategoryValidation, "missing_session", "session id is required", nil)
 	}
-	return m.mutateActive(func(state *app.TaskState) error {
-		state.LastSessionID = strings.TrimSpace(sessionID)
-		return nil
-	})
+	snapshot, err := m.currentSnapshot()
+	if err != nil {
+		return app.TaskState{}, err
+	}
+	state := snapshot.State
+	if state.Stage == app.StageDone {
+		return state, app.NewError(app.CategoryValidation, "task_done", "done task is terminal", nil)
+	}
+	state.LastSessionID = strings.TrimSpace(sessionID)
+	state.UpdatedAt = time.Now().UTC()
+	return state, m.saveBothIfUnchanged(state, &snapshot)
 }
 
 func containsString(items []string, value string) bool {
@@ -651,6 +790,37 @@ func (m *Manager) saveBothIfUnchanged(state app.TaskState, expected *currentSnap
 		}
 		return nil
 	})
+}
+
+func (m *Manager) saveTaskSnapshot(state app.TaskState) error {
+	if err := ValidateState(state); err != nil {
+		return err
+	}
+	path, err := m.taskPath(state.ID)
+	if err != nil {
+		return err
+	}
+	if err := storage.AtomicWriteJSON(path, state); err != nil {
+		return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
+	}
+	return nil
+}
+
+func (m *Manager) saveSelectedCurrent(state app.TaskState) error {
+	if err := ValidateState(state); err != nil {
+		return err
+	}
+	currentPath, err := m.currentPath()
+	if err != nil {
+		return err
+	}
+	if err := storage.EnsureDir(filepath.Dir(currentPath)); err != nil {
+		return app.NewError(app.CategoryStorage, "task_dir", err.Error(), err)
+	}
+	if err := storage.AtomicWriteJSON(currentPath, state); err != nil {
+		return app.NewError(app.CategoryStorage, "task_write", err.Error(), err)
+	}
+	return m.saveTaskSnapshot(state)
 }
 
 func (m *Manager) ensureCurrentUnchanged(expected currentSnapshot) error {

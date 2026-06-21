@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -1326,12 +1327,18 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 			continue
 		}
 		if strings.HasPrefix(line, "/") {
-			done, err := handleSlash(ctx, out, diag, rt, sessionID, line)
+			result, err := handleSlashResult(ctx, diag, rt, sessionID, line)
 			if err != nil {
 				failed = true
 				printError(diag, err, false)
 			}
-			if done {
+			if strings.TrimSpace(result.Output) != "" {
+				_, _ = fmt.Fprintln(out, strings.TrimSpace(result.Output))
+			}
+			if result.ActiveSessionID != "" {
+				sessionID = result.ActiveSessionID
+			}
+			if result.Done {
 				if failed && !interactive {
 					return app.NewError(app.CategoryCLI, "batch_failed", "one or more non-interactive REPL commands failed", nil)
 				}
@@ -1366,6 +1373,25 @@ func runREPL(ctx context.Context, in io.Reader, out io.Writer, diag io.Writer, r
 		return app.NewError(app.CategoryCLI, "batch_failed", "one or more non-interactive REPL commands failed", nil)
 	}
 	return nil
+}
+
+type slashContextResult struct {
+	Done            bool
+	Output          string
+	ActiveSessionID string
+	ActiveTask      *app.TaskState
+	TaskCleared     bool
+	ActiveProfile   *app.UserProfile
+	ActiveConfig    *app.AppConfig
+	Picker          *slashPicker
+	PendingBlocked  string
+}
+
+type slashPicker struct {
+	Kind     string
+	Sessions []memory.SessionSummary
+	Tasks    []tasks.TaskSummary
+	Profiles []app.UserProfile
 }
 
 func startAPIProgress(diag io.Writer, enabled bool) func() {
@@ -2276,6 +2302,289 @@ func removePrivacyFile(storageDir string, elems ...string) (bool, error) {
 }
 
 func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime, sessionID, line string) (bool, error) {
+	result, err := handleSlashResult(ctx, diag, rt, sessionID, line)
+	if strings.TrimSpace(result.Output) != "" {
+		_, _ = fmt.Fprintln(out, strings.TrimSpace(result.Output))
+	}
+	return result.Done, err
+}
+
+func handleSlashResult(ctx context.Context, diag io.Writer, rt *runtime, sessionID, line string) (slashContextResult, error) {
+	parts := strings.Fields(line)
+	if len(parts) == 0 {
+		return slashContextResult{}, nil
+	}
+	switch parts[0] {
+	case "/", "/help":
+		return slashContextResult{Output: slashHelpText()}, nil
+	case "/new":
+		if blocked := pendingContextBlock(ctx, rt, sessionID); blocked != "" {
+			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
+		}
+		newSessionID := app.NewID("session")
+		if err := memory.TouchSessionActivity(rt.StorageDir, newSessionID); err != nil {
+			return slashContextResult{}, err
+		}
+		if task, err := updateCurrentTaskSession(rt, newSessionID); err != nil {
+			return slashContextResult{}, err
+		} else if task.ID != "" {
+			return slashContextResult{ActiveSessionID: newSessionID, ActiveTask: &task, Output: fmt.Sprintf("new chat: %s\ntask unchanged: %s\nprofile unchanged: %s", newSessionID, task.ID, emptyDash(rt.Config.ActiveProfileID))}, nil
+		}
+		return slashContextResult{ActiveSessionID: newSessionID, TaskCleared: true, Output: fmt.Sprintf("new chat: %s\ntask unchanged: none\nprofile unchanged: %s", newSessionID, emptyDash(rt.Config.ActiveProfileID))}, nil
+	case "/resume":
+		if blocked := pendingContextBlock(ctx, rt, sessionID); blocked != "" {
+			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
+		}
+		if len(parts) == 1 {
+			sessions, err := memory.ListSessions(rt.StorageDir)
+			if err != nil {
+				return slashContextResult{}, err
+			}
+			return slashContextResult{Picker: &slashPicker{Kind: "sessions", Sessions: sessions}, Output: sessionsText(sessions)}, nil
+		}
+		summary, err := memory.LookupSession(rt.StorageDir, parts[1])
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		if task, err := updateCurrentTaskSession(rt, summary.ID); err != nil {
+			return slashContextResult{}, err
+		} else if task.ID != "" {
+			return slashContextResult{ActiveSessionID: summary.ID, ActiveTask: &task, Output: fmt.Sprintf("resumed chat: %s\ntask unchanged: %s\nprofile unchanged: %s", summary.ID, task.ID, emptyDash(rt.Config.ActiveProfileID))}, nil
+		}
+		return slashContextResult{ActiveSessionID: summary.ID, TaskCleared: true, Output: fmt.Sprintf("resumed chat: %s\ntask unchanged: none\nprofile unchanged: %s", summary.ID, emptyDash(rt.Config.ActiveProfileID))}, nil
+	case "/task":
+		if blocked := pendingContextBlock(ctx, rt, sessionID); blocked != "" {
+			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
+		}
+		return handleTaskSlashResult(rt, sessionID, parts)
+	case "/profile":
+		if blocked := pendingContextBlock(ctx, rt, sessionID); blocked != "" {
+			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
+		}
+		return handleProfileSlashResult(rt, parts)
+	default:
+		var out bytes.Buffer
+		done, err := handleSlashLegacy(ctx, &out, diag, rt, sessionID, line)
+		return slashContextResult{Done: done, Output: strings.TrimSpace(out.String())}, err
+	}
+}
+
+func pendingContextBlock(ctx context.Context, rt *runtime, sessionID string) string {
+	if rt == nil {
+		return ""
+	}
+	if task, err := rt.Tasks.Current(); err == nil && task.PendingPlanning != nil {
+		return "context switch blocked: resolve pending planning first"
+	}
+	if proposal, ok, err := rt.Proposals.LatestPending(ctx, sessionID); err == nil && ok && proposal.ID != "" {
+		return "context switch blocked: accept, reject, or resolve pending memory proposal first"
+	}
+	return ""
+}
+
+func updateCurrentTaskSession(rt *runtime, sessionID string) (app.TaskState, error) {
+	task, err := rt.Tasks.Current()
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Category == app.CategoryValidation && appErr.Code == "missing_current_task" {
+			return app.TaskState{}, nil
+		}
+		return app.TaskState{}, err
+	}
+	if task.Stage == app.StageDone {
+		return task, nil
+	}
+	return rt.Tasks.SetLastSessionID(sessionID)
+}
+
+func handleTaskSlashResult(rt *runtime, sessionID string, parts []string) (slashContextResult, error) {
+	if len(parts) == 1 {
+		items, err := rt.Tasks.ListTasks()
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{Picker: &slashPicker{Kind: "tasks", Tasks: items}, Output: tasksListText(items)}, nil
+	}
+	switch parts[1] {
+	case "start", "status", "step", "expect", "plan", "criteria", "move", "pause", "resume":
+		var out bytes.Buffer
+		err := handleTaskSlash(&out, rt, parts, "")
+		task, _ := rt.Tasks.Current()
+		result := slashContextResult{Output: strings.TrimSpace(out.String())}
+		if task.ID != "" {
+			result.ActiveTask = &task
+		}
+		return result, err
+	case "close":
+		if err := rt.Tasks.ClearCurrentFocus(); err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{TaskCleared: true, Output: "task focus: none"}, nil
+	case "archive":
+		if len(parts) < 3 {
+			return slashContextResult{}, app.NewError(app.CategoryCLI, "missing_task_id", "task id is required", nil)
+		}
+		task, err := rt.Tasks.ArchiveTaskMetadata(parts[2])
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{TaskCleared: true, Output: fmt.Sprintf("archived task: %s", task.ID)}, nil
+	case "restore":
+		if len(parts) < 3 {
+			return slashContextResult{}, app.NewError(app.CategoryCLI, "missing_task_id", "task id is required", nil)
+		}
+		task, err := rt.Tasks.RestoreArchivedTask(parts[2], sessionID)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{ActiveTask: &task, Output: fmt.Sprintf("restored and active task: %s", task.ID)}, nil
+	default:
+		task, err := rt.Tasks.SelectTask(parts[1], sessionID)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{ActiveTask: &task, Output: fmt.Sprintf("active task: %s", task.ID)}, nil
+	}
+}
+
+func handleProfileSlashResult(rt *runtime, parts []string) (slashContextResult, error) {
+	if err := rt.Profiles.EnsureDefaults(); err != nil {
+		return slashContextResult{}, err
+	}
+	if len(parts) == 1 {
+		items, err := rt.Profiles.List()
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		active, _ := rt.activeProfile()
+		cfg := rt.Config
+		return slashContextResult{ActiveProfile: &active, ActiveConfig: &cfg, Picker: &slashPicker{Kind: "profiles", Profiles: items}, Output: profilesListText(items, rt.Config.ActiveProfileID)}, nil
+	}
+	if parts[1] == "create" {
+		if len(parts) < 3 {
+			return slashContextResult{}, app.NewError(app.CategoryCLI, "missing_profile_id", "profile id is required", nil)
+		}
+		profile, err := rt.Profiles.CreateDefault(parts[2])
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		rt.syncActiveProfile(profile)
+		cfg := rt.Config
+		return slashContextResult{ActiveProfile: &profile, ActiveConfig: &cfg, Output: fmt.Sprintf("created and active profile: %s", profile.ID)}, nil
+	}
+	profile, err := rt.Profiles.SetActive(parts[1])
+	if err != nil {
+		return slashContextResult{}, err
+	}
+	rt.syncActiveProfile(profile)
+	cfg := rt.Config
+	return slashContextResult{ActiveProfile: &profile, ActiveConfig: &cfg, Output: fmt.Sprintf("active profile: %s", profile.ID)}, nil
+}
+
+func slashHelpText() string {
+	return `Slash commands:
+Chat/session:
+  /new                         start new chat session; new short; keeps task/work/profile/long/model
+  /resume                      list old chat sessions
+  /resume <session_id>         resume chat session / short
+Task focus/work:
+  /task                        list saved tasks
+  /task <task_id>              select task/work in current chat
+  /task close                  clear current task focus
+  /task archive <task_id>      archive task metadata, keep work memory
+  /task restore <task_id>      restore archived task and make it current
+Task lifecycle/recovery:
+  /task status                 show current task and allowed stages
+  /task pause                  pause task lifecycle / work
+  /task resume                 resume paused task lifecycle / work
+  /task move <stage>           move task stage
+  /task step <text>            set current step
+  /task expect <action>        set expected action
+  /task plan <text>            add plan item
+  /task criteria <text>        add acceptance criterion
+Profile/long:
+  /profile                     list profiles
+  /profile <id>                switch profile / long context
+  /profile create <id>         create profile with safe defaults
+Utility:
+  /model <id>                  set active model
+  /memory <short|work|long>    list memory layer
+  /memory propose              propose memory from latest exchange
+  /memory apply ...            apply pending memory proposal
+  /save <short|work|long> <text>
+  /clear short
+  /invariants
+  /process audit
+  /privacy
+  /exit`
+}
+
+func sessionsText(sessions []memory.SessionSummary) string {
+	if len(sessions) == 0 {
+		return "sessions: none\nusage: /resume <session_id>"
+	}
+	var b strings.Builder
+	b.WriteString("sessions:\n")
+	for _, session := range sessions {
+		b.WriteString(fmt.Sprintf("  %s  %s\n", session.ID, session.LastActivity.Format(time.RFC3339)))
+	}
+	b.WriteString("usage: /resume <session_id>")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func tasksListText(items []tasks.TaskSummary) string {
+	if len(items) == 0 {
+		return "tasks: none\nusage: /task <task_id>"
+	}
+	var b strings.Builder
+	b.WriteString("tasks:\n")
+	section := ""
+	for _, item := range items {
+		nextSection := "active"
+		if item.Archived {
+			nextSection = "archived"
+		}
+		if nextSection != section {
+			b.WriteString(nextSection + ":\n")
+			section = nextSection
+		}
+		marker := " "
+		if item.IsCurrent {
+			marker = "*"
+		}
+		paused := ""
+		if item.State.Status == app.TaskStatusPaused {
+			paused = " paused"
+		}
+		b.WriteString(fmt.Sprintf("  %s %s  %s/%s%s  %s\n", marker, item.State.ID, item.State.Stage, item.State.Status, paused, item.State.Title))
+	}
+	b.WriteString("usage: /task <task_id> | /task close | /task archive <task_id> | /task restore <task_id>")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func profilesListText(items []app.UserProfile, active string) string {
+	var b strings.Builder
+	b.WriteString("profiles:\n")
+	for _, profile := range items {
+		marker := " "
+		if profile.ID == active {
+			marker = "*"
+		}
+		b.WriteString(fmt.Sprintf("  %s %s  %s\n", marker, profile.ID, profile.DisplayName))
+	}
+	b.WriteString("  + new\n")
+	b.WriteString("usage: /profile <id> | /profile create <id>")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func handleSlashLegacy(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime, sessionID, line string) (bool, error) {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
 		return false, nil
@@ -2395,19 +2704,11 @@ func handleSlash(ctx context.Context, out io.Writer, diag io.Writer, rt *runtime
 			_, _ = fmt.Fprintf(out, "active model: %s\n", rt.Config.ActiveModel)
 			return false, nil
 		}
-		model := parts[1]
-		rt.ensureProvider()
-		ensureProviderDisclosure(diag, rt)
-		if err := validateModelID(ctx, rt.ensureProvider(), model); err != nil {
-			return false, err
-		}
-		_, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error { cfg.ActiveModel = model; cfg.MemoryModel = model; return nil })
+		cfg, err := setActiveModel(ctx, rt, diag, parts[1])
 		if err != nil {
 			return false, err
 		}
-		rt.Config.ActiveModel = model
-		rt.Config.MemoryModel = model
-		_, _ = fmt.Fprintf(out, "active model: %s\n", model)
+		_, _ = fmt.Fprintf(out, "active model: %s\n", cfg.ActiveModel)
 	case "/task":
 		return false, handleTaskSlash(out, rt, parts, strings.TrimSpace(strings.TrimPrefix(line, strings.Join(parts[:min(len(parts), 2)], " "))))
 	case "/save":
@@ -2913,6 +3214,28 @@ func validateModelID(ctx context.Context, provider providers.LLMProvider, model 
 		}
 	}
 	return app.NewError(app.CategoryValidation, "invalid_model", "model id not found", nil)
+}
+
+func setActiveModel(ctx context.Context, rt *runtime, diag io.Writer, model string) (app.AppConfig, error) {
+	rt.ensureProvider()
+	ensureProviderDisclosure(diag, rt)
+	if err := validateModelID(ctx, rt.ensureProvider(), model); err != nil {
+		return rt.Config, err
+	}
+	cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+		cfg.ActiveModel = model
+		cfg.MemoryModel = model
+		return nil
+	})
+	if err != nil {
+		return rt.Config, err
+	}
+	rt.Config = cfg
+	if rt.Process != nil {
+		rt.Process.Model = cfg.ActiveModel
+		rt.Process.MemoryModel = cfg.MemoryModel
+	}
+	return cfg, nil
 }
 
 func parseEdit(raw string) (string, memory.ProposalEdit, error) {

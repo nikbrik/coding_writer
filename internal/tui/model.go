@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,29 @@ type timelineEvent struct {
 	Severity string
 }
 
+type modelPickerItem struct {
+	ID       string
+	Provider string
+}
+
+type modelPickerState struct {
+	models    []string
+	favorites map[string]bool
+	active    string
+	query     string
+	cursor    int
+	warning   string
+	items     []modelPickerItem
+}
+
+type contextPickerState struct {
+	payload        PickerPayload
+	cursor         int
+	profileInput   bool
+	profileID      string
+	restoreConfirm bool
+}
+
 type Model struct {
 	ctx       context.Context
 	backend   Backend
@@ -61,6 +85,8 @@ type Model struct {
 	warnings         []string
 	appliedArtifacts []string
 	err              *app.Error
+	modelPicker      *modelPickerState
+	contextPicker    *contextPickerState
 }
 
 type initialLoadedMsg struct {
@@ -89,6 +115,23 @@ type memoryAppliedMsg struct {
 type taskActionMsg struct {
 	task app.TaskState
 	err  error
+}
+
+type modelsLoadedMsg struct {
+	catalog ModelCatalog
+	err     error
+}
+
+type modelSelectedMsg struct {
+	config app.AppConfig
+	model  string
+	err    error
+}
+
+type favoriteToggledMsg struct {
+	config app.AppConfig
+	model  string
+	err    error
 }
 
 func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) error {
@@ -170,6 +213,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
 			break
 		}
+		m.applySlashResponse(msg.resp)
 		if strings.TrimSpace(msg.resp.Output) != "" {
 			m.appendEvent("command", stageOfTask(m.task), msg.line, strings.TrimSpace(msg.resp.Output), "info")
 		}
@@ -193,7 +237,58 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.task = &msg.task
 			m.appendEvent("task", msg.task.Stage, "task updated", fmt.Sprintf("status=%s expected=%s", msg.task.Status, msg.task.ExpectedAction), "info")
 		}
+	case modelsLoadedMsg:
+		m.busy = false
+		m.input.SetValue("")
+		m.input.Focus()
+		if msg.err != nil {
+			m.err = app.AsError(msg.err)
+			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
+			break
+		}
+		m.err = nil
+		if m.modelPicker != nil {
+			m.modelPicker.merge(msg.catalog)
+		}
+	case modelSelectedMsg:
+		m.busy = false
+		m.input.Focus()
+		if msg.err != nil {
+			m.err = app.AsError(msg.err)
+			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
+			break
+		}
+		m.err = nil
+		m.modelPicker = nil
+		m.appendEvent("model", stageOfTask(m.task), "active model", msg.config.ActiveModel, "info")
+	case favoriteToggledMsg:
+		if msg.err != nil {
+			m.err = app.AsError(msg.err)
+			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
+			break
+		}
+		m.err = nil
+		if m.modelPicker != nil {
+			m.modelPicker.favorites = favoriteMap(msg.config.FavoriteModels)
+			m.modelPicker.rebuild()
+		}
 	case tea.KeyMsg:
+		if m.contextPicker != nil {
+			next, cmd := m.updateContextPicker(msg)
+			m = next
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
+		if m.modelPicker != nil {
+			next, cmd := m.updateModelPicker(msg)
+			m = next
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
 		if m.busy {
 			switch msg.String() {
 			case "ctrl+c":
@@ -211,6 +306,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "enter":
 			text := strings.TrimSpace(m.input.Value())
 			if text == "" {
+				if m.hasPendingPlan() {
+					m.busy = true
+					m.input.Blur()
+					cmds = append(cmds, m.approvePlan())
+				} else if m.hasPendingMemory() {
+					cmds = append(cmds, m.applyMemory(true))
+				}
 				break
 			}
 			if text == "/exit" || text == "/quit" {
@@ -219,21 +321,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendEvent("user", stageOfTask(m.task), "user input", text, "info")
 			m.busy = true
 			m.input.Blur()
-			if strings.HasPrefix(text, "/") {
+			if text == "/model" {
+				m.modelPicker = newModelPickerState(ModelCatalog{
+					Models:    fallbackModelIDs(),
+					Favorites: m.backend.Config().FavoriteModels,
+					Active:    m.backend.Config().ActiveModel,
+					Warning:   "loading provider model list...",
+				})
+				cmds = append(cmds, m.loadModels())
+			} else if strings.HasPrefix(text, "/") {
 				cmds = append(cmds, m.runSlash(text))
 			} else {
 				cmds = append(cmds, m.runExchange(text))
 			}
-		case "a":
+		case "a", "A", "y", "Y", "ф", "Ф", "н", "Н":
 			if m.hasPendingPlan() {
 				m.busy = true
+				m.input.Blur()
 				cmds = append(cmds, m.approvePlan())
 			} else if m.hasPendingMemory() {
 				cmds = append(cmds, m.applyMemory(true))
 			}
-		case "r":
+		case "r", "R", "n", "N", "к", "К", "т", "Т":
 			if m.hasPendingPlan() {
 				m.busy = true
+				m.input.Blur()
 				cmds = append(cmds, m.rejectPlan())
 			} else if m.hasPendingMemory() {
 				cmds = append(cmds, m.applyMemory(false))
@@ -247,7 +359,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if !m.busy {
+	if !m.busy && m.modelPicker == nil && m.contextPicker == nil {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
@@ -264,6 +376,13 @@ func (m Model) View() string {
 	body := m.bodyView()
 	footer := m.footerView()
 	input := m.input.View()
+	if m.modelPicker != nil {
+		body = m.modelPickerView()
+		input = ""
+	} else if m.contextPicker != nil {
+		body = m.contextPickerView()
+		input = ""
+	}
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer, input)
 }
 
@@ -294,10 +413,10 @@ func (m Model) headerView() string {
 	if m.busy {
 		busy = " " + m.spinner.View() + " model call"
 	}
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81")).Render("codingwriter")
+	title := styleTitle().Render("codingwriter")
 	line := fmt.Sprintf("%s | model=%s | profile=%s | task=%s | stage=%s | expected=%s | status=%s%s",
 		title, emptyDash(cfg.ActiveModel), emptyDash(cfg.ActiveProfileID), task, stage, expected, status, busy)
-	return trimWidth(line, m.width) + "\n" + strings.Repeat("─", max(1, m.width))
+	return trimWidth(line, m.width) + "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Render(strings.Repeat("─", max(1, m.width)))
 }
 
 func (m Model) bodyView() string {
@@ -334,6 +453,17 @@ func (m Model) sidebarView(width int) string {
 }
 
 func (m Model) footerView() string {
+	if m.contextPicker != nil {
+		line := m.contextPicker.footer()
+		return styleHint().Render(trimWidth(line, m.width))
+	}
+	if m.modelPicker != nil {
+		line := "model picker | type search | ↑/↓ move | enter select | F favorite | esc close"
+		if m.modelPicker.warning != "" {
+			line += " | " + m.modelPicker.warning
+		}
+		return styleHint().Render(trimWidth(line, m.width))
+	}
 	pane := []string{"timeline", "plan", "evidence", "memory", "files"}[m.active]
 	approval := ""
 	if m.hasPendingPlan() {
@@ -345,7 +475,7 @@ func (m Model) footerView() string {
 	if m.err != nil && m.err.Hint != "" {
 		line += " | hint: " + m.err.Hint
 	}
-	return trimWidth(line, m.width)
+	return styleHint().Render(trimWidth(line, m.width))
 }
 
 func (m Model) statusView(width int) string {
@@ -476,6 +606,78 @@ func (m *Model) loadInitial() tea.Cmd {
 	}
 }
 
+func (m Model) loadModels() tea.Cmd {
+	return func() tea.Msg {
+		catalog, err := m.backend.ListModels(m.ctx)
+		return modelsLoadedMsg{catalog: catalog, err: err}
+	}
+}
+
+func (m Model) selectModel(modelID string) tea.Cmd {
+	return func() tea.Msg {
+		cfg, err := m.backend.SelectModel(m.ctx, modelID)
+		return modelSelectedMsg{config: cfg, model: modelID, err: err}
+	}
+}
+
+func (m Model) selectSession(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.backend.SelectSession(m.ctx, sessionID)
+		return slashFinishedMsg{line: "/resume " + sessionID, resp: resp, err: err}
+	}
+}
+
+func (m Model) selectTask(taskID string) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := m.backend.SelectTask(m.ctx, taskID, sessionID)
+		return slashFinishedMsg{line: "/task " + taskID, resp: resp, err: err}
+	}
+}
+
+func (m Model) clearTask() tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.backend.ClearTask(m.ctx)
+		return slashFinishedMsg{line: "/task close", resp: resp, err: err}
+	}
+}
+
+func (m Model) archiveTask(taskID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.backend.ArchiveTask(m.ctx, taskID)
+		return slashFinishedMsg{line: "/task archive " + taskID, resp: resp, err: err}
+	}
+}
+
+func (m Model) restoreTask(taskID string) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := m.backend.RestoreTask(m.ctx, taskID, sessionID)
+		return slashFinishedMsg{line: "/task restore " + taskID, resp: resp, err: err}
+	}
+}
+
+func (m Model) selectProfile(profileID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.backend.SelectProfile(m.ctx, profileID)
+		return slashFinishedMsg{line: "/profile " + profileID, resp: resp, err: err}
+	}
+}
+
+func (m Model) createProfile(profileID string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := m.backend.CreateProfile(m.ctx, profileID)
+		return slashFinishedMsg{line: "/profile create " + profileID, resp: resp, err: err}
+	}
+}
+
+func (m Model) toggleFavoriteModel(modelID string) tea.Cmd {
+	return func() tea.Msg {
+		cfg, err := m.backend.ToggleFavoriteModel(m.ctx, modelID)
+		return favoriteToggledMsg{config: cfg, model: modelID, err: err}
+	}
+}
+
 func (m Model) runExchange(text string) tea.Cmd {
 	sessionID := m.sessionID
 	return func() tea.Msg {
@@ -489,6 +691,28 @@ func (m Model) runSlash(line string) tea.Cmd {
 	return func() tea.Msg {
 		resp, err := m.backend.Slash(m.ctx, sessionID, line)
 		return slashFinishedMsg{line: line, resp: resp, err: err}
+	}
+}
+
+func (m *Model) applySlashResponse(resp SlashResponse) {
+	if resp.ActiveSessionID != "" {
+		m.sessionID = resp.ActiveSessionID
+	}
+	if resp.TaskCleared {
+		m.task = nil
+	}
+	if resp.ActiveTask != nil {
+		m.task = resp.ActiveTask
+	}
+	if resp.ActiveConfig != nil {
+		// The authoritative config lives in the backend. This branch exists so
+		// slash responses can carry the typed transition; header reads backend
+		// config on the next render.
+	}
+	if resp.Picker != nil {
+		m.contextPicker = newContextPickerState(*resp.Picker)
+	} else {
+		m.contextPicker = nil
 	}
 }
 
@@ -629,6 +853,548 @@ func (m *Model) updateViewport() {
 	m.input.Placeholder = placeholder(m.task)
 }
 
+func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
+	p := m.contextPicker
+	if p == nil {
+		return m, nil
+	}
+	if p.profileInput {
+		switch msg.String() {
+		case "esc":
+			p.profileInput = false
+			p.profileID = ""
+		case "enter":
+			id := strings.TrimSpace(p.profileID)
+			if id == "" {
+				m.err = app.NewError(app.CategoryValidation, "missing_profile_id", "profile id is required", nil)
+				return m, nil
+			}
+			m.busy = true
+			return m, m.createProfile(id)
+		case "backspace":
+			if p.profileID != "" {
+				runes := []rune(p.profileID)
+				p.profileID = string(runes[:len(runes)-1])
+			}
+		default:
+			if len(msg.Runes) > 0 {
+				p.profileID += string(msg.Runes)
+			}
+		}
+		return m, nil
+	}
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.contextPicker = nil
+		m.input.Focus()
+	case "up", "k":
+		p.move(-1)
+	case "down", "j":
+		p.move(1)
+	case "enter":
+		cmd := m.contextPickerEnter()
+		if cmd != nil {
+			m.busy = true
+		}
+		return m, cmd
+	case "c":
+		if p.payload.Kind == "tasks" {
+			m.busy = true
+			return m, m.clearTask()
+		}
+	case "a":
+		if p.payload.Kind == "tasks" {
+			if task, ok := p.currentTask(); ok && !task.Archived {
+				m.busy = true
+				return m, m.archiveTask(task.ID)
+			}
+		}
+	case "r":
+		if p.payload.Kind == "tasks" {
+			if task, ok := p.currentTask(); ok && task.Archived {
+				if !p.restoreConfirm {
+					p.restoreConfirm = true
+					return m, nil
+				}
+				m.busy = true
+				return m, m.restoreTask(task.ID)
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) contextPickerEnter() tea.Cmd {
+	p := m.contextPicker
+	if p == nil {
+		return nil
+	}
+	switch p.payload.Kind {
+	case "sessions":
+		if item, ok := p.currentSession(); ok {
+			return m.selectSession(item.ID)
+		}
+	case "tasks":
+		if item, ok := p.currentTask(); ok && !item.Archived {
+			return m.selectTask(item.ID)
+		}
+	case "profiles":
+		if p.cursor == len(p.payload.Profiles) {
+			p.profileInput = true
+			p.profileID = ""
+			return nil
+		}
+		if item, ok := p.currentProfile(); ok {
+			return m.selectProfile(item.ID)
+		}
+	}
+	return nil
+}
+
+func newContextPickerState(payload PickerPayload) *contextPickerState {
+	return &contextPickerState{payload: payload}
+}
+
+func (p *contextPickerState) itemCount() int {
+	if p == nil {
+		return 0
+	}
+	switch p.payload.Kind {
+	case "sessions":
+		return len(p.payload.Sessions)
+	case "tasks":
+		return len(p.payload.Tasks)
+	case "profiles":
+		return len(p.payload.Profiles) + 1
+	default:
+		return 0
+	}
+}
+
+func (p *contextPickerState) move(delta int) {
+	count := p.itemCount()
+	if count == 0 {
+		return
+	}
+	p.cursor = (p.cursor + count + delta) % count
+	p.restoreConfirm = false
+}
+
+func (p *contextPickerState) currentSession() (SessionSummary, bool) {
+	if p == nil || p.cursor < 0 || p.cursor >= len(p.payload.Sessions) {
+		return SessionSummary{}, false
+	}
+	return p.payload.Sessions[p.cursor], true
+}
+
+func (p *contextPickerState) currentTask() (TaskSummary, bool) {
+	if p == nil || p.cursor < 0 || p.cursor >= len(p.payload.Tasks) {
+		return TaskSummary{}, false
+	}
+	return p.payload.Tasks[p.cursor], true
+}
+
+func (p *contextPickerState) currentProfile() (ProfileSummary, bool) {
+	if p == nil || p.cursor < 0 || p.cursor >= len(p.payload.Profiles) {
+		return ProfileSummary{}, false
+	}
+	return p.payload.Profiles[p.cursor], true
+}
+
+func (p *contextPickerState) footer() string {
+	if p == nil {
+		return ""
+	}
+	if p.profileInput {
+		return "profile new | type id | enter create | esc cancel"
+	}
+	switch p.payload.Kind {
+	case "tasks":
+		if p.restoreConfirm {
+			return "task picker | press r again to restore | esc cancel"
+		}
+		return "task picker | ↑/↓ move | enter select | c close | a archive | r restore | esc close"
+	case "profiles":
+		return "profile picker | ↑/↓ move | enter select/new | esc close"
+	case "sessions":
+		return "session picker | ↑/↓ move | enter resume | esc close"
+	default:
+		return "picker | esc close"
+	}
+}
+
+func (m Model) contextPickerView() string {
+	p := m.contextPicker
+	if p == nil {
+		return ""
+	}
+	width := max(40, m.width-4)
+	height := max(8, m.timeline.Height)
+	lines := []string{styleTitle().Render(pickerTitle(p.payload.Kind))}
+	if p.profileInput {
+		lines = append(lines, "new profile id: "+emptyDash(p.profileID))
+		if m.err != nil {
+			lines = append(lines, styleWarn().Render(m.err.Message))
+		}
+	} else {
+		lines = append(lines, p.contextLines(width)...)
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 2).
+		Render(strings.Join(lines, "\n"))
+}
+
+func pickerTitle(kind string) string {
+	switch kind {
+	case "sessions":
+		return "Resume chat"
+	case "tasks":
+		return "Select task"
+	case "profiles":
+		return "Select profile"
+	default:
+		return "Select"
+	}
+}
+
+func (p *contextPickerState) contextLines(width int) []string {
+	if p == nil {
+		return nil
+	}
+	switch p.payload.Kind {
+	case "sessions":
+		if len(p.payload.Sessions) == 0 {
+			return []string{"no sessions"}
+		}
+		out := make([]string, 0, len(p.payload.Sessions))
+		for i, item := range p.payload.Sessions {
+			out = append(out, pickerLine(i == p.cursor, fmt.Sprintf("%s  %s", item.ID, item.LastActivity.Format(time.RFC3339)), width))
+		}
+		return out
+	case "tasks":
+		if len(p.payload.Tasks) == 0 {
+			return []string{"no tasks"}
+		}
+		out := []string{}
+		section := ""
+		for i, item := range p.payload.Tasks {
+			next := "active"
+			if item.Archived {
+				next = "archived"
+			}
+			if next != section {
+				out = append(out, styleGroup().Render(next))
+				section = next
+			}
+			marker := " "
+			if item.Current {
+				marker = "*"
+			}
+			label := fmt.Sprintf("%s %s  %s/%s  %s", marker, item.ID, item.Stage, item.Status, item.Title)
+			out = append(out, pickerLine(i == p.cursor, label, width))
+		}
+		return out
+	case "profiles":
+		out := make([]string, 0, len(p.payload.Profiles)+1)
+		for i, item := range p.payload.Profiles {
+			marker := " "
+			if item.Active {
+				marker = "*"
+			}
+			out = append(out, pickerLine(i == p.cursor, fmt.Sprintf("%s %s  %s", marker, item.ID, item.DisplayName), width))
+		}
+		out = append(out, pickerLine(p.cursor == len(p.payload.Profiles), "+ new", width))
+		return out
+	default:
+		return []string{"no items"}
+	}
+}
+
+func pickerLine(selected bool, text string, width int) string {
+	prefix := "  "
+	if selected {
+		prefix = "› "
+	}
+	line := trimWidth(prefix+text, width-2)
+	if selected {
+		return styleSelected().Render(line)
+	}
+	return line
+}
+
+func (m Model) updateModelPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
+	if m.modelPicker == nil {
+		return m, nil
+	}
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.modelPicker = nil
+		m.input.Focus()
+		return m, nil
+	case "up", "k":
+		if len(m.modelPicker.items) > 0 {
+			m.modelPicker.cursor = (m.modelPicker.cursor + len(m.modelPicker.items) - 1) % len(m.modelPicker.items)
+		}
+	case "down", "j":
+		if len(m.modelPicker.items) > 0 {
+			m.modelPicker.cursor = (m.modelPicker.cursor + 1) % len(m.modelPicker.items)
+		}
+	case "pgup":
+		m.modelPicker.moveCursor(-m.modelPickerPageSize())
+	case "pgdown":
+		m.modelPicker.moveCursor(m.modelPickerPageSize())
+	case "home":
+		if len(m.modelPicker.items) > 0 {
+			m.modelPicker.cursor = 0
+		}
+	case "end":
+		if len(m.modelPicker.items) > 0 {
+			m.modelPicker.cursor = len(m.modelPicker.items) - 1
+		}
+	case "enter":
+		if item, ok := m.modelPicker.current(); ok {
+			m.busy = true
+			return m, m.selectModel(item.ID)
+		}
+	case "backspace":
+		if m.modelPicker.query != "" {
+			runes := []rune(m.modelPicker.query)
+			m.modelPicker.query = string(runes[:len(runes)-1])
+			m.modelPicker.rebuild()
+		}
+	case "F":
+		if item, ok := m.modelPicker.current(); ok {
+			return m, m.toggleFavoriteModel(item.ID)
+		}
+	default:
+		if len(msg.Runes) > 0 {
+			m.modelPicker.query += string(msg.Runes)
+			m.modelPicker.rebuild()
+		}
+	}
+	return m, nil
+}
+
+func newModelPickerState(catalog ModelCatalog) *modelPickerState {
+	state := &modelPickerState{
+		models:    appendUnique(nil, append(catalog.Models, catalog.Active)...),
+		favorites: favoriteMap(catalog.Favorites),
+		active:    catalog.Active,
+		warning:   catalog.Warning,
+		cursor:    0,
+	}
+	sort.Strings(state.models)
+	state.rebuild()
+	return state
+}
+
+func fallbackModelIDs() []string {
+	return []string{
+		"anthropic/claude-3.5-sonnet",
+		"fake/model",
+		"google/gemini-3.1-flash-lite",
+		"openai/gpt-4.1-mini",
+	}
+}
+
+func (p *modelPickerState) merge(catalog ModelCatalog) {
+	if p == nil {
+		return
+	}
+	p.models = appendUnique(p.models, append(catalog.Models, catalog.Active)...)
+	if catalog.Active != "" {
+		p.active = catalog.Active
+	}
+	p.favorites = favoriteMap(catalog.Favorites)
+	p.warning = catalog.Warning
+	sort.Strings(p.models)
+	p.rebuild()
+}
+
+func (p *modelPickerState) rebuild() {
+	if p == nil {
+		return
+	}
+	query := strings.ToLower(strings.TrimSpace(p.query))
+	items := make([]modelPickerItem, 0, len(p.models))
+	for _, id := range p.models {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		provider := modelProvider(id)
+		if query != "" && !strings.Contains(strings.ToLower(id), query) && !strings.Contains(strings.ToLower(provider), query) {
+			continue
+		}
+		items = append(items, modelPickerItem{ID: id, Provider: provider})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		fi := p.favorites[items[i].ID]
+		fj := p.favorites[items[j].ID]
+		if fi != fj {
+			return fi
+		}
+		if items[i].Provider != items[j].Provider {
+			return items[i].Provider < items[j].Provider
+		}
+		return items[i].ID < items[j].ID
+	})
+	p.items = items
+	if p.cursor >= len(p.items) {
+		p.cursor = max(0, len(p.items)-1)
+	}
+}
+
+func (p *modelPickerState) current() (modelPickerItem, bool) {
+	if p == nil || len(p.items) == 0 || p.cursor < 0 || p.cursor >= len(p.items) {
+		return modelPickerItem{}, false
+	}
+	return p.items[p.cursor], true
+}
+
+func (p *modelPickerState) moveCursor(delta int) {
+	if p == nil || len(p.items) == 0 {
+		return
+	}
+	p.cursor += delta
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+	if p.cursor >= len(p.items) {
+		p.cursor = len(p.items) - 1
+	}
+}
+
+func (m Model) modelPickerPageSize() int {
+	return max(1, m.modelPickerListHeight()-1)
+}
+
+func (m Model) modelPickerListHeight() int {
+	return max(4, m.timeline.Height-5)
+}
+
+func (m Model) modelPickerView() string {
+	picker := m.modelPicker
+	if picker == nil {
+		return ""
+	}
+	width := max(40, m.width-4)
+	height := max(8, m.timeline.Height)
+	lines := []string{
+		styleTitle().Render("Select model"),
+		styleHint().Render("search: " + emptyDash(picker.query)),
+	}
+	if picker.warning != "" {
+		lines = append(lines, styleWarn().Render(trimWidth(picker.warning, width-2)))
+	}
+	if len(picker.items) == 0 {
+		lines = append(lines, "no matching models")
+	} else {
+		visible := modelPickerVisibleItems(picker, m.modelPickerListHeight())
+		lastGroup := ""
+		for _, visibleItem := range visible {
+			i := visibleItem.Index
+			item := visibleItem.Item
+			group := item.Provider
+			if picker.favorites[item.ID] {
+				group = "favorites"
+			}
+			if group != lastGroup {
+				lines = append(lines, styleGroup().Render(group))
+				lastGroup = group
+			}
+			cursor := "  "
+			if i == picker.cursor {
+				cursor = "› "
+			}
+			star := " "
+			if picker.favorites[item.ID] {
+				star = "*"
+			}
+			active := ""
+			if item.ID == picker.active {
+				active = " active"
+			}
+			line := fmt.Sprintf("%s%s %s%s", cursor, star, item.ID, active)
+			if i == picker.cursor {
+				line = styleSelected().Render(trimWidth(line, width-2))
+			} else if item.ID == picker.active {
+				line = styleActive().Render(trimWidth(line, width-2))
+			} else {
+				line = trimWidth(line, width-2)
+			}
+			lines = append(lines, line)
+		}
+		if len(visible) < len(picker.items) {
+			lines = append(lines, styleHint().Render(fmt.Sprintf("%d/%d", picker.cursor+1, len(picker.items))))
+		}
+	}
+	body := strings.Join(lines, "\n")
+	return lipgloss.NewStyle().
+		Width(width).
+		Height(height).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63")).
+		Padding(1, 2).
+		Render(body)
+}
+
+type visibleModelPickerItem struct {
+	Index int
+	Item  modelPickerItem
+}
+
+func modelPickerVisibleItems(picker *modelPickerState, limit int) []visibleModelPickerItem {
+	if picker == nil || len(picker.items) == 0 {
+		return nil
+	}
+	limit = max(1, limit)
+	if limit >= len(picker.items) {
+		out := make([]visibleModelPickerItem, 0, len(picker.items))
+		for i, item := range picker.items {
+			out = append(out, visibleModelPickerItem{Index: i, Item: item})
+		}
+		return out
+	}
+	start := picker.cursor - limit/2
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > len(picker.items) {
+		start = len(picker.items) - limit
+	}
+	out := make([]visibleModelPickerItem, 0, limit)
+	for i := start; i < start+limit; i++ {
+		out = append(out, visibleModelPickerItem{Index: i, Item: picker.items[i]})
+	}
+	return out
+}
+
+func favoriteMap(models []string) map[string]bool {
+	out := map[string]bool{}
+	for _, model := range models {
+		if strings.TrimSpace(model) != "" {
+			out[model] = true
+		}
+	}
+	return out
+}
+
+func modelProvider(modelID string) string {
+	provider, _, ok := strings.Cut(modelID, "/")
+	if !ok || strings.TrimSpace(provider) == "" {
+		return "custom"
+	}
+	return provider
+}
+
 func (m Model) hasPendingPlan() bool {
 	return m.task != nil && m.task.PendingPlanning != nil
 }
@@ -706,7 +1472,31 @@ func stageOfTask(task *app.TaskState) app.TaskStage {
 	return task.Stage
 }
 
-func section(text string) string { return lipgloss.NewStyle().Bold(true).Render(text) }
+func section(text string) string { return styleGroup().Render(text) }
+
+func styleTitle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("81"))
+}
+
+func styleGroup() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+}
+
+func styleHint() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+}
+
+func styleSelected() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("63"))
+}
+
+func styleActive() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
+}
+
+func styleWarn() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("209"))
+}
 
 func boxed(width int, lines []string) string {
 	w := max(20, width-2)
@@ -714,7 +1504,7 @@ func boxed(width int, lines []string) string {
 	for _, line := range lines {
 		out = append(out, wrap(trimWidth(line, w), w)...)
 	}
-	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Width(w).Render(strings.Join(out, "\n"))
+	return lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Width(w).Render(strings.Join(out, "\n"))
 }
 
 func safe(text string) string {

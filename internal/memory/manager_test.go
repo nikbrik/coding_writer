@@ -7,10 +7,45 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/tasks"
 )
+
+func TestListAndLookupSessionsUseActivityOrderingAndValidation(t *testing.T) {
+	dir := t.TempDir()
+	if err := TouchSessionActivity(dir, "session_old"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := TouchSessionActivity(dir, "session_new"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 || sessions[0].ID != "session_new" || sessions[1].ID != "session_old" {
+		t.Fatalf("bad session ordering: %+v", sessions)
+	}
+	latest, err := LatestSessionID(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest != "session_new" {
+		t.Fatalf("bad latest session: %s", latest)
+	}
+	if _, err := LookupSession(dir, "session_old"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LookupSession(dir, "../bad"); err == nil || !strings.Contains(err.Error(), "unsafe_session_id") {
+		t.Fatalf("want unsafe_session_id, got %v", err)
+	}
+	if _, err := LookupSession(dir, "session_missing"); err == nil || !strings.Contains(err.Error(), "unknown_session") {
+		t.Fatalf("want unknown_session, got %v", err)
+	}
+}
 
 func TestMemoryLayersAreSeparateAndClearShortOnly(t *testing.T) {
 	ctx := context.Background()

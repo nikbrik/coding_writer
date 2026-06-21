@@ -74,10 +74,15 @@ def wait_for_screen(path, needles, timeout, master, transcript):
     raise TimeoutError(f"timed out waiting for TUI screen markers: {needles}")
 
 
+def send_line(master, text):
+    os.write(master, text.encode("utf-8") + b"\r\n")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--storage-dir", required=True)
     parser.add_argument("--transcript", required=True)
+    parser.add_argument("--model-id", required=True)
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("cmd", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -85,6 +90,7 @@ def main():
         raise SystemExit("missing command")
 
     messages = [
+        ("model", args.model_id),
         ("line", "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии."),
         ("key", "a"),
         ("line", "Готово к проверке: проверь результат."),
@@ -101,16 +107,27 @@ def main():
     with open(args.transcript, "wb") as transcript:
         try:
             drain(master, transcript, 1.0)
+            wait_for_screen(args.transcript, ["codingwriter", ">"], args.timeout, master, transcript)
             for kind, message in messages:
                 task = read_task(args.storage_dir)
                 if task and task.get("stage") == "done":
                     break
                 before = task_updated_at(args.storage_dir)
+                if kind == "model":
+                    send_line(master, "/model")
+                    wait_for_screen(args.transcript, ["Select model"], args.timeout, master, transcript)
+                    query = message.split("/", 1)[-1]
+                    os.write(master, query.encode("utf-8"))
+                    wait_for_screen(args.transcript, [message], args.timeout, master, transcript)
+                    os.write(master, b"\r\n")
+                    wait_for_screen(args.transcript, [f"model={message}"], args.timeout, master, transcript)
+                    drain(master, transcript, 1.0)
+                    continue
                 if kind == "key":
                     wait_for_screen(args.transcript, ["approval:"], args.timeout, master, transcript)
                     os.write(master, message.encode("utf-8"))
                 else:
-                    os.write(master, message.encode("utf-8") + b"\r")
+                    send_line(master, message)
                 wait_for_turn(args.storage_dir, before, args.timeout, master, transcript)
                 drain(master, transcript, 1.0)
             os.write(master, b"/exit\r")

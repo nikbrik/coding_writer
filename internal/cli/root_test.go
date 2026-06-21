@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,6 +157,125 @@ func TestChatTurnsSerializeAndBlockStaleStateMutation(t *testing.T) {
 	}
 	if calls := provider.ChatCalls(); calls != 1 {
 		t.Fatalf("terminal mutation attempt should not call provider, chat calls=%d", calls)
+	}
+}
+
+func TestSlashHelpNewResumeAndPendingGuard(t *testing.T) {
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	help, err := handleSlashResult(context.Background(), io.Discard, rt, "session_current", "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"/new", "/resume <session_id>", "/task <task_id>", "/task resume", "/profile create <id>"} {
+		if !strings.Contains(help.Output, want) {
+			t.Fatalf("help missing %q:\n%s", want, help.Output)
+		}
+	}
+	if _, err := rt.Tasks.Start("pending task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.SavePendingPlanningProposal("summary", []string{"criteria"}, []string{"step"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := handleSlashResult(context.Background(), io.Discard, rt, "session_current", "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.PendingBlocked == "" || !strings.Contains(blocked.Output, "pending planning") {
+		t.Fatalf("pending guard did not block /new: %+v", blocked)
+	}
+	if _, err := rt.Tasks.RejectPendingPlanningProposal(); err != nil {
+		t.Fatal(err)
+	}
+	next, err := handleSlashResult(context.Background(), io.Discard, rt, "session_current", "/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.ActiveSessionID == "" || next.ActiveSessionID == "session_current" {
+		t.Fatalf("/new did not return new session: %+v", next)
+	}
+	if next.ActiveTask == nil || next.ActiveTask.LastSessionID != next.ActiveSessionID {
+		t.Fatalf("/new did not update current task session metadata: %+v", next.ActiveTask)
+	}
+	if err := memory.TouchSessionActivity(storageDir, "session_old"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := handleSlashResult(context.Background(), io.Discard, rt, next.ActiveSessionID, "/resume session_old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.ActiveSessionID != "session_old" || resumed.ActiveTask == nil || resumed.ActiveTask.LastSessionID != "session_old" {
+		t.Fatalf("/resume did not switch session only: %+v", resumed)
+	}
+}
+
+func TestSlashTaskFocusArchiveRestoreAndProfileDefaults(t *testing.T) {
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskState, err := rt.Tasks.Start("task one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Tasks.ClearCurrentFocus(); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_one", "/task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if listed.Picker == nil || listed.Picker.Kind != "tasks" || !strings.Contains(listed.Output, taskState.ID) {
+		t.Fatalf("/task list missing task: %+v output=%s", listed.Picker, listed.Output)
+	}
+	selected, err := handleSlashResult(context.Background(), io.Discard, rt, "session_one", "/task "+taskState.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.ActiveTask == nil || selected.ActiveTask.ID != taskState.ID || selected.ActiveTask.LastSessionID != "session_one" {
+		t.Fatalf("/task select failed: %+v", selected.ActiveTask)
+	}
+	closed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_one", "/task close")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closed.TaskCleared {
+		t.Fatalf("/task close did not clear focus: %+v", closed)
+	}
+	archived, err := handleSlashResult(context.Background(), io.Discard, rt, "session_one", "/task archive "+taskState.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !archived.TaskCleared {
+		t.Fatalf("/task archive should clear focus: %+v", archived)
+	}
+	if _, err := handleSlashResult(context.Background(), io.Discard, rt, "session_one", "/task "+taskState.ID); err == nil || !strings.Contains(err.Error(), "task_archived") {
+		t.Fatalf("archived direct select should fail, got %v", err)
+	}
+	restored, err := handleSlashResult(context.Background(), io.Discard, rt, "session_two", "/task restore "+taskState.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ActiveTask == nil || restored.ActiveTask.LastSessionID != "session_two" {
+		t.Fatalf("/task restore did not make current: %+v", restored.ActiveTask)
+	}
+	profile, err := handleSlashResult(context.Background(), io.Discard, rt, "session_two", "/profile create custom")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.ActiveProfile == nil || profile.ActiveProfile.ID != "custom" || profile.ActiveProfile.DefaultModel != "" {
+		t.Fatalf("profile create failed: %+v", profile.ActiveProfile)
+	}
+	if strings.Join(profile.ActiveProfile.Constraints, "|") != "follow user preferences|do not inherit hidden state|do not copy long memory" {
+		t.Fatalf("profile constraints not exact: %+v", profile.ActiveProfile.Constraints)
+	}
+	if _, err := handleSlashResult(context.Background(), io.Discard, rt, "session_two", "/profile create new"); err == nil || !strings.Contains(err.Error(), "reserved_profile_id") {
+		t.Fatalf("reserved profile id should fail, got %v", err)
 	}
 }
 

@@ -164,6 +164,7 @@ type TaskState struct {
 	OpenQuestions                     []string               `json:"open_questions"`
 	PendingPlanning                   *PlanningProposalState `json:"pending_planning,omitempty"`
 	LastSessionID                     string                 `json:"last_session_id,omitempty"`
+	ArchivedAt                        *time.Time             `json:"archived_at,omitempty"`
 	ApprovedPlanID                    string                 `json:"approved_plan_id,omitempty"`
 	PlanningApprovalID                string                 `json:"planning_approval_id,omitempty"`
 	PlanningApprovalStatus            string                 `json:"planning_approval_status,omitempty"`
@@ -210,6 +211,7 @@ type AppConfig struct {
 	OpenRouterBaseURL         string   `json:"openrouter_base_url"`
 	TrustedOpenRouterBaseURLs []string `json:"trusted_openrouter_base_urls,omitempty"`
 	MemoryModel               string   `json:"memory_model,omitempty"`
+	FavoriteModels            []string `json:"favorite_models,omitempty"`
 }
 
 type MemoryBundle struct {

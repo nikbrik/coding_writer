@@ -27,25 +27,18 @@ cw_json() {
   ASSISTANT_PROVIDER=fake \
   ASSISTANT_LLM_VALIDATION=1 \
   GOCACHE="$GOCACHE_DIR" \
-  "$BIN" --storage-dir "$STORAGE_DIR" --model fake/model --json "$@"
+  "$BIN" --storage-dir "$STORAGE_DIR" --json "$@"
 }
 
 ASSISTANT_PROVIDER=fake \
 ASSISTANT_LLM_VALIDATION=1 \
 ASSISTANT_STORAGE_DIR="$STORAGE_DIR" \
-ASSISTANT_MODEL=fake/model \
-GOCACHE="$GOCACHE_DIR" \
-"$BIN" --storage-dir "$STORAGE_DIR" init --model fake/model >/dev/null
-
-ASSISTANT_PROVIDER=fake \
-ASSISTANT_LLM_VALIDATION=1 \
-ASSISTANT_STORAGE_DIR="$STORAGE_DIR" \
-ASSISTANT_MODEL=fake/model \
 GOCACHE="$GOCACHE_DIR" \
 python3 "$ROOT_DIR/scripts/day15-tui-driver.py" \
   --storage-dir "$STORAGE_DIR" \
   --transcript "$OUT_DIR/tui-transcript.ansi" \
-  "$BIN" --storage-dir "$STORAGE_DIR" --model fake/model --tui
+  --model-id fake/model \
+  "$BIN" --storage-dir "$STORAGE_DIR" --tui
 
 python3 - "$OUT_DIR/tui-transcript.ansi" "$OUT_DIR/tui-transcript.txt" <<'PY'
 import re, sys
@@ -53,7 +46,7 @@ raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
 text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
 text = text.replace("\r", "\n")
 open(sys.argv[2], "w", encoding="utf-8").write(text)
-required = ["codingwriter", "Status", "Plan", "Evidence", "Files"]
+required = ["codingwriter", "Select model", "fake/model", "Status", "Plan", "Evidence", "Files"]
 missing = [item for item in required if item not in text]
 if missing:
     raise SystemExit(f"TUI transcript missing {missing}")

@@ -53,6 +53,92 @@ func TestTaskStateMachinePauseResume(t *testing.T) {
 	}
 }
 
+func TestTaskListSelectClearArchiveRestorePreservesState(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	first, err := mgr.Start("first task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := filepath.Join(dir, "tasks", first.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workPath := filepath.Join(workDir, "work_memory.jsonl")
+	if err := os.WriteFile(workPath, []byte(`{"content":"keep me"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.ClearCurrentFocus(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Current(); err == nil || !strings.Contains(err.Error(), "missing_current_task") {
+		t.Fatalf("want no current task, got %v", err)
+	}
+	selected, err := mgr.SelectTask(first.ID, "session_one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.LastSessionID != "session_one" {
+		t.Fatalf("last session not updated: %+v", selected)
+	}
+	items, err := mgr.ListTasks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || !items[0].IsCurrent || items[0].Archived {
+		t.Fatalf("bad task list: %+v", items)
+	}
+	archived, err := mgr.ArchiveTaskMetadata(first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archived.ArchivedAt == nil {
+		t.Fatal("archive metadata not set")
+	}
+	if _, err := mgr.SelectTask(first.ID, "session_two"); err == nil || !strings.Contains(err.Error(), "task_archived") {
+		t.Fatalf("archived task should not select directly, got %v", err)
+	}
+	if _, err := os.Stat(workPath); err != nil {
+		t.Fatalf("work memory not preserved: %v", err)
+	}
+	restored, err := mgr.RestoreArchivedTask(first.ID, "session_two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.ArchivedAt != nil || restored.LastSessionID != "session_two" {
+		t.Fatalf("bad restored state: %+v", restored)
+	}
+	current, err := mgr.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != first.ID {
+		t.Fatalf("restored task not current: %+v", current)
+	}
+}
+
+func TestPausedTaskSelectionUpdatesOnlyLastSessionID(t *testing.T) {
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	state, err := mgr.Start("paused task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := mgr.SelectTask(state.ID, "session_paused")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Status != app.TaskStatusPaused || selected.LastSessionID != "session_paused" {
+		t.Fatalf("paused metadata update wrong: %+v", selected)
+	}
+	if selected.Stage != state.Stage || selected.Title != state.Title {
+		t.Fatalf("selection mutated lifecycle fields: before=%+v after=%+v", state, selected)
+	}
+}
+
 func TestTaskPlanCriteriaPersistAfterRestart(t *testing.T) {
 	dir := t.TempDir()
 	mgr := NewManager(dir)

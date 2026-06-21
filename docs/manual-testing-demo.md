@@ -480,7 +480,7 @@ Live demo через OpenRouter:
 
 ```bash
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
-export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
+unset ASSISTANT_MODEL
 unset ASSISTANT_PROVIDER
 unset ASSISTANT_LLM_VALIDATION
 scripts/day15-demo.sh
@@ -501,7 +501,7 @@ scripts/day15-demo.sh --fake
 
 ### Demo flow
 
-Основной visible flow запускается одной командой. Скрипт только готовит storage/model/binary, собирает `.codingwriter/bin/cw` и открывает обычный `cw` TUI; в интерфейсе нет текста про Day 15 demo. Пользователь вводит обычные сообщения, не exact command проверки и не state-machine команды. Приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
+Основной visible flow запускается одной командой. Скрипт только готовит storage/binary, собирает `.codingwriter/bin/cw` и открывает обычный `cw` TUI; модель выбирается пользователем внутри TUI через `/model`, а не через предварительный config/env. Пользователь вводит обычные сообщения, не exact command проверки и не state-machine команды. Приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
 
 ```bash
 scripts/day15-demo.sh
@@ -510,6 +510,10 @@ scripts/day15-demo.sh
 Текст, который пользователь вводит внутри TUI input:
 
 ```text
+/model
+
+В появившемся списке найти google/gemini-3.1-flash-lite, нажать Enter.
+
 Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии. Отвечай по-русски
 
 Да, план принят. Приступай к выполнению.
@@ -521,6 +525,8 @@ scripts/day15-demo.sh
 
 Что должно быть видно в TUI во время ручного прогона:
 
+- после `/model` открывается `Select model` со списком моделей, search и строками provider/model;
+- после выбора header показывает `model=google/gemini-3.1-flash-lite`;
 - header `codingwriter` с model/profile/task/stage/expected/status;
 - `Status` показывает переходы `planning -> execution -> validation -> done`;
 - `Plan` показывает pending plan, criteria и затем approved plan;

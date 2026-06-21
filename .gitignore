@@ -33,3 +33,12 @@ manual_scratch/
 
 # Logs
 *.log
+
+# Agent runtime state
+.agents/state/scope-lock/
+
+# Local storage
+.codingwriter/storage/
+
+# Compiled binaries
+.codingwriter/bin/

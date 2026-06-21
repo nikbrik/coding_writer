@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MODEL="${ASSISTANT_MODEL:-google/gemini-3.1-flash-lite}"
+TARGET_MODEL="${DAY15_MODEL:-google/gemini-3.1-flash-lite}"
 DEFAULT_STORAGE_DIR="$ROOT_DIR/.codingwriter/storage/video-day15-controlled-lifecycle"
 DEMO_TARGET_DIR="$ROOT_DIR/manual_scratch/day15_contains_duplicate"
 STORAGE_DIR="${ASSISTANT_STORAGE_DIR:-$DEFAULT_STORAGE_DIR}"
@@ -30,7 +30,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --fake)
       MODE="fake"
-      MODEL="fake/model"
+      TARGET_MODEL="fake/model"
       ;;
     --no-clean)
       CLEAN="0"
@@ -98,13 +98,10 @@ else
   fi
 fi
 
-export ASSISTANT_MODEL="$MODEL"
 export ASSISTANT_STORAGE_DIR="$STORAGE_DIR"
 export GOCACHE="$GOCACHE_DIR"
 OUT_DIR="$STORAGE_DIR/out"
 mkdir -p "$OUT_DIR"
-
-"$BIN" init --model "$MODEL"
 
 run_chat() {
   "$BIN" --tui
@@ -199,7 +196,7 @@ PY
 cat <<EOF
 
 cw
-model: $MODEL
+select model in TUI: /model -> $TARGET_MODEL
 storage: $STORAGE_DIR
 EOF
 
@@ -209,7 +206,8 @@ else
   python3 "$ROOT_DIR/scripts/day15-tui-driver.py" \
     --storage-dir "$STORAGE_DIR" \
     --transcript "$OUT_DIR/tui-transcript.ansi" \
-    "$BIN" --storage-dir "$STORAGE_DIR" --model "$MODEL" --tui
+    --model-id "$TARGET_MODEL" \
+    "$BIN" --storage-dir "$STORAGE_DIR" --tui
   "$BIN" task status --json > "$OUT_DIR/final-status.json"
   "$BIN" process audit --latest --json > "$OUT_DIR/latest-audit.json"
   assert_completed_demo

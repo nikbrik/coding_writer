@@ -5,10 +5,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/storage"
 )
+
+type SessionSummary struct {
+	ID           string
+	LastActivity time.Time
+}
 
 func sessionDir(root, sessionID string) (string, error) {
 	if err := storage.ValidateID(sessionID); err != nil {
@@ -45,6 +51,10 @@ func touchSessionActivity(root, sessionID string) error {
 	return storage.TouchFile(filepath.Join(dir, ".last_activity"), storage.FileMode)
 }
 
+func TouchSessionActivity(root, sessionID string) error {
+	return touchSessionActivity(root, sessionID)
+}
+
 func workPath(root, taskID string) (string, error) {
 	if err := storage.ValidateID(taskID); err != nil {
 		return "", app.NewError(app.CategoryValidation, "unsafe_task_id", "unsafe task id", err)
@@ -77,22 +87,29 @@ func longPath(root, kind string) (string, error) {
 }
 
 func LatestSessionID(root string) (string, error) {
+	sessions, err := ListSessions(root)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) == 0 {
+		return "", app.NewError(app.CategoryValidation, "missing_session", "no session exists", nil)
+	}
+	return sessions[0].ID, nil
+}
+
+func ListSessions(root string) ([]SessionSummary, error) {
 	dir, safeErr := storage.SafeJoin(root, "sessions")
 	if safeErr != nil {
-		return "", app.NewError(app.CategoryValidation, "unsafe_session_path", "unsafe session path", safeErr)
+		return nil, app.NewError(app.CategoryValidation, "unsafe_session_path", "unsafe session path", safeErr)
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", app.NewError(app.CategoryValidation, "missing_session", "no session exists", err)
+			return nil, nil
 		}
-		return "", app.NewError(app.CategoryStorage, "sessions_list", err.Error(), err)
+		return nil, app.NewError(app.CategoryStorage, "sessions_list", err.Error(), err)
 	}
-	type candidate struct {
-		id    string
-		mtime int64
-	}
-	var candidates []candidate
+	var sessions []SessionSummary
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -104,16 +121,29 @@ func LatestSessionID(root string) (string, error) {
 		if err != nil {
 			continue
 		}
-		mtime := info.ModTime().UnixNano()
+		lastActivity := info.ModTime()
 		activityPath := filepath.Join(dir, entry.Name(), ".last_activity")
 		if activityInfo, err := os.Stat(activityPath); err == nil {
-			mtime = activityInfo.ModTime().UnixNano()
+			lastActivity = activityInfo.ModTime()
 		}
-		candidates = append(candidates, candidate{id: entry.Name(), mtime: mtime})
+		sessions = append(sessions, SessionSummary{ID: entry.Name(), LastActivity: lastActivity.UTC()})
 	}
-	if len(candidates) == 0 {
-		return "", app.NewError(app.CategoryValidation, "missing_session", "no session exists", nil)
+	sort.Slice(sessions, func(i, j int) bool { return sessions[i].LastActivity.After(sessions[j].LastActivity) })
+	return sessions, nil
+}
+
+func LookupSession(root, sessionID string) (SessionSummary, error) {
+	if err := storage.ValidateID(sessionID); err != nil {
+		return SessionSummary{}, app.NewError(app.CategoryValidation, "unsafe_session_id", "unsafe session id", err)
 	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].mtime > candidates[j].mtime })
-	return candidates[0].id, nil
+	sessions, err := ListSessions(root)
+	if err != nil {
+		return SessionSummary{}, err
+	}
+	for _, session := range sessions {
+		if session.ID == sessionID {
+			return session, nil
+		}
+	}
+	return SessionSummary{}, app.NewError(app.CategoryValidation, "unknown_session", "unknown session", nil)
 }

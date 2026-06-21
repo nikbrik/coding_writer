@@ -77,6 +77,33 @@ func (m *Manager) Create(profile app.UserProfile) error {
 	return nil
 }
 
+func (m *Manager) CreateDefault(id string) (app.UserProfile, error) {
+	id = strings.TrimSpace(id)
+	now := time.Now().UTC()
+	profile := app.UserProfile{
+		ID:          id,
+		DisplayName: id,
+		Style: map[string]string{
+			"language": "ru",
+			"tone":     "direct",
+		},
+		ResponseFormat: map[string]string{
+			"structure": "concise",
+		},
+		Constraints: []string{
+			"follow user preferences",
+			"do not inherit hidden state",
+			"do not copy long memory",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := m.Create(profile); err != nil {
+		return app.UserProfile{}, err
+	}
+	return m.SetActive(profile.ID)
+}
+
 func (m *Manager) Get(id string) (app.UserProfile, error) {
 	path, err := m.profilePath(id)
 	if err != nil {
@@ -152,6 +179,9 @@ func (m *Manager) SetActive(id string) (app.UserProfile, error) {
 func Validate(profile app.UserProfile) error {
 	if err := storage.ValidateID(profile.ID); err != nil {
 		return app.NewError(app.CategoryValidation, "unsafe_profile_id", "unsafe profile id", err)
+	}
+	if strings.EqualFold(profile.ID, "new") {
+		return app.NewError(app.CategoryValidation, "reserved_profile_id", "profile id is reserved", nil)
 	}
 	if strings.TrimSpace(profile.DisplayName) == "" || len(profile.Style) == 0 || len(profile.ResponseFormat) == 0 || len(profile.Constraints) == 0 {
 		return app.NewError(app.CategoryValidation, "invalid_profile", "profile requires display_name, style, response_format, constraints", nil)
