@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -83,22 +84,22 @@ type Model struct {
 	active   Pane
 	busy     bool
 
-	task               *app.TaskState
-	proposal           *app.MemoryProposal
-	evidence           []EvidenceView
-	events             []timelineEvent
-	audit              []process.ProcessAuditEvent
-	warnings           []string
-	appliedArtifacts   []string
-	contextExpanded    bool
-	timelineAnchorTop  bool
-	timelineAnchorLine int
-	timelineAnchorSet  bool
-	lastUserInput      string
-	err                *app.Error
-	modelPicker        *modelPickerState
-	contextPicker      *contextPickerState
-	slashCursor        int
+	task                *app.TaskState
+	proposal            *app.MemoryProposal
+	evidence            []EvidenceView
+	events              []timelineEvent
+	audit               []process.ProcessAuditEvent
+	warnings            []string
+	appliedArtifacts    []string
+	contextExpanded     bool
+	timelineAnchorTop   bool
+	timelineAnchorEvent int
+	timelineAnchorSet   bool
+	lastUserInput       string
+	err                 *app.Error
+	modelPicker         *modelPickerState
+	contextPicker       *contextPickerState
+	slashCursor         int
 }
 
 type initialLoadedMsg struct {
@@ -150,7 +151,7 @@ type favoriteToggledMsg struct {
 
 func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) error {
 	m := NewModel(ctx, backend)
-	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out)}
+	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion()}
 	_, err := tea.NewProgram(m, opts...).Run()
 	return err
 }
@@ -422,8 +423,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if !strings.HasPrefix(text, "/") {
 				m.lastUserInput = text
-				m.anchorNextTimelineEvent()
 				m.appendUserEvent(text)
+				m.anchorTimelineEvent(len(m.events) - 1)
 			} else {
 				m.appendEvent("user", stageOfTask(m.task), "command", text, "info")
 			}
@@ -515,9 +516,16 @@ func (m *Model) resize() {
 	bodyHeight := max(4, m.height-headerHeight-footerHeight-inputHeight)
 	m.input.SetWidth(max(20, m.width-2))
 	m.input.SetHeight(inputHeight)
-	m.timeline.Width = max(20, m.width-2)
+	m.timeline.Width = m.timelineWidth()
 	m.timeline.Height = bodyHeight
 	m.updateViewport()
+}
+
+func (m Model) timelineWidth() int {
+	if m.width >= 120 {
+		return max(20, m.width*60/100)
+	}
+	return max(20, m.width-2)
 }
 
 func isMouseWheel(msg tea.MouseMsg) bool {
@@ -574,25 +582,25 @@ func (m Model) bodyView() string {
 		if strings.TrimSpace(leftText) == "" {
 			leftText = m.timelineFallbackView(leftW)
 		}
-		left := lipgloss.NewStyle().Width(leftW).Height(m.timeline.Height).Render(leftText)
-		right := lipgloss.NewStyle().Width(rightW).Height(m.timeline.Height).Render(m.sidebarView(rightW))
+		left := lipgloss.NewStyle().Width(leftW).Height(m.timeline.Height).Render(fitHeight(leftText, m.timeline.Height))
+		right := lipgloss.NewStyle().Width(rightW).Height(m.timeline.Height).Render(fitHeight(m.sidebarView(rightW), m.timeline.Height))
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, "│", right)
 	}
 	switch m.active {
 	case PanePlan:
-		return m.planView(m.width)
+		return fitHeight(m.planView(m.width), m.timeline.Height)
 	case PaneEvidence:
-		return m.evidenceView(m.width)
+		return fitHeight(m.evidenceView(m.width), m.timeline.Height)
 	case PaneMemory:
-		return m.memoryView(m.width)
+		return fitHeight(m.memoryView(m.width), m.timeline.Height)
 	case PaneFiles:
-		return m.filesView(m.width)
+		return fitHeight(m.filesView(m.width), m.timeline.Height)
 	default:
 		view := m.timeline.View()
 		if strings.TrimSpace(view) == "" {
-			return m.timelineFallbackView(m.width)
+			return fitHeight(m.timelineFallbackView(m.width), m.timeline.Height)
 		}
-		return view
+		return fitHeight(view, m.timeline.Height)
 	}
 }
 
@@ -648,7 +656,7 @@ func (m Model) footerView() string {
 	} else if m.hasPendingMemory() {
 		approval = " | memory: a accept all, r reject all"
 	}
-	line := fmt.Sprintf("tab pane=%s | pgup/pgdown scroll | home/end top/bottom | enter send | /exit quit | p pause/resume%s", pane, approval)
+	line := fmt.Sprintf("tab pane=%s | wheel/pgup/pgdown scroll | home/end top/bottom | enter send | /exit quit | p pause/resume%s", pane, approval)
 	if m.err != nil && m.err.Hint != "" {
 		line += " | hint: " + m.err.Hint
 	}
@@ -1524,38 +1532,67 @@ func (m *Model) appendAuditEvent(event process.ProcessAuditEvent) {
 
 func (m *Model) updateViewport() {
 	wasAtBottom := m.timeline.AtBottom()
-	lines := m.renderTimelineLines(m.events)
+	lines, eventStarts := m.renderTimelineLinesWithStarts(m.events)
 	if len(lines) == 0 {
 		lines = append(lines, "Опишите coding task. План, progress, files и evidence появятся здесь.")
 	}
 	m.timeline.SetContent(strings.Join(lines, "\n"))
+	targetOffset := -1
 	if m.timelineAnchorTop {
 		m.timeline.GotoTop()
 		m.timelineAnchorTop = false
 	} else if m.timelineAnchorSet {
-		m.timeline.SetYOffset(m.timelineAnchorLine)
-		m.timelineAnchorSet = false
+		if m.timelineAnchorEvent >= 0 && m.timelineAnchorEvent < len(eventStarts) {
+			targetOffset = eventStarts[m.timelineAnchorEvent]
+			m.timeline.SetYOffset(targetOffset)
+		}
+		if !m.busy {
+			m.timelineAnchorSet = false
+		}
 	} else if wasAtBottom || m.timeline.PastBottom() {
 		m.timeline.GotoBottom()
 	}
+	m.debugLog("viewport width=%d height=%d lines=%d y=%d was_bottom=%t past_bottom=%t anchor_set=%t anchor_event=%d target=%d busy=%t",
+		m.timeline.Width, m.timeline.Height, len(lines), m.timeline.YOffset, wasAtBottom, m.timeline.PastBottom(), m.timelineAnchorSet, m.timelineAnchorEvent, targetOffset, m.busy)
 	m.input.Placeholder = placeholder(m.task)
 }
 
-func (m *Model) anchorNextTimelineEvent() {
-	m.timelineAnchorLine = len(m.renderTimelineLines(m.events))
+func (m Model) debugLog(format string, args ...any) {
+	path := strings.TrimSpace(os.Getenv("CODINGWRITER_TUI_DEBUG_LOG"))
+	if path == "" {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = fmt.Fprintf(f, time.Now().UTC().Format(time.RFC3339Nano)+" "+format+"\n", args...)
+}
+
+func (m *Model) anchorTimelineEvent(index int) {
+	m.timelineAnchorEvent = index
 	m.timelineAnchorSet = true
 }
 
 func (m Model) renderTimelineLines(events []timelineEvent) []string {
+	lines, _ := m.renderTimelineLinesWithStarts(events)
+	return lines
+}
+
+func (m Model) renderTimelineLinesWithStarts(events []timelineEvent) ([]string, []int) {
 	lines := []string{}
+	starts := make([]int, 0, len(events))
 	for _, ev := range events {
+		starts = append(starts, len(lines))
 		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
 		if ev.Summary != "" {
-			summary := eventSummaryStyle(ev).Render(safe(ev.Summary))
-			lines = append(lines, wrap(summary, max(20, m.timeline.Width-2))...)
+			for _, summaryLine := range wrap(safe(ev.Summary), max(20, m.timeline.Width-2)) {
+				lines = append(lines, eventSummaryStyle(ev).Render(summaryLine))
+			}
 		}
 	}
-	return lines
+	return lines, starts
 }
 
 func auditSeverity(event process.ProcessAuditEvent) string {
@@ -2396,6 +2433,17 @@ func trimWidth(text string, width int) string {
 		return string(runes[:width])
 	}
 	return string(runes[:width-1]) + "…"
+}
+
+func fitHeight(text string, height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func shortID(id string) string {

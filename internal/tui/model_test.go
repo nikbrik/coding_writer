@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/memory"
@@ -175,11 +176,11 @@ func TestModelExchangeUpdatesCodingWorkspaceView(t *testing.T) {
 	if !m.busy {
 		t.Fatal("submit should mark model busy")
 	}
-	msg := cmd().(exchangeFinishedMsg)
+	msg := exchangeFinishedFromCmd(t, cmd)
 	next, _ = m.Update(msg)
 	m = next.(Model)
 	view := m.View()
-	for _, want := range []string{"codingwriter", "Status", "Plan", "Files", "plan ready", "applied:", "last input:", "Contains Duplicate"} {
+	for _, want := range []string{"codingwriter", "Status", "Plan", "Files", "plan ready", "applied file", "last input:", "Contains Duplicate"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -241,6 +242,41 @@ func TestSubmitLongTaskAnchorsTimelineAtMessageBeginning(t *testing.T) {
 	}
 }
 
+func TestExchangeResponseKeepsSubmittedTaskAnchor(t *testing.T) {
+	longAnswer := "ASSISTANT_HEAD " + strings.Repeat("response detail ", 80) + "ASSISTANT_TAIL"
+	fake := &fakeBackend{
+		responses: []ChatResponse{{OK: true, Answer: longAnswer}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.width = 100
+	m.height = 8
+	m.resize()
+	for i := 0; i < 12; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("old event %02d", i), "stale", "info")
+	}
+	m.updateViewport()
+	m.timeline.GotoBottom()
+	longTask := "BEGIN_NEW_EXCHANGE Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. " +
+		strings.Repeat("Нужны tests для разных сценариев. ", 8) +
+		"END_NEW_EXCHANGE"
+	m.input.SetValue(longTask)
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(exchangeFinishedFromCmd(t, cmd))
+	m = next.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "BEGIN_NEW_EXCHANGE") {
+		t.Fatalf("exchange response moved viewport away from submitted task beginning:\n%s", view)
+	}
+	for _, blocked := range []string{"END_NEW_EXCHANGE", "ASSISTANT_TAIL", "old event"} {
+		if strings.Contains(view, blocked) {
+			t.Fatalf("exchange response viewport leaked %q instead of staying at exchange beginning:\n%s", blocked, view)
+		}
+	}
+}
+
 func TestExchangeCompactsAuditAndEndsWithNextAction(t *testing.T) {
 	task := app.TaskState{
 		ID:              "task_demo",
@@ -266,7 +302,7 @@ func TestExchangeCompactsAuditAndEndsWithNextAction(t *testing.T) {
 	m.input.SetValue("plan task")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(cmd().(exchangeFinishedMsg))
+	next, _ = m.Update(exchangeFinishedFromCmd(t, cmd))
 	m = next.(Model)
 
 	if len(m.events) == 0 || m.events[len(m.events)-1].Kind != "next" {
@@ -357,7 +393,7 @@ func TestPlanningApprovalShortcuts(t *testing.T) {
 		if !m.busy || cmd == nil {
 			t.Fatalf("approval key %q did not start approval", key.String())
 		}
-		msg := cmd().(exchangeFinishedMsg)
+		msg := exchangeFinishedFromCmd(t, cmd)
 		if msg.err != nil {
 			t.Fatalf("approval command failed: %v", msg.err)
 		}
@@ -389,7 +425,7 @@ func TestPlanningApprovalOnlyAutoContinuesExecution(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("approval-only response should auto-continue execution")
 	}
-	finished := cmd().(exchangeFinishedMsg)
+	finished := exchangeFinishedFromCmd(t, cmd)
 	if !strings.Contains(finished.input, "Продолжай выполнение") {
 		t.Fatalf("wrong auto-continue input: %q", finished.input)
 	}
@@ -444,7 +480,7 @@ func TestEmptyEnterContinuesExecutionWhenLLMResponseExpected(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("empty enter should continue execution")
 	}
-	finished := cmd().(exchangeFinishedMsg)
+	finished := exchangeFinishedFromCmd(t, cmd)
 	if !strings.Contains(finished.input, "Продолжай выполнение") {
 		t.Fatalf("wrong continuation input: %q", finished.input)
 	}
@@ -500,7 +536,7 @@ func TestModelPickerSearchFavoriteAndSelect(t *testing.T) {
 			t.Fatalf("immediate picker view missing %q:\n%s", want, immediate)
 		}
 	}
-	next, _ = m.Update(cmd().(modelsLoadedMsg))
+	next, _ = m.Update(messageFromCmd[modelsLoadedMsg](t, cmd))
 	m = next.(Model)
 	if m.modelPicker == nil {
 		t.Fatal("model picker did not open")
@@ -523,7 +559,7 @@ func TestModelPickerSearchFavoriteAndSelect(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("favorite toggle command missing")
 	}
-	next, _ = m.Update(cmd().(favoriteToggledMsg))
+	next, _ = m.Update(messageFromCmd[favoriteToggledMsg](t, cmd))
 	m = next.(Model)
 	if !m.modelPicker.favorites["google/gemini-3.1-flash-lite"] {
 		t.Fatalf("favorite not marked: %#v", m.modelPicker.favorites)
@@ -534,7 +570,7 @@ func TestModelPickerSearchFavoriteAndSelect(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("enter should select model")
 	}
-	next, _ = m.Update(cmd().(modelSelectedMsg))
+	next, _ = m.Update(messageFromCmd[modelSelectedMsg](t, cmd))
 	m = next.(Model)
 	if m.modelPicker != nil {
 		t.Fatal("picker should close after selection")
@@ -580,7 +616,7 @@ func TestSlashPrefixEnterRunsFirstMatchingCommand(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("/resu should run first matching slash command")
 	}
-	msg := cmd().(slashFinishedMsg)
+	msg := messageFromCmd[slashFinishedMsg](t, cmd)
 	if msg.line != "/resume" {
 		t.Fatalf("expected /resu to complete to /resume, got %q", msg.line)
 	}
@@ -601,7 +637,7 @@ func TestSlashArrowSelectsCommandFromFullList(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("selected slash command should run")
 	}
-	msg := cmd().(slashFinishedMsg)
+	msg := messageFromCmd[slashFinishedMsg](t, cmd)
 	if msg.line != "/resume" {
 		t.Fatalf("expected selected slash command /resume, got %q", msg.line)
 	}
@@ -671,7 +707,7 @@ func TestModelPickerInvalidSelectionDoesNotMutateConfig(t *testing.T) {
 	if !m.busy || cmd == nil {
 		t.Fatal("expected select command")
 	}
-	next, _ = m.Update(cmd().(modelSelectedMsg))
+	next, _ = m.Update(messageFromCmd[modelSelectedMsg](t, cmd))
 	m = next.(Model)
 	if fake.config.ActiveModel != "openai/gpt-4.1-mini" || fake.config.MemoryModel != "openai/gpt-4.1-mini" {
 		t.Fatalf("invalid selection mutated config: %+v", fake.config)
@@ -772,6 +808,104 @@ func TestTimelineMouseWheelScrollsFromRightPane(t *testing.T) {
 	m = next.(Model)
 	if m.timeline.YOffset >= before {
 		t.Fatalf("right-pane wheel did not scroll timeline: before=%d after=%d", before, m.timeline.YOffset)
+	}
+}
+
+func TestTimelineMouseWheelScrollsAfterLongExchange(t *testing.T) {
+	fake := &fakeBackend{
+		responses: []ChatResponse{{
+			OK:     true,
+			Answer: "assistant answer " + strings.Repeat("with enough wrapped detail to overflow the timeline viewport ", 24),
+		}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.width = 100
+	m.height = 8
+	m.resize()
+	m.input.SetValue("BEGIN_SCROLL_EXCHANGE " + strings.Repeat("long task details ", 12))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(exchangeFinishedFromCmd(t, cmd))
+	m = next.(Model)
+
+	if m.timeline.YOffset != 0 {
+		t.Fatalf("test setup expected exchange anchor at top, got offset=%d", m.timeline.YOffset)
+	}
+	next, _ = m.Update(tea.MouseMsg{X: 2, Y: 3, Type: tea.MouseWheelDown, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m = next.(Model)
+	down := m.timeline.YOffset
+	if down <= 0 {
+		t.Fatalf("mouse wheel down did not scroll after long exchange: offset=%d", down)
+	}
+	next, _ = m.Update(tea.MouseMsg{X: 2, Y: 3, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	m = next.(Model)
+	if m.timeline.YOffset >= down {
+		t.Fatalf("mouse wheel up did not scroll back after long exchange: before=%d after=%d", down, m.timeline.YOffset)
+	}
+}
+
+func TestWideTimelineWrapsToVisibleLeftPane(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 120
+	m.height = 40
+	m.resize()
+	if m.timeline.Width != 72 {
+		t.Fatalf("wide timeline width should match visible left pane: got %d", m.timeline.Width)
+	}
+	m.appendEvent("user", app.StagePlanning, "you: BEGIN_WIDE_SCROLL", strings.Repeat("wide timeline text ", 12), "info")
+	m.updateViewport()
+
+	wrapped := 0
+	for _, line := range strings.Split(m.timeline.View(), "\n") {
+		if strings.Contains(line, "wide timeline text") {
+			wrapped++
+		}
+	}
+	if wrapped < 3 {
+		t.Fatalf("wide timeline content did not wrap inside visible pane, wrapped=%d view=\n%s", wrapped, m.timeline.View())
+	}
+}
+
+func TestWideViewDoesNotExceedTerminalHeight(t *testing.T) {
+	proposal := &app.MemoryProposal{ID: "proposal", Records: []app.ProposedMemoryRecord{}}
+	for i := 0; i < 12; i++ {
+		proposal.Records = append(proposal.Records, app.ProposedMemoryRecord{
+			ID:      fmt.Sprintf("record_%02d", i),
+			Layer:   app.ProposedLayerShort,
+			Kind:    "context",
+			Content: strings.Repeat("memory detail ", 4),
+			Status:  app.ProposalPending,
+		})
+	}
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 120
+	m.height = 20
+	m.proposal = proposal
+	m.contextExpanded = true
+	m.appendEvent("user", app.StagePlanning, "you: long task", strings.Repeat("timeline detail ", 20), "info")
+	m.resize()
+
+	viewHeight := lipgloss.Height(m.View())
+	if viewHeight > m.height {
+		t.Fatalf("wide TUI view overflowed terminal height: got=%d want<=%d\n%s", viewHeight, m.height, m.View())
+	}
+}
+
+func TestTimelineWrapsStyledSummaryWithoutDroppingBeginning(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 120
+	m.height = 40
+	m.resize()
+	m.appendEvent("user", app.StagePlanning, "you: BEGIN_STYLED_WRAP", "BEGIN_STYLED_WRAP "+strings.Repeat("table tests и подробный план. ", 18)+"END_STYLED_WRAP", "info")
+	m.updateViewport()
+
+	view := m.timeline.View()
+	if !strings.Contains(view, "BEGIN_STYLED_WRAP") {
+		t.Fatalf("styled summary wrap dropped beginning:\n%s", view)
+	}
+	if strings.Index(view, "END_STYLED_WRAP") < strings.Index(view, "BEGIN_STYLED_WRAP") {
+		t.Fatalf("styled summary order is wrong:\n%s", view)
 	}
 }
 
@@ -903,7 +1037,7 @@ func TestContextPickersApplyTypedSlashTransitions(t *testing.T) {
 	m.input.SetValue("/resume")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	msg := cmd().(slashFinishedMsg)
+	msg := messageFromCmd[slashFinishedMsg](t, cmd)
 	next, _ = m.Update(msg)
 	m = next.(Model)
 	if m.contextPicker == nil || m.contextPicker.payload.Kind != "sessions" {
@@ -917,7 +1051,7 @@ func TestContextPickersApplyTypedSlashTransitions(t *testing.T) {
 	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	msg = cmd().(slashFinishedMsg)
+	msg = messageFromCmd[slashFinishedMsg](t, cmd)
 	next, _ = m.Update(msg)
 	m = next.(Model)
 	if m.sessionID != "session_old" {
@@ -927,14 +1061,14 @@ func TestContextPickersApplyTypedSlashTransitions(t *testing.T) {
 	m.input.SetValue("/task")
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(cmd().(slashFinishedMsg))
+	next, _ = m.Update(messageFromCmd[slashFinishedMsg](t, cmd))
 	m = next.(Model)
 	if m.contextPicker == nil || m.contextPicker.payload.Kind != "tasks" {
 		t.Fatalf("task picker missing: %#v", m.contextPicker)
 	}
 	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(cmd().(slashFinishedMsg))
+	next, _ = m.Update(messageFromCmd[slashFinishedMsg](t, cmd))
 	m = next.(Model)
 	if m.task == nil || m.task.ID != "task_one" || m.task.LastSessionID != "session_old" {
 		t.Fatalf("task transition not applied: %+v", m.task)
@@ -947,7 +1081,7 @@ func TestProfileNewPickerCreatesProfileFromInput(t *testing.T) {
 	m.input.SetValue("/profile")
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(Model)
-	next, _ = m.Update(cmd().(slashFinishedMsg))
+	next, _ = m.Update(messageFromCmd[slashFinishedMsg](t, cmd))
 	m = next.(Model)
 	if m.contextPicker == nil || m.contextPicker.payload.Kind != "profiles" {
 		t.Fatalf("profile picker missing: %#v", m.contextPicker)
@@ -966,7 +1100,7 @@ func TestProfileNewPickerCreatesProfileFromInput(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("profile create command missing")
 	}
-	next, _ = m.Update(cmd().(slashFinishedMsg))
+	next, _ = m.Update(messageFromCmd[slashFinishedMsg](t, cmd))
 	m = next.(Model)
 	if fake.config.ActiveProfileID != "custom" {
 		t.Fatalf("profile not created/selected: %+v", fake.config)
@@ -1216,6 +1350,34 @@ func teaBatchContainsType(cmd tea.Cmd, typeName string) bool {
 		}
 	}
 	return false
+}
+
+func exchangeFinishedFromCmd(t *testing.T, cmd tea.Cmd) exchangeFinishedMsg {
+	t.Helper()
+	return messageFromCmd[exchangeFinishedMsg](t, cmd)
+}
+
+func messageFromCmd[T any](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	var zero T
+	msg := cmd()
+	if typed, ok := msg.(T); ok {
+		return typed
+	}
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("command returned %T, want %T", msg, zero)
+	}
+	for _, child := range batch {
+		if child == nil {
+			continue
+		}
+		if typed, ok := child().(T); ok {
+			return typed
+		}
+	}
+	t.Fatalf("batch did not contain %T: %T", zero, msg)
+	return zero
 }
 
 func TestExplicitResumeLoadsSessionHistory(t *testing.T) {
