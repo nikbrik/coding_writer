@@ -22,10 +22,10 @@
 ```bash
 export CW_ROOT="/Users/nikita/code/coding_writer"
 cd "$CW_ROOT"
-mkdir -p "$CW_ROOT/.assistant/bin"
-go build -o "$CW_ROOT/.assistant/bin/assistant" ./cmd/assistant
-export PATH="$CW_ROOT/.assistant/bin:$PATH"
-assistant --help
+mkdir -p "$CW_ROOT/.codingwriter/bin"
+go build -o "$CW_ROOT/.codingwriter/bin/cw" ./cmd/cw
+export PATH="$CW_ROOT/.codingwriter/bin:$PATH"
+cw --help
 ```
 
 Run-scoped storage and evidence index:
@@ -91,7 +91,7 @@ bash scripts/manual-day15-user-flow.sh
 - `TestDay12ProfilesChangePromptAndResponse` проходит;
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит.
-- `DAY15_MANUAL_PASS ...` печатается после deterministic Day 15 regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-demo.md`.
+- `DAY15_TUI_MANUAL_PASS ...` печатается после deterministic Day 15 TUI regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-demo.md`.
 
 ### Demo Case 1. Day 11 Memory Layers + Two Sum
 
@@ -150,7 +150,8 @@ Run exact scenario from `docs/manual-testing-demo.md` section `Видео Day 15
 
 Acceptance proof:
 
-- основной flow идёт через один interactive `assistant chat` session, а не через `chat --once`, `task move`, прямые storage edits или JSON edits;
+- основной flow идёт через один interactive `cw` TUI session, а не через `chat --once`, `task move`, прямые storage edits или JSON edits;
+- deterministic smoke `scripts/manual-day15-user-flow.sh` управляет TUI через PTY и сохраняет transcript/status/audit в `<storage>/out/`;
 - natural user request creates `planning` task with plan and criteria;
 - user approval moves to `execution` only through approval validation;
 - обычный chat request creates app-issued trusted evidence through `VerificationResolver` and moves to `validation`;

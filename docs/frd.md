@@ -144,7 +144,7 @@ FRD is source of truth for the implementation contract together with PRD and arc
 
 #### Day 15 lifecycle contract
 
-- The primary task path is chat-driven inside one `assistant chat` REPL session: user states the goal, approves a plan and asks to check/finish in normal language; after approval or strict semantic check/finish intent, the application resolves trusted verification through exact approved commands or a structured verification planner, then drives task creation, stage changes, current step, validation status and done state.
+- The primary task path is chat-driven inside one `cw` TUI session: user states the goal, approves a plan and asks to check/finish in normal language; after approval or strict semantic check/finish intent, the application resolves trusted verification through exact approved commands or a structured verification planner, then drives task creation, stage changes, current step, validation status and done state.
 - `planning -> execution` requires a concrete plan, acceptance criteria and a separate approval-validation record.
 - `execution -> validation` requires accepted execution output plus app-issued trusted evidence when criteria mention tests or verification.
 - Accepted execution output may include materialized files; the app must write only repo-local safe paths extracted from structured `deliverable` blocks and must show applied files in the human output.
@@ -252,7 +252,8 @@ Acceptance criteria:
 
 Поведение:
 
-- `assistant chat` запускает REPL;
+- `cw` запускает TUI в интерактивном терминале;
+- `cw --plain` запускает fallback REPL;
 - обычный текст считается пользовательским запросом;
 - команды с `/` обрабатываются как local commands;
 - `/exit` завершает REPL;
@@ -908,14 +909,14 @@ Traceability rule:
 Обязательные команды запуска:
 
 ```text
-assistant init
-assistant chat
-assistant chat --once --input <text>
-assistant chat --once --input <text> --json
-assistant chat --once --input <text> --verify "<argv command>" --json   # debug/recovery override only
-assistant chat --once --render-prompt --input <text> --json
-assistant chat --profile <profile_id> --model <model_id>
-assistant profiles [list]
+cw init
+cw
+cw --once --input <text>
+cw --json --once --input <text>
+cw --json --once --input <text> --verify "<argv command>"   # debug/recovery override only
+cw --json --once --render-prompt --input <text>
+cw --profile <profile_id> --model <model_id>
+cw profiles [list]
 assistant profiles show [id]
 assistant profiles set <id>
 assistant profiles create <id> [--display-name <name>] [--style k=v] [--format k=v] [--constraint <text>]
@@ -969,19 +970,19 @@ Canonical P0 automation matrix:
 
 | Flow | P0 command/protocol | Output | Calls OpenRouter |
 | --- | --- | --- | --- |
-| Human one-shot chat | `assistant chat --once --input <text>` | readable sections: Assistant, Task, Transition, Evidence, Warnings, Memory proposal, Next | yes |
-| JSON one-shot chat | `assistant chat --once --input <text> --json` | JSON answer, rendered prompt id, session id | yes |
-| Auto verified chat | approved plan or `assistant chat --once --input "Проверь и заверши"`; `VerificationResolver` chooses exact approved command or strict-JSON planner command | readable evidence summary, transition summary and task state | yes |
-| Explicit verification override | `assistant chat --once --input <text> --verify "<argv command>" --json` | JSON answer, trusted evidence hash, stage/audit effects | yes |
-| Render prompt | `assistant chat --once --render-prompt --input <text> --json` | JSON rendered prompt, messages, prompt id | no |
-| Render/inspect memory | `assistant memory list <short|work|long> --json` | JSON records | no |
-| Propose memory | `assistant memory propose --latest --json` | JSON proposal with proposal id and record ids | classifier only |
-| Apply memory | `assistant memory apply --proposal <id> --accept all --json` | JSON apply result | no |
-| Reject memory record | `assistant memory apply --proposal <id> --reject <record_id> --json` | JSON apply result | no |
-| Edit memory record | `assistant memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json` | JSON apply result | no |
-| Task lifecycle | natural `assistant chat`; `assistant task status|pause|resume` for inspection/control | JSON/task text/process audit | chat calls provider; status/pause/resume do not |
-| Task debug/recovery | `assistant task start|move|step|expect ... --json` or matching slash commands | JSON/task text | no |
-| Profile switch | `assistant chat --profile <id> ...` or `/profile <id>` | active profile summary | no |
+| Human one-shot chat | `cw --once --input <text>` | readable sections: Assistant, Task, Transition, Evidence, Warnings, Memory proposal, Next | yes |
+| JSON one-shot chat | `cw --json --once --input <text>` | JSON answer, rendered prompt id, session id | yes |
+| Auto verified chat | approved plan or `cw --once --input "Проверь и заверши"`; `VerificationResolver` chooses exact approved command or strict-JSON planner command | readable evidence summary, transition summary and task state | yes |
+| Explicit verification override | `cw --json --once --input <text> --verify "<argv command>"` | JSON answer, trusted evidence hash, stage/audit effects | yes |
+| Render prompt | `cw --json --once --render-prompt --input <text>` | JSON rendered prompt, messages, prompt id | no |
+| Render/inspect memory | `cw memory list <short|work|long> --json` | JSON records | no |
+| Propose memory | `cw memory propose --latest --json` | JSON proposal with proposal id and record ids | classifier only |
+| Apply memory | `cw memory apply --proposal <id> --accept all --json` | JSON apply result | no |
+| Reject memory record | `cw memory apply --proposal <id> --reject <record_id> --json` | JSON apply result | no |
+| Edit memory record | `cw memory apply --proposal <id> --edit <record_id>:layer=<layer>,content=<text> --json` | JSON apply result | no |
+| Task lifecycle | natural `cw` TUI; `cw task status|pause|resume` for inspection/control | JSON/task text/process audit | chat calls provider; status/pause/resume do not |
+| Task debug/recovery | `cw task start|move|step|expect ... --json` or matching slash commands | JSON/task text | no |
+| Profile switch | `cw --profile <id> ...` or `/profile <id>` | active profile summary | no |
 | Privacy summary | `assistant privacy` or `/privacy` | provider/storage disclosure | no |
 | Process audit | `assistant process audit --latest --json` or `/process audit` | JSON/process event text | no |
 

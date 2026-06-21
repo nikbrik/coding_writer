@@ -2,64 +2,75 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-STORAGE_DIR="${ASSISTANT_STORAGE_DIR:-$(mktemp -d "${TMPDIR:-/private/tmp}/coding_writer-day15-manual-XXXXXX")}"
+STORAGE_DIR="${ASSISTANT_STORAGE_DIR:-$(mktemp -d "${TMPDIR:-/private/tmp}/coding_writer-day15-tui-XXXXXX")}"
 GOCACHE_DIR="${GOCACHE:-/private/tmp/coding_writer_gocache}"
 OUT_DIR="${DAY15_MANUAL_OUT:-$STORAGE_DIR/out}"
+BIN="$ROOT_DIR/.codingwriter/bin/cw"
+TARGET_DIR="$ROOT_DIR/manual_scratch/day15_contains_duplicate"
 
-mkdir -p "$OUT_DIR" "$GOCACHE_DIR"
+mkdir -p "$OUT_DIR" "$GOCACHE_DIR" "$ROOT_DIR/.codingwriter/bin"
 cd "$ROOT_DIR"
 
-assistant_json() {
+case "$TARGET_DIR" in
+  "$ROOT_DIR"/manual_scratch/day15_contains_duplicate)
+    rm -rf "$TARGET_DIR"
+    ;;
+  *)
+    echo "refusing to clean unsafe target dir: $TARGET_DIR" >&2
+    exit 2
+    ;;
+esac
+
+GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/cw
+
+cw_json() {
   ASSISTANT_PROVIDER=fake \
   ASSISTANT_LLM_VALIDATION=1 \
   GOCACHE="$GOCACHE_DIR" \
-  go run ./cmd/assistant --storage-dir "$STORAGE_DIR" --model fake/model --json "$@"
+  "$BIN" --storage-dir "$STORAGE_DIR" --model fake/model --json "$@"
 }
 
-assistant_human() {
-  ASSISTANT_PROVIDER=fake \
-  ASSISTANT_LLM_VALIDATION=1 \
-  GOCACHE="$GOCACHE_DIR" \
-  go run ./cmd/assistant --storage-dir "$STORAGE_DIR" --model fake/model "$@"
-}
+ASSISTANT_PROVIDER=fake \
+ASSISTANT_LLM_VALIDATION=1 \
+ASSISTANT_STORAGE_DIR="$STORAGE_DIR" \
+ASSISTANT_MODEL=fake/model \
+GOCACHE="$GOCACHE_DIR" \
+"$BIN" --storage-dir "$STORAGE_DIR" init --model fake/model >/dev/null
 
-assert_state() {
-  local expr="$1"
-  local message="$2"
-  python3 - "$STORAGE_DIR/tasks/current.json" "$expr" "$message" <<'PY'
-import json, sys
-path, expr, message = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path, encoding="utf-8") as fh:
-    data = json.load(fh)
-if not eval(expr, {"data": data}):
-    raise SystemExit(message + "\n" + json.dumps(data, ensure_ascii=False, indent=2))
+ASSISTANT_PROVIDER=fake \
+ASSISTANT_LLM_VALIDATION=1 \
+ASSISTANT_STORAGE_DIR="$STORAGE_DIR" \
+ASSISTANT_MODEL=fake/model \
+GOCACHE="$GOCACHE_DIR" \
+python3 "$ROOT_DIR/scripts/day15-tui-driver.py" \
+  --storage-dir "$STORAGE_DIR" \
+  --transcript "$OUT_DIR/tui-transcript.ansi" \
+  "$BIN" --storage-dir "$STORAGE_DIR" --model fake/model --tui
+
+python3 - "$OUT_DIR/tui-transcript.ansi" "$OUT_DIR/tui-transcript.txt" <<'PY'
+import re, sys
+raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
+text = text.replace("\r", "\n")
+open(sys.argv[2], "w", encoding="utf-8").write(text)
+required = ["codingwriter", "Status", "Plan", "Evidence", "Files"]
+missing = [item for item in required if item not in text]
+if missing:
+    raise SystemExit(f"TUI transcript missing {missing}")
+if '"stage"' in text or '"acceptance_criteria"' in text:
+    raise SystemExit("TUI transcript leaked raw stage JSON")
 PY
-}
 
-{
-  printf '%s\n' "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии."
-  printf '%s\n' "Да, план принят. Приступай к выполнению."
-  printf '%s\n' "Готово к проверке: проверь результат."
-  printf '%s\n' "Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate."
-  printf '%s\n' "/exit"
-} | assistant_human chat > "$OUT_DIR/interactive-chat.txt"
+python3 - "$STORAGE_DIR/tasks/current.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+if data.get("stage") != "done" or data.get("expected_action") != "none" or data.get("validation_status") != "ready_for_done":
+    raise SystemExit("Day 15 final state is not done/none/ready_for_done\n" + json.dumps(data, ensure_ascii=False, indent=2))
+PY
 
-grep -q "== Assistant ==" "$OUT_DIR/interactive-chat.txt"
-grep -q "== Task ==" "$OUT_DIR/interactive-chat.txt"
-grep -q "== Transition ==" "$OUT_DIR/interactive-chat.txt"
-grep -q "== Evidence ==" "$OUT_DIR/interactive-chat.txt"
-grep -q "auto verification: go test ./manual_scratch/day15_contains_duplicate" "$OUT_DIR/interactive-chat.txt"
-if grep -q '"stage"' "$OUT_DIR/interactive-chat.txt" || grep -q '"acceptance_criteria"' "$OUT_DIR/interactive-chat.txt"; then
-  echo "human transcript leaked raw stage JSON" >&2
-  exit 1
-fi
-if grep -q "go test commands" "$OUT_DIR/interactive-chat.txt"; then
-  echo "natural-language command fragment leaked into verification" >&2
-  exit 1
-fi
-assert_state 'data["stage"] == "done" and data.get("last_validation_id") and data.get("validation_status") == "ready_for_done"' "done state missing accepted validation"
-assistant_json task status > "$OUT_DIR/final-status.json"
-assistant_json process audit --latest > "$OUT_DIR/latest-audit.json"
+cw_json task status > "$OUT_DIR/final-status.json"
+cw_json process audit --latest > "$OUT_DIR/latest-audit.json"
 
 python3 - "$STORAGE_DIR/process_audit.jsonl" <<'PY'
 import json, sys
@@ -80,5 +91,9 @@ required_roles = {"requirements_specialist", "code_research_specialist", "archit
 missing_roles = sorted(required_roles - roles)
 if missing_roles:
     raise SystemExit(f"missing audit roles: {missing_roles}")
-print(f"DAY15_MANUAL_PASS storage={path.rsplit('/process_audit.jsonl', 1)[0]} events={len(events)}")
+print(f"DAY15_TUI_MANUAL_PASS storage={path.rsplit('/process_audit.jsonl', 1)[0]} events={len(events)}")
 PY
+
+echo "transcript: $OUT_DIR/tui-transcript.txt"
+echo "status: $OUT_DIR/final-status.json"
+echo "audit: $OUT_DIR/latest-audit.json"

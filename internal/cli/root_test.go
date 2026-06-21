@@ -180,6 +180,55 @@ func TestChatOnceRenderPromptJSONUsesFakeProviderAndProfile(t *testing.T) {
 	}
 }
 
+func TestCWOnceJSONUsesTopLevelEntrypoint(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	opts := &globalOptions{}
+	cmd := newRootCommandForInvocation(opts, "cw")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--json", "--once", "--input", "Объясни memory layers"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("execute failed: %v output=%s", err, out.String())
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("bad JSON: %v output=%s", err, out.String())
+	}
+	if parsed["ok"] != true || parsed["session_id"] == "" {
+		t.Fatalf("bad cw JSON output: %s", out.String())
+	}
+}
+
+func TestCWNonInteractiveTUIRequiresTerminal(t *testing.T) {
+	storageDir := t.TempDir()
+	opts := &globalOptions{}
+	cmd := newRootCommandForInvocation(opts, "cw")
+	var out, stderr bytes.Buffer
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetOut(&out)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--tui"})
+	err := cmd.Execute()
+	if app.AsError(err).Code != "tui_requires_terminal" {
+		t.Fatalf("expected tui_requires_terminal, got %v", err)
+	}
+}
+
+func TestCWPlainUsesLegacyREPLFallback(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	opts := &globalOptions{}
+	cmd := newRootCommandForInvocation(opts, "cw")
+	var out bytes.Buffer
+	cmd.SetIn(strings.NewReader("/exit\n"))
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--storage-dir", storageDir, "--model", "fake/model", "--plain"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("plain repl failed: %v", err)
+	}
+}
+
 func TestChatOnceJSONDoesNotExposeRawPromptByDefault(t *testing.T) {
 	t.Setenv("ASSISTANT_PROVIDER", "fake")
 	storageDir := t.TempDir()

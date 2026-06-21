@@ -3,11 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODEL="${ASSISTANT_MODEL:-google/gemini-3.1-flash-lite}"
-DEFAULT_STORAGE_DIR="$ROOT_DIR/.assistant/storage/video-day15-controlled-lifecycle"
+DEFAULT_STORAGE_DIR="$ROOT_DIR/.codingwriter/storage/video-day15-controlled-lifecycle"
 DEMO_TARGET_DIR="$ROOT_DIR/manual_scratch/day15_contains_duplicate"
 STORAGE_DIR="${ASSISTANT_STORAGE_DIR:-$DEFAULT_STORAGE_DIR}"
 GOCACHE_DIR="${GOCACHE:-/private/tmp/coding_writer_gocache}"
-BIN="$ROOT_DIR/.assistant/bin/assistant"
+BIN="$ROOT_DIR/.codingwriter/bin/cw"
 MODE="live"
 CLEAN="1"
 AUTO="0"
@@ -17,7 +17,7 @@ usage() {
   cat <<'EOF'
 Usage: scripts/day15-demo.sh [--fake] [--auto] [--no-clean]
 
-Starts a normal assistant chat with clean Day 15 demo storage.
+Starts a normal codingwriter TUI with clean Day 15 demo storage.
 
 Options:
   --fake         Use fake provider for local rehearsal.
@@ -57,16 +57,16 @@ if [[ "$STORAGE_DIR" == "/.assistant/"* ]]; then
 fi
 
 cd "$ROOT_DIR"
-mkdir -p "$ROOT_DIR/.assistant/bin" "$GOCACHE_DIR"
+mkdir -p "$ROOT_DIR/.codingwriter/bin" "$GOCACHE_DIR"
 build_output=""
-if ! build_output="$(GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/assistant 2>&1)"; then
+if ! build_output="$(GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/cw 2>&1)"; then
   printf '%s\n' "$build_output" >&2
   exit 1
 fi
 
 if [[ "$CLEAN" == "1" ]]; then
   case "$STORAGE_DIR" in
-    "$ROOT_DIR"/.assistant/storage/video-day15-*|/private/tmp/*|/tmp/*|/var/folders/*)
+    "$ROOT_DIR"/.codingwriter/storage/video-day15-*|/private/tmp/*|/tmp/*|/var/folders/*)
       rm -rf "$STORAGE_DIR"
       ;;
     *)
@@ -107,7 +107,7 @@ mkdir -p "$OUT_DIR"
 "$BIN" init --model "$MODEL"
 
 run_chat() {
-  "$BIN" chat
+  "$BIN" --tui
 }
 
 print_demo_messages() {
@@ -170,44 +170,21 @@ wait_for_chat_turn() {
   return 1
 }
 
-run_auto_chat() {
-  local transcript="$1"
-  local input_fifo="$OUT_DIR/chat-input.fifo"
-  : > "$transcript"
-  rm -f "$input_fifo"
-  mkfifo "$input_fifo"
-  run_chat < "$input_fifo" | tee "$transcript" &
-  local chat_pid=$!
-  exec 3>"$input_fifo"
-  while IFS= read -r message; do
-    if task_is_done; then
-      break
-    fi
-    if [[ "$message" == "/exit" ]]; then
-      printf '%s\n' "$message" >&3
-      break
-    fi
-    local before_updated
-    before_updated="$(task_updated_at 2>/dev/null || true)"
-    printf '%s\n' "$message" >&3
-    wait_for_chat_turn "$before_updated"
-    if task_is_done; then
-      break
-    fi
-  done < <(print_demo_messages)
-  exec 3>&-
-  wait "$chat_pid"
-  rm -f "$input_fifo"
-}
-
 assert_completed_demo() {
-  grep -q "== Assistant ==" "$OUT_DIR/interactive-chat.txt"
-  grep -q "== Task ==" "$OUT_DIR/interactive-chat.txt"
-  grep -q "== Transition ==" "$OUT_DIR/interactive-chat.txt"
-  grep -q "== Evidence ==" "$OUT_DIR/interactive-chat.txt"
-  grep -q "auto verification: go test ./manual_scratch/day15_contains_duplicate" "$OUT_DIR/interactive-chat.txt"
-  if grep -q '"stage"' "$OUT_DIR/interactive-chat.txt" || grep -q '"acceptance_criteria"' "$OUT_DIR/interactive-chat.txt"; then
-    echo "human transcript leaked raw stage JSON" >&2
+  python3 - "$OUT_DIR/tui-transcript.ansi" "$OUT_DIR/tui-transcript.txt" <<'PY'
+import re, sys
+raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
+text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw).replace("\r", "\n")
+open(sys.argv[2], "w", encoding="utf-8").write(text)
+required = ["codingwriter", "Status", "Plan", "Evidence", "Files"]
+missing = [item for item in required if item not in text]
+if missing:
+    raise SystemExit(f"TUI transcript missing {missing}")
+if '"stage"' in text or '"acceptance_criteria"' in text:
+    raise SystemExit("TUI transcript leaked raw stage JSON")
+PY
+  if grep -q "go test commands" "$OUT_DIR/tui-transcript.txt"; then
+    echo "natural-language command fragment leaked into verification" >&2
     exit 1
   fi
   python3 - "$STORAGE_DIR/tasks/current.json" <<'PY'
@@ -221,7 +198,7 @@ PY
 
 cat <<EOF
 
-assistant chat
+cw
 model: $MODEL
 storage: $STORAGE_DIR
 EOF
@@ -229,13 +206,16 @@ EOF
 if [[ "$AUTO" != "1" ]]; then
   run_chat
 else
-  run_auto_chat "$OUT_DIR/interactive-chat.txt"
+  python3 "$ROOT_DIR/scripts/day15-tui-driver.py" \
+    --storage-dir "$STORAGE_DIR" \
+    --transcript "$OUT_DIR/tui-transcript.ansi" \
+    "$BIN" --storage-dir "$STORAGE_DIR" --model "$MODEL" --tui
   "$BIN" task status --json > "$OUT_DIR/final-status.json"
   "$BIN" process audit --latest --json > "$OUT_DIR/latest-audit.json"
   assert_completed_demo
   echo
   echo "scripted scenario completed."
-  echo "transcript: $OUT_DIR/interactive-chat.txt"
+  echo "transcript: $OUT_DIR/tui-transcript.txt"
   echo "status: $OUT_DIR/final-status.json"
   echo "audit: $OUT_DIR/latest-audit.json"
 fi

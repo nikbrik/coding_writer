@@ -2,7 +2,7 @@
 
 Цель: записать 5 отдельных demo acceptance видео, где ассистент выглядит как настоящий CLI coding assistant: получает нормальную маленькую алгоритмическую задачу, планирует, выдает применимый код в `execution`, доводит решение до проверки, и одновременно доказывает требования Day 11, Day 12, Day 13, Day 14, Day 15.
 
-Формат: перед каждым видео используется отдельный `ASSISTANT_STORAGE_DIR`. В видимом demo пользователь работает через `assistant chat` и обычные короткие фразы. Машинные команды `--json`, `--render-prompt`, explicit `--verify` override и scratch-package проверки идут только в отдельном блоке "agent verification" после demo.
+Формат: перед каждым видео используется отдельный `ASSISTANT_STORAGE_DIR`. В видимом demo пользователь работает через `cw` TUI и обычные короткие фразы. Машинные команды `--json`, `--render-prompt`, explicit `--verify` override и scratch-package проверки идут только в отдельном блоке "agent verification" после demo.
 
 Важно: текущий P0 CLI уже применяет файлы из структурированного `execution`-ответа. Это не произвольный shell/tool доступ: приложение читает только `deliverable` текущей задачи, извлекает заголовки файлов и fenced code blocks, проверяет безопасный путь внутри репозитория, создаёт каталоги и записывает файлы перед доверенной проверкой.
 
@@ -20,11 +20,11 @@
 ```bash
 export CW_ROOT="/Users/nikita/code/coding_writer"
 cd "$CW_ROOT"
-mkdir -p "$CW_ROOT/.assistant/bin"
-go build -o "$CW_ROOT/.assistant/bin/assistant" ./cmd/assistant
-export PATH="$CW_ROOT/.assistant/bin:$PATH"
-which assistant
-assistant --help
+mkdir -p "$CW_ROOT/.codingwriter/bin"
+go build -o "$CW_ROOT/.codingwriter/bin/cw" ./cmd/cw
+export PATH="$CW_ROOT/.codingwriter/bin:$PATH"
+which cw
+cw --help
 ```
 
 Live mode через OpenRouter:
@@ -454,7 +454,7 @@ assistant task status
 
 ### Что доказывает видео
 
-- Весь основной flow идет через `assistant chat`, без `/task move` и без ручной правки state.
+- Весь основной flow идет через один `cw` TUI session, без `/task move` и без ручной правки state.
 - Обычный пользовательский запрос сам создает task в `planning`.
 - Planning stage использует prompt improvement и planning swarm.
 - Пользовательское approval через chat переводит `planning -> execution`.
@@ -476,10 +476,13 @@ assistant task status
 
 ### Demo setup
 
-Live demo:
+Live demo через OpenRouter:
 
 ```bash
 export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
+export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
+unset ASSISTANT_PROVIDER
+unset ASSISTANT_LLM_VALIDATION
 scripts/day15-demo.sh
 ```
 
@@ -498,13 +501,13 @@ scripts/day15-demo.sh --fake
 
 ### Demo flow
 
-Основной visible flow запускается одной командой. Скрипт только готовит storage/model/binary и открывает обычный `assistant chat`; в интерфейсе нет текста про Day 15 demo. Пользователь вводит обычные сообщения, не exact command проверки и не state-machine команды. Приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
+Основной visible flow запускается одной командой. Скрипт только готовит storage/model/binary, собирает `.codingwriter/bin/cw` и открывает обычный `cw` TUI; в интерфейсе нет текста про Day 15 demo. Пользователь вводит обычные сообщения, не exact command проверки и не state-machine команды. Приложение запускает `VerificationResolver`, при необходимости получает exact command от structured planner, затем выполняет только allowlisted command и прикладывает trusted evidence.
 
 ```bash
 scripts/day15-demo.sh
 ```
 
-Текст, который пользователь вводит внутри chat:
+Текст, который пользователь вводит внутри TUI input:
 
 ```text
 Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии. Отвечай по-русски
@@ -516,7 +519,17 @@ scripts/day15-demo.sh
 /exit
 ```
 
-Для автоматизированной regression-проверки того же user flow:
+Что должно быть видно в TUI во время ручного прогона:
+
+- header `codingwriter` с model/profile/task/stage/expected/status;
+- `Status` показывает переходы `planning -> execution -> validation -> done`;
+- `Plan` показывает pending plan, criteria и затем approved plan;
+- timeline показывает prompt improvement, planning swarm, approval, executor/reviewer и transitions;
+- `Evidence` показывает trusted verification command/evidence id;
+- `Files` показывает applied artifacts или честный P0 placeholder, если PatchSet preview ещё не реализован;
+- raw stage JSON не является основным UX.
+
+Для автоматизированной regression-проверки того же user flow через TUI/PTY:
 
 ```bash
 scripts/day15-demo.sh --auto
@@ -525,8 +538,8 @@ scripts/day15-demo.sh --auto
 После visible flow можно показать state/audit как assertions, а не как основные пользовательские шаги:
 
 ```bash
-.assistant/bin/assistant task status --json
-.assistant/bin/assistant process audit --latest --json
+.codingwriter/bin/cw task status --json
+.codingwriter/bin/cw process audit --latest --json
 ```
 
 ### Acceptance proof на видео
@@ -540,12 +553,12 @@ scripts/day15-demo.sh --auto
 - приложение само получает exact verification command через `VerificationResolver`, запускает allowlisted trusted verification и переводит `execution -> validation` без команды от пользователя;
 - если execution уже идёт, `execution -> validation` также может произойти после semantic check intent и app-issued trusted evidence;
 - финальный chat `Проверь критерии и заверши...` создает accepted validation record и переводит task в `done`;
-- post-run `assistant task status --json` показывает `stage=done`, `expected_action=none`, `validation_status=ready_for_done`;
+- post-run `cw task status --json` показывает `stage=done`, `expected_action=none`, `validation_status=ready_for_done`;
 - пользователь ни разу не использует `/task move`, `/task step`, `/task expect` или прямую правку storage.
 
 ### Agent verification после видео
 
-Можно прогнать тот же сценарий полностью автоматически:
+Можно прогнать тот же сценарий полностью автоматически в deterministic fake mode:
 
 ```bash
 scripts/day15-demo.sh --fake --auto
@@ -557,10 +570,30 @@ scripts/day15-demo.sh --fake --auto
 scripted scenario completed.
 ```
 
+Для CI/regression smoke без live OpenRouter используется отдельный TUI PTY harness:
+
+```bash
+bash scripts/manual-day15-user-flow.sh
+```
+
+Готово, если script печатает:
+
+```text
+DAY15_TUI_MANUAL_PASS storage=... events=...
+```
+
+Артефакты smoke:
+
+```text
+<storage>/out/tui-transcript.txt
+<storage>/out/final-status.json
+<storage>/out/latest-audit.json
+```
+
 Дополнительно можно показать audit:
 
 ```bash
-.assistant/bin/assistant process audit --latest --json
+.codingwriter/bin/cw process audit --latest --json
 ```
 
 Audit должен содержать события `prompt_improvement_call`, `planning_swarm_final`, `planning_approval_accepted`, `transitioned`, а также роли `requirements_specialist`, `code_research_specialist`, `architecture_specialist`, `test_validation_specialist`, `risk_regression_specialist`, `planning_orchestrator`, `executor`, `reviewer`.

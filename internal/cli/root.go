@@ -29,6 +29,7 @@ import (
 	"github.com/nikbrik/coding_writer/internal/providers"
 	"github.com/nikbrik/coding_writer/internal/storage"
 	"github.com/nikbrik/coding_writer/internal/tasks"
+	"github.com/nikbrik/coding_writer/internal/tui"
 	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
@@ -73,8 +74,12 @@ type runtime struct {
 }
 
 func Execute() error {
+	return ExecuteNamed(filepath.Base(os.Args[0]))
+}
+
+func ExecuteNamed(invocation string) error {
 	opts := &globalOptions{}
-	cmd := newRootCommand(opts)
+	cmd := newRootCommandForInvocation(opts, invocation)
 	if err := cmd.Execute(); err != nil {
 		err = normalizeTopLevelCLIError(err)
 		printError(cmd.ErrOrStderr(), err, opts.JSON || argvRequestsJSON(os.Args[1:]))
@@ -113,12 +118,30 @@ func argvRequestsJSON(args []string) bool {
 }
 
 func newRootCommand(opts *globalOptions) *cobra.Command {
+	return newRootCommandForInvocation(opts, "assistant")
+}
+
+func newRootCommandForInvocation(opts *globalOptions, invocation string) *cobra.Command {
+	productMode := invocation == "cw" || invocation == "codingwriter"
+	topChat := &chatOptions{}
+	use := "assistant"
+	short := "Stateful CLI assistant with memory layers"
+	if productMode {
+		use = invocation
+		short = "Terminal coding agent workspace"
+	}
 	cmd := &cobra.Command{
-		Use:           "assistant",
-		Short:         "Stateful CLI assistant with memory layers",
+		Use:           use,
+		Short:         short,
 		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if !productMode {
+				return cmd.Help()
+			}
+			return runTopLevelChat(cmd, opts, topChat)
+		},
 	}
 	cmd.PersistentFlags().StringVar(&opts.StorageDir, "storage-dir", "", "runtime storage directory")
 	cmd.PersistentFlags().StringVar(&opts.Model, "model", "", "active model id")
@@ -128,6 +151,14 @@ func newRootCommand(opts *globalOptions) *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&opts.TrustOpenRouterBaseURL, "trust-openrouter-base-url", false, "trust non-default OpenRouter-compatible base URL for this invocation")
 	cmd.PersistentFlags().BoolVar(&opts.JSON, "json", false, "emit JSON")
 	cmd.PersistentFlags().BoolVar(&opts.Quiet, "quiet", false, "suppress diagnostic output")
+	if productMode {
+		cmd.Flags().BoolVar(&topChat.TUI, "tui", false, "run TUI")
+		cmd.Flags().BoolVar(&topChat.Plain, "plain", false, "run plain REPL fallback")
+		cmd.Flags().BoolVar(&topChat.Once, "once", false, "run one request")
+		cmd.Flags().StringVar(&topChat.Input, "input", "", "input text for --once")
+		cmd.Flags().BoolVar(&topChat.RenderPrompt, "render-prompt", false, "render prompt without provider call")
+		cmd.Flags().StringVar(&topChat.Verify, "verify", "", "run verification command and pass trusted evidence to validation")
+	}
 	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), invariantsCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
 	return cmd
 }
@@ -434,6 +465,8 @@ type chatOptions struct {
 	Input        string
 	RenderPrompt bool
 	Verify       string
+	TUI          bool
+	Plain        bool
 }
 
 func chatCommand(opts *globalOptions) *cobra.Command {
@@ -442,56 +475,82 @@ func chatCommand(opts *globalOptions) *cobra.Command {
 		Use:   "chat",
 		Short: "Start chat loop or run one request",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if opts.JSON && !chatOpts.Once {
-				return app.ErrorWithHint(app.CategoryCLI, "json_repl_unsupported", "chat --json requires --once", "use --once for single-request JSON output", nil)
-			}
-			if strings.TrimSpace(chatOpts.Verify) != "" && !chatOpts.Once {
-				return app.ErrorWithHint(app.CategoryCLI, "verify_requires_once", "chat --verify requires --once", "use chat --once --verify <command> --input <text>", nil)
-			}
-			rt, err := newRuntime(cmd.Context(), opts)
-			if err != nil {
-				return err
-			}
-			if chatOpts.Once {
-				if strings.TrimSpace(chatOpts.Input) == "" {
-					return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
-				}
-				sessionID := app.NewID("session")
-				if !chatOpts.RenderPrompt {
-					if err := rt.preflightProcess(cmd.Context(), process.ExchangeInput{SessionID: sessionID, Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
-						return err
-					}
-					rt.ensureProvider()
-					ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
-				}
-				stopProgress := startAPIProgress(cmd.ErrOrStderr(), !rt.Quiet && !opts.JSON && !chatOpts.RenderPrompt)
-				result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, false, chatOpts.Verify)
-				stopProgress()
-				if err != nil {
-					return err
-				}
-				if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil {
-					result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
-				}
-				if !chatOpts.RenderPrompt {
-					result.RenderedPrompt = ""
-					result.Messages = nil
-				}
-				if !rt.Quiet && opts.JSON {
-					for _, warning := range result.Warnings {
-						_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
-					}
-				}
-				return writeOutput(cmd.OutOrStdout(), opts.JSON, result, renderChatResult(result, chatRenderOptions{Color: terminalColorEnabled(cmd.OutOrStdout())}))
-			}
-			return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
+			return runChatMode(cmd, opts, chatOpts, false)
 		},
 	}
 	cmd.Flags().BoolVar(&chatOpts.Once, "once", false, "run one request")
 	cmd.Flags().StringVar(&chatOpts.Input, "input", "", "input text for --once")
 	cmd.Flags().BoolVar(&chatOpts.RenderPrompt, "render-prompt", false, "render prompt without provider call")
 	cmd.Flags().StringVar(&chatOpts.Verify, "verify", "", "run verification command and pass trusted evidence to validation")
+	cmd.Flags().BoolVar(&chatOpts.TUI, "tui", false, "run TUI")
+	cmd.Flags().BoolVar(&chatOpts.Plain, "plain", false, "run plain REPL fallback")
 	return cmd
+}
+
+func runTopLevelChat(cmd *cobra.Command, opts *globalOptions, chatOpts *chatOptions) error {
+	return runChatMode(cmd, opts, chatOpts, true)
+}
+
+func runChatMode(cmd *cobra.Command, opts *globalOptions, chatOpts *chatOptions, productMode bool) error {
+	if opts.JSON && !chatOpts.Once {
+		return app.ErrorWithHint(app.CategoryCLI, "json_repl_unsupported", "chat --json requires --once", "use --once for single-request JSON output", nil)
+	}
+	if strings.TrimSpace(chatOpts.Verify) != "" && !chatOpts.Once {
+		return app.ErrorWithHint(app.CategoryCLI, "verify_requires_once", "chat --verify requires --once", "use --once --verify <command> --input <text>", nil)
+	}
+	if chatOpts.TUI && !isInteractiveReader(cmd.InOrStdin()) {
+		return app.ErrorWithHint(app.CategoryCLI, "tui_requires_terminal", "TUI requires an interactive terminal", "use --plain", nil)
+	}
+	rt, err := newRuntime(cmd.Context(), opts)
+	if err != nil {
+		return err
+	}
+	if chatOpts.Once {
+		return runChatOnce(cmd, opts, chatOpts, rt)
+	}
+	if chatOpts.Plain || !productMode && !chatOpts.TUI {
+		return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
+	}
+	if !isInteractiveReader(cmd.InOrStdin()) {
+		if chatOpts.TUI {
+			return app.ErrorWithHint(app.CategoryCLI, "tui_requires_terminal", "TUI requires an interactive terminal", "use --plain", nil)
+		}
+		return runREPL(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), cmd.ErrOrStderr(), rt)
+	}
+	return tui.Run(cmd.Context(), newChatBackendFromRuntime(rt), cmd.InOrStdin(), cmd.OutOrStdout())
+}
+
+func runChatOnce(cmd *cobra.Command, opts *globalOptions, chatOpts *chatOptions, rt *runtime) error {
+	if strings.TrimSpace(chatOpts.Input) == "" {
+		return app.NewError(app.CategoryCLI, "missing_input", "--input is required with --once", nil)
+	}
+	sessionID := app.NewID("session")
+	if !chatOpts.RenderPrompt {
+		if err := rt.preflightProcess(cmd.Context(), process.ExchangeInput{SessionID: sessionID, Input: chatOpts.Input, RenderOnly: chatOpts.RenderPrompt}); err != nil {
+			return err
+		}
+		rt.ensureProvider()
+		ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
+	}
+	stopProgress := startAPIProgress(cmd.ErrOrStderr(), !rt.Quiet && !opts.JSON && !chatOpts.RenderPrompt)
+	result, err := runChatExchange(cmd.Context(), rt, sessionID, chatOpts.Input, chatOpts.RenderPrompt, false, chatOpts.Verify)
+	stopProgress()
+	if err != nil {
+		return err
+	}
+	if err := recordRenderedPrompt(rt.StorageDir, result.SessionID, result.RenderedPromptID, result.Messages, result.RenderedPrompt); err != nil {
+		result.Warnings = append(result.Warnings, "prompt audit skipped: "+app.AsError(err).Code)
+	}
+	if !chatOpts.RenderPrompt {
+		result.RenderedPrompt = ""
+		result.Messages = nil
+	}
+	if !rt.Quiet && opts.JSON {
+		for _, warning := range result.Warnings {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(), warning)
+		}
+	}
+	return writeOutput(cmd.OutOrStdout(), opts.JSON, result, renderChatResult(result, chatRenderOptions{Color: terminalColorEnabled(cmd.OutOrStdout())}))
 }
 
 type chatResult struct {

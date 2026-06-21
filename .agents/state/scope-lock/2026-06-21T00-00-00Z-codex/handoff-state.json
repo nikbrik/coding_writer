@@ -1,0 +1,46 @@
+{
+  "schema_version": "1.0.0",
+  "task_id": "tui-implementation-plan-scope-lock",
+  "task_name": "implement full TUI P0 with cw/codingwriter as canonical entrypoint and adapt Day 15 manual test to run through TUI",
+  "session_id": "2026-06-21T00-00-00Z-codex",
+  "state_directory": ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex",
+  "current_stage": "final_validation",
+  "contract_status": "confirmed",
+  "unresolved_ambiguities": [],
+  "locked_decisions": [
+    "Select full TUI P0 scope",
+    "Default TUI in interactive chat",
+    "Correct public entrypoint to cw/codingwriter",
+    "Keep existing app lifecycle logic",
+    "Claude Code/Codex class TUI UX"
+  ],
+  "deferred_items": [
+    "DEFER-001",
+    "DEFER-002",
+    "DEFER-003",
+    "DEFER-004"
+  ],
+  "active_plan_item": "",
+  "plan_items": [],
+  "touched_paths": [
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/audit.md",
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/ambiguities.md",
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/decisions.md",
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/scope-definition.md",
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/handoff-state.json"
+  ],
+  "forbidden_paths": [
+    "day11.md",
+    "day12.md",
+    "03-memory-state-notes.md",
+    ".kilo/**",
+    "global config paths"
+  ],
+  "protocol_owned_paths": [
+    ".agents/state/scope-lock/2026-06-21T00-00-00Z-codex/**"
+  ],
+  "irreversible_approvals": [],
+  "trusted_provenance_required": true,
+  "validation_status": "PASS",
+  "last_updated": "2026-06-20T21:40:00Z"
+}
