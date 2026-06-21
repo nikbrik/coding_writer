@@ -13,7 +13,18 @@ import (
 
 type SessionSummary struct {
 	ID           string
+	Title        string
+	Description  string
+	StartedAt    time.Time
 	LastActivity time.Time
+}
+
+type SessionMetadata struct {
+	ID           string    `json:"id"`
+	Title        string    `json:"title,omitempty"`
+	Description  string    `json:"description,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	LastActivity time.Time `json:"last_activity"`
 }
 
 func sessionDir(root, sessionID string) (string, error) {
@@ -43,16 +54,30 @@ func proposalPath(root, sessionID string) (string, error) {
 	return filepath.Join(dir, "memory_proposals.jsonl"), nil
 }
 
+func sessionMetadataPath(root, sessionID string) (string, error) {
+	dir, err := sessionDir(root, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "session_meta.json"), nil
+}
+
 func touchSessionActivity(root, sessionID string) error {
 	dir, err := sessionDir(root, sessionID)
 	if err != nil {
 		return err
 	}
+	now := time.Now().UTC()
+	_ = ensureSessionMetadata(root, sessionID, "", now)
 	return storage.TouchFile(filepath.Join(dir, ".last_activity"), storage.FileMode)
 }
 
 func TouchSessionActivity(root, sessionID string) error {
 	return touchSessionActivity(root, sessionID)
+}
+
+func UpdateSessionDescription(root, sessionID, userInput string) error {
+	return ensureSessionMetadata(root, sessionID, userInput, time.Now().UTC())
 }
 
 func workPath(root, taskID string) (string, error) {
@@ -117,6 +142,9 @@ func ListSessions(root string) ([]SessionSummary, error) {
 		if err := storage.ValidateID(entry.Name()); err != nil {
 			continue
 		}
+		if !sessionHasContent(filepath.Join(dir, entry.Name())) {
+			continue
+		}
 		info, err := entry.Info()
 		if err != nil {
 			continue
@@ -126,10 +154,129 @@ func ListSessions(root string) ([]SessionSummary, error) {
 		if activityInfo, err := os.Stat(activityPath); err == nil {
 			lastActivity = activityInfo.ModTime()
 		}
-		sessions = append(sessions, SessionSummary{ID: entry.Name(), LastActivity: lastActivity.UTC()})
+		summary := SessionSummary{ID: entry.Name(), LastActivity: lastActivity.UTC()}
+		if meta, ok := readSessionMetadata(root, entry.Name()); ok {
+			summary.Title = meta.Title
+			summary.Description = meta.Description
+			summary.StartedAt = meta.StartedAt.UTC()
+			if !meta.LastActivity.IsZero() {
+				summary.LastActivity = meta.LastActivity.UTC()
+			}
+		}
+		if summary.StartedAt.IsZero() {
+			summary.StartedAt = summary.LastActivity
+		}
+		if strings.TrimSpace(summary.Title) == "" {
+			summary.Title = fallbackSessionTitle(summary.StartedAt)
+		}
+		if strings.TrimSpace(summary.Description) == "" {
+			summary.Description = fallbackSessionDescription(summary.StartedAt)
+		}
+		sessions = append(sessions, summary)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].LastActivity.After(sessions[j].LastActivity) })
 	return sessions, nil
+}
+
+func sessionHasContent(dir string) bool {
+	for _, name := range []string{"short_term.jsonl", "memory_proposals.jsonl"} {
+		if hasNonEmptyFile(filepath.Join(dir, name)) {
+			return true
+		}
+	}
+	renderedDir := filepath.Join(dir, "rendered_prompts")
+	entries, err := os.ReadDir(renderedDir)
+	return err == nil && len(entries) > 0
+}
+
+func hasNonEmptyFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
+}
+
+func readSessionMetadata(root, sessionID string) (SessionMetadata, bool) {
+	path, err := sessionMetadataPath(root, sessionID)
+	if err != nil {
+		return SessionMetadata{}, false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return SessionMetadata{}, false
+	}
+	var meta SessionMetadata
+	if err := storage.ReadJSON(path, &meta); err != nil {
+		return SessionMetadata{}, false
+	}
+	if meta.ID == "" {
+		meta.ID = sessionID
+	}
+	return meta, true
+}
+
+func ensureSessionMetadata(root, sessionID, userInput string, now time.Time) error {
+	path, err := sessionMetadataPath(root, sessionID)
+	if err != nil {
+		return err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	meta, ok := readSessionMetadata(root, sessionID)
+	if !ok {
+		meta = SessionMetadata{
+			ID:          sessionID,
+			StartedAt:   now,
+			Title:       fallbackSessionTitle(now),
+			Description: fallbackSessionDescription(now),
+		}
+	}
+	if meta.StartedAt.IsZero() {
+		meta.StartedAt = now
+	}
+	if meta.ID == "" {
+		meta.ID = sessionID
+	}
+	if title := sessionTitleFromInput(userInput); title != "" && isGeneratedSessionTitle(meta.Title) {
+		meta.Title = title
+		meta.Description = sessionDescription(meta.StartedAt, userInput)
+	} else if strings.TrimSpace(meta.Description) == "" {
+		meta.Description = fallbackSessionDescription(meta.StartedAt)
+	}
+	meta.LastActivity = now
+	return storage.AtomicWriteJSON(path, meta)
+}
+
+func isGeneratedSessionTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	return title == "" || strings.HasPrefix(title, "Started ")
+}
+
+func fallbackSessionTitle(startedAt time.Time) string {
+	return "Started " + startedAt.Local().Format("2006-01-02 15:04")
+}
+
+func fallbackSessionDescription(startedAt time.Time) string {
+	return "Started " + startedAt.Local().Format("2006-01-02 15:04 MST")
+}
+
+func sessionDescription(startedAt time.Time, userInput string) string {
+	title := sessionTitleFromInput(userInput)
+	if title == "" {
+		return fallbackSessionDescription(startedAt)
+	}
+	return fallbackSessionDescription(startedAt) + " · " + title
+}
+
+func sessionTitleFromInput(input string) string {
+	input = strings.Join(strings.Fields(strings.TrimSpace(input)), " ")
+	if input == "" {
+		return ""
+	}
+	const maxTitle = 72
+	runes := []rune(input)
+	if len(runes) > maxTitle {
+		return strings.TrimSpace(string(runes[:maxTitle-1])) + "…"
+	}
+	return input
 }
 
 func LookupSession(root, sessionID string) (SessionSummary, error) {

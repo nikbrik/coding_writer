@@ -34,7 +34,11 @@ import (
 	"github.com/nikbrik/coding_writer/internal/validation"
 )
 
-var Version = "dev"
+var (
+	Version   = "0.1.0"
+	Commit    = "unknown"
+	BuildDate = "unknown"
+)
 
 const (
 	trustedVerificationTimeout       = 2 * time.Minute
@@ -144,6 +148,7 @@ func newRootCommandForInvocation(opts *globalOptions, invocation string) *cobra.
 			return runTopLevelChat(cmd, opts, topChat)
 		},
 	}
+	cmd.SetVersionTemplate(versionTemplate())
 	cmd.PersistentFlags().StringVar(&opts.StorageDir, "storage-dir", "", "runtime storage directory")
 	cmd.PersistentFlags().StringVar(&opts.Model, "model", "", "active model id")
 	cmd.PersistentFlags().StringVar(&opts.MemoryModel, "memory-model", "", "memory classifier model id")
@@ -162,6 +167,10 @@ func newRootCommandForInvocation(opts *globalOptions, invocation string) *cobra.
 	}
 	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), invariantsCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
 	return cmd
+}
+
+func versionTemplate() string {
+	return "{{.Name}} version {{.Version}}\ncommit: " + Commit + "\nbuilt: " + BuildDate + "\n"
 }
 
 func newRuntime(ctx context.Context, opts *globalOptions) (*runtime, error) {
@@ -2322,10 +2331,7 @@ func handleSlashResult(ctx context.Context, diag io.Writer, rt *runtime, session
 			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
 		}
 		newSessionID := app.NewID("session")
-		if err := memory.TouchSessionActivity(rt.StorageDir, newSessionID); err != nil {
-			return slashContextResult{}, err
-		}
-		if task, err := updateCurrentTaskSession(rt, newSessionID); err != nil {
+		if task, err := currentTaskForContextSwitch(rt); err != nil {
 			return slashContextResult{}, err
 		} else if task.ID != "" {
 			return slashContextResult{ActiveSessionID: newSessionID, ActiveTask: &task, Output: fmt.Sprintf("new chat: %s\ntask unchanged: %s\nprofile unchanged: %s", newSessionID, task.ID, emptyDash(rt.Config.ActiveProfileID))}, nil
@@ -2395,6 +2401,18 @@ func updateCurrentTaskSession(rt *runtime, sessionID string) (app.TaskState, err
 		return task, nil
 	}
 	return rt.Tasks.SetLastSessionID(sessionID)
+}
+
+func currentTaskForContextSwitch(rt *runtime) (app.TaskState, error) {
+	task, err := rt.Tasks.Current()
+	if err != nil {
+		appErr := app.AsError(err)
+		if appErr.Category == app.CategoryValidation && appErr.Code == "missing_current_task" {
+			return app.TaskState{}, nil
+		}
+		return app.TaskState{}, err
+	}
+	return task, nil
 }
 
 func handleTaskSlashResult(rt *runtime, sessionID string, parts []string) (slashContextResult, error) {
@@ -2526,10 +2544,20 @@ func sessionsText(sessions []memory.SessionSummary) string {
 	var b strings.Builder
 	b.WriteString("sessions:\n")
 	for _, session := range sessions {
-		b.WriteString(fmt.Sprintf("  %s  %s\n", session.ID, session.LastActivity.Format(time.RFC3339)))
+		b.WriteString(fmt.Sprintf("  %s  %s  %s\n", session.ID, sessionTime(session.StartedAt), session.Title))
+		if strings.TrimSpace(session.Description) != "" && session.Description != session.Title {
+			b.WriteString(fmt.Sprintf("      %s\n", session.Description))
+		}
 	}
 	b.WriteString("usage: /resume <session_id>")
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func sessionTime(ts time.Time) string {
+	if ts.IsZero() {
+		return "-"
+	}
+	return ts.Local().Format("2006-01-02 15:04")
 }
 
 func tasksListText(items []tasks.TaskSummary) string {

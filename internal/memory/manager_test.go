@@ -15,11 +15,12 @@ import (
 
 func TestListAndLookupSessionsUseActivityOrderingAndValidation(t *testing.T) {
 	dir := t.TempDir()
-	if err := TouchSessionActivity(dir, "session_old"); err != nil {
+	mgr := NewManager(dir)
+	if _, _, err := mgr.SaveShortExchange(context.Background(), "session_old", "", "", "old request", "old answer"); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Millisecond)
-	if err := TouchSessionActivity(dir, "session_new"); err != nil {
+	if _, _, err := mgr.SaveShortExchange(context.Background(), "session_new", "", "", "new request", "new answer"); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := ListSessions(dir)
@@ -28,6 +29,9 @@ func TestListAndLookupSessionsUseActivityOrderingAndValidation(t *testing.T) {
 	}
 	if len(sessions) != 2 || sessions[0].ID != "session_new" || sessions[1].ID != "session_old" {
 		t.Fatalf("bad session ordering: %+v", sessions)
+	}
+	if sessions[0].StartedAt.IsZero() || !strings.Contains(sessions[0].Description, "Started ") {
+		t.Fatalf("session summary missing generated start description: %+v", sessions[0])
 	}
 	latest, err := LatestSessionID(dir)
 	if err != nil {
@@ -44,6 +48,44 @@ func TestListAndLookupSessionsUseActivityOrderingAndValidation(t *testing.T) {
 	}
 	if _, err := LookupSession(dir, "session_missing"); err == nil || !strings.Contains(err.Error(), "unknown_session") {
 		t.Fatalf("want unknown_session, got %v", err)
+	}
+}
+
+func TestListSessionsHidesEmptyTouchedSession(t *testing.T) {
+	dir := t.TempDir()
+	if err := TouchSessionActivity(dir, "session_empty"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("empty touched session should not be listed: %+v", sessions)
+	}
+}
+
+func TestSessionDescriptionUsesFirstUserInput(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	mgr := NewManager(dir)
+	sessionID := "session_described"
+	if _, _, err := mgr.SaveShortExchange(ctx, sessionID, "", "", "Реализовать ContainsDuplicate и проверить тестами", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := ListSessions(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected one session, got %+v", sessions)
+	}
+	got := sessions[0]
+	if got.Title != "Реализовать ContainsDuplicate и проверить тестами" {
+		t.Fatalf("bad session title: %+v", got)
+	}
+	if !strings.Contains(got.Description, "Started ") || !strings.Contains(got.Description, got.Title) {
+		t.Fatalf("bad session description: %+v", got)
 	}
 }
 

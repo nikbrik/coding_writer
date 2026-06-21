@@ -118,32 +118,32 @@ func (b *ChatBackend) ToggleFavoriteModel(ctx context.Context, modelID string) (
 	return cfg, nil
 }
 
-func (b *ChatBackend) SelectSession(ctx context.Context, sessionID string) (tui.SlashResponse, error) {
-	return b.slashResult(ctx, "", "/resume "+sessionID)
+func (b *ChatBackend) SelectSession(ctx context.Context, targetSessionID, currentSessionID string) (tui.SlashResponse, error) {
+	return b.slashResult(ctx, currentSessionID, "/resume "+targetSessionID)
 }
 
 func (b *ChatBackend) SelectTask(ctx context.Context, taskID, sessionID string) (tui.SlashResponse, error) {
 	return b.slashResult(ctx, sessionID, "/task "+taskID)
 }
 
-func (b *ChatBackend) ClearTask(ctx context.Context) (tui.SlashResponse, error) {
-	return b.slashResult(ctx, "", "/task close")
+func (b *ChatBackend) ClearTask(ctx context.Context, currentSessionID string) (tui.SlashResponse, error) {
+	return b.slashResult(ctx, currentSessionID, "/task close")
 }
 
-func (b *ChatBackend) ArchiveTask(ctx context.Context, taskID string) (tui.SlashResponse, error) {
-	return b.slashResult(ctx, "", "/task archive "+taskID)
+func (b *ChatBackend) ArchiveTask(ctx context.Context, taskID, currentSessionID string) (tui.SlashResponse, error) {
+	return b.slashResult(ctx, currentSessionID, "/task archive "+taskID)
 }
 
 func (b *ChatBackend) RestoreTask(ctx context.Context, taskID, sessionID string) (tui.SlashResponse, error) {
 	return b.slashResult(ctx, sessionID, "/task restore "+taskID)
 }
 
-func (b *ChatBackend) SelectProfile(ctx context.Context, profileID string) (tui.SlashResponse, error) {
-	return b.slashResult(ctx, "", "/profile "+profileID)
+func (b *ChatBackend) SelectProfile(ctx context.Context, profileID, currentSessionID string) (tui.SlashResponse, error) {
+	return b.slashResult(ctx, currentSessionID, "/profile "+profileID)
 }
 
-func (b *ChatBackend) CreateProfile(ctx context.Context, profileID string) (tui.SlashResponse, error) {
-	return b.slashResult(ctx, "", "/profile create "+profileID)
+func (b *ChatBackend) CreateProfile(ctx context.Context, profileID, currentSessionID string) (tui.SlashResponse, error) {
+	return b.slashResult(ctx, currentSessionID, "/profile create "+profileID)
 }
 
 func (b *ChatBackend) Exchange(ctx context.Context, req tui.ChatRequest) (tui.ChatResponse, error) {
@@ -211,7 +211,13 @@ func toTUISlashResponse(result slashContextResult) tui.SlashResponse {
 	if result.Picker != nil {
 		resp.Picker = &tui.PickerPayload{Kind: result.Picker.Kind}
 		for _, session := range result.Picker.Sessions {
-			resp.Picker.Sessions = append(resp.Picker.Sessions, tui.SessionSummary{ID: session.ID, LastActivity: session.LastActivity})
+			resp.Picker.Sessions = append(resp.Picker.Sessions, tui.SessionSummary{
+				ID:           session.ID,
+				Title:        session.Title,
+				Description:  session.Description,
+				StartedAt:    session.StartedAt,
+				LastActivity: session.LastActivity,
+			})
 		}
 		for _, task := range result.Picker.Tasks {
 			resp.Picker.Tasks = append(resp.Picker.Tasks, tui.TaskSummary{

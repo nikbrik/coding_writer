@@ -21,7 +21,7 @@ case "$TARGET_DIR" in
     ;;
 esac
 
-GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/cw
+CW_BIN="$BIN" GOCACHE="$GOCACHE_DIR" "$ROOT_DIR/scripts/build-cw.sh" >/dev/null
 
 cw_json() {
   ASSISTANT_PROVIDER=fake \

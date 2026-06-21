@@ -198,11 +198,28 @@ func TestSlashHelpNewResumeAndPendingGuard(t *testing.T) {
 	if next.ActiveSessionID == "" || next.ActiveSessionID == "session_current" {
 		t.Fatalf("/new did not return new session: %+v", next)
 	}
-	if next.ActiveTask == nil || next.ActiveTask.LastSessionID != next.ActiveSessionID {
-		t.Fatalf("/new did not update current task session metadata: %+v", next.ActiveTask)
+	if next.ActiveTask == nil || next.ActiveTask.LastSessionID == next.ActiveSessionID {
+		t.Fatalf("/new should not persist blank session into task metadata: %+v", next.ActiveTask)
 	}
-	if err := memory.TouchSessionActivity(storageDir, "session_old"); err != nil {
+	blankListed, err := handleSlashResult(context.Background(), io.Discard, rt, next.ActiveSessionID, "/resume")
+	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(blankListed.Output, next.ActiveSessionID) {
+		t.Fatalf("/resume should not list blank /new session: %s", blankListed.Output)
+	}
+	if _, _, err := memory.NewManager(storageDir).SaveShortExchange(context.Background(), "session_old", "", "", "Починить TUI resume picker", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.UpdateSessionDescription(storageDir, "session_old", "Починить TUI resume picker"); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := handleSlashResult(context.Background(), io.Discard, rt, next.ActiveSessionID, "/resume")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(listed.Output, "Починить TUI resume picker") || !strings.Contains(listed.Output, "Started ") {
+		t.Fatalf("/resume list missing session description: %s", listed.Output)
 	}
 	resumed, err := handleSlashResult(context.Background(), io.Discard, rt, next.ActiveSessionID, "/resume session_old")
 	if err != nil {
@@ -210,6 +227,84 @@ func TestSlashHelpNewResumeAndPendingGuard(t *testing.T) {
 	}
 	if resumed.ActiveSessionID != "session_old" || resumed.ActiveTask == nil || resumed.ActiveTask.LastSessionID != "session_old" {
 		t.Fatalf("/resume did not switch session only: %+v", resumed)
+	}
+}
+
+func TestVersionOutputIncludesBuildMetadata(t *testing.T) {
+	oldVersion, oldCommit, oldBuildDate := Version, Commit, BuildDate
+	Version = "1.2.3"
+	Commit = "abc123def456"
+	BuildDate = "2026-06-21T10:00:00Z"
+	t.Cleanup(func() {
+		Version, Commit, BuildDate = oldVersion, oldCommit, oldBuildDate
+	})
+
+	cmd := newRootCommandForInvocation(&globalOptions{}, "cw")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"--version"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"cw version 1.2.3", "commit: abc123def456", "built: 2026-06-21T10:00:00Z"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("version output missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestTUIBackendContextPickerActionsUseCurrentSessionForPendingGuard(t *testing.T) {
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.TouchSessionActivity(storageDir, "session_old"); err != nil {
+		t.Fatal(err)
+	}
+	proposal := app.MemoryProposal{
+		ID:        "proposal_current",
+		SessionID: "session_current",
+		Records: []app.ProposedMemoryRecord{
+			{ID: "record_current", Layer: app.ProposedLayerShort, Kind: "context", Content: "pending", Reason: "test", Status: app.ProposalPending},
+		},
+	}
+	if err := rt.Proposals.Save(context.Background(), proposal); err != nil {
+		t.Fatal(err)
+	}
+	backend := newChatBackendFromRuntime(rt)
+	for name, run := range map[string]func() (string, error){
+		"select session": func() (string, error) {
+			resp, err := backend.SelectSession(context.Background(), "session_old", "session_current")
+			return resp.PendingBlocked, err
+		},
+		"clear task": func() (string, error) {
+			resp, err := backend.ClearTask(context.Background(), "session_current")
+			return resp.PendingBlocked, err
+		},
+		"archive task": func() (string, error) {
+			resp, err := backend.ArchiveTask(context.Background(), "task_missing", "session_current")
+			return resp.PendingBlocked, err
+		},
+		"select profile": func() (string, error) {
+			resp, err := backend.SelectProfile(context.Background(), "student", "session_current")
+			return resp.PendingBlocked, err
+		},
+		"create profile": func() (string, error) {
+			resp, err := backend.CreateProfile(context.Background(), "custom", "session_current")
+			return resp.PendingBlocked, err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			blocked, err := run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(blocked, "pending memory proposal") {
+				t.Fatalf("context picker action did not use current session pending guard: %q", blocked)
+			}
+		})
 	}
 }
 
@@ -1046,6 +1141,26 @@ func TestInvalidModelSlashDoesNotMutateConfig(t *testing.T) {
 	}
 	if cfg.ActiveModel != "" {
 		t.Fatalf("flag model persisted into config: %+v", cfg)
+	}
+}
+
+func TestModelSlashPersistsActiveModel(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := handleSlash(context.Background(), &out, &out, rt, "session_test", "/model fake/model"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := app.NewConfigManager(storageDir).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ActiveModel != "fake/model" || cfg.MemoryModel != "fake/model" {
+		t.Fatalf("model slash did not persist active model: %+v", cfg)
 	}
 }
 

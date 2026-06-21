@@ -23,8 +23,9 @@
 export CW_ROOT="/Users/nikita/code/coding_writer"
 cd "$CW_ROOT"
 mkdir -p "$CW_ROOT/.codingwriter/bin"
-go build -o "$CW_ROOT/.codingwriter/bin/cw" ./cmd/cw
+scripts/build-cw.sh
 export PATH="$CW_ROOT/.codingwriter/bin:$PATH"
+cw --version
 cw --help
 ```
 
@@ -92,6 +93,21 @@ bash scripts/manual-day15-user-flow.sh
 - `TestDay13PauseResumeAfterRestartUsesWorkingMemory` проходит;
 - `TestDay14InvariantsStoredPromptedAndConflictRefused` проходит.
 - `DAY15_TUI_MANUAL_PASS ...` печатается после deterministic Day 15 TUI regression smoke; live Day 15 proof всё равно выполняется по `docs/manual-testing-demo.md`.
+
+New TUI UX live smoke with real OpenRouter key:
+
+```bash
+export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
+unset ASSISTANT_PROVIDER
+unset ASSISTANT_LLM_VALIDATION
+bash scripts/manual-new-ux-live.sh
+```
+
+Ожидаемо:
+
+- startup открывает `new chat`, не показывает заранее сохранённые old audit/proposal markers;
+- explicit `/resume` показывает старый session и только после выбора поднимает old audit/pending proposal;
+- fresh TUI делает реальный OpenRouter call и audit содержит `provider_call` + `accepted` для `google/gemini-3.1-flash-lite*`.
 
 ### Demo Case 1. Day 11 Memory Layers + Two Sum
 

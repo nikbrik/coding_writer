@@ -59,7 +59,7 @@ fi
 cd "$ROOT_DIR"
 mkdir -p "$ROOT_DIR/.codingwriter/bin" "$GOCACHE_DIR"
 build_output=""
-if ! build_output="$(GOCACHE="$GOCACHE_DIR" go build -o "$BIN" ./cmd/cw 2>&1)"; then
+if ! build_output="$(CW_BIN="$BIN" GOCACHE="$GOCACHE_DIR" "$ROOT_DIR/scripts/build-cw.sh" 2>&1)"; then
   printf '%s\n' "$build_output" >&2
   exit 1
 fi

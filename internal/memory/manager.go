@@ -77,6 +77,9 @@ func (m *Manager) Save(ctx context.Context, input SaveInput) (app.MemoryRecord, 
 		path, err = shortPath(m.StorageDir, input.SessionID)
 		if err == nil {
 			_ = touchSessionActivity(m.StorageDir, input.SessionID)
+			if input.Kind == "history_user" || input.Source == "transcript" {
+				_ = UpdateSessionDescription(m.StorageDir, input.SessionID, input.Content)
+			}
 		}
 	case app.LayerWork:
 		if input.TaskID == "" {
@@ -146,6 +149,7 @@ func (m *Manager) SaveShortExchange(ctx context.Context, sessionID, profileID, t
 	if err := storage.AppendJSONLMany(path, []any{userRecord, assistantRecord}); err != nil {
 		return app.MemoryRecord{}, app.MemoryRecord{}, app.NewError(app.CategoryStorage, "memory_write", err.Error(), err)
 	}
+	_ = UpdateSessionDescription(m.StorageDir, sessionID, userContent)
 	return userRecord, assistantRecord, nil
 }
 

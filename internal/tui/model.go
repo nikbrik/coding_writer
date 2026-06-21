@@ -33,6 +33,7 @@ type timelineEvent struct {
 	At       time.Time
 	Kind     string
 	Stage    app.TaskStage
+	Decision string
 	Title    string
 	Summary  string
 	Detail   string
@@ -52,6 +53,11 @@ type modelPickerState struct {
 	cursor    int
 	warning   string
 	items     []modelPickerItem
+}
+
+type slashCommandItem struct {
+	Command     string
+	Description string
 }
 
 type contextPickerState struct {
@@ -84,12 +90,15 @@ type Model struct {
 	audit            []process.ProcessAuditEvent
 	warnings         []string
 	appliedArtifacts []string
+	contextExpanded  bool
 	err              *app.Error
 	modelPicker      *modelPickerState
 	contextPicker    *contextPickerState
+	slashCursor      int
 }
 
 type initialLoadedMsg struct {
+	mode     string
 	task     *app.TaskState
 	audit    []process.ProcessAuditEvent
 	proposal *app.MemoryProposal
@@ -136,7 +145,7 @@ type favoriteToggledMsg struct {
 
 func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) error {
 	m := NewModel(ctx, backend)
-	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out)}
+	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen()}
 	_, err := tea.NewProgram(m, opts...).Run()
 	return err
 }
@@ -192,7 +201,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.task = msg.task
 		m.audit = msg.audit
 		m.proposal = msg.proposal
-		m.rebuildFromState()
+		switch msg.mode {
+		case "history":
+			m.contextExpanded = true
+			m.appendResumeState()
+			m.appendStartupAudit(m.audit)
+			if m.proposal != nil && pendingProposalRecords(*m.proposal) > 0 {
+				m.appendEvent("memory", stageOfTask(m.task), "pending memory proposal", fmt.Sprintf("%d records", pendingProposalRecords(*m.proposal)), "info")
+			}
+			m.refreshEvidence()
+		case "refresh":
+			m.refreshEvidence()
+		default:
+			m.rebuildFromState()
+		}
 	case exchangeFinishedMsg:
 		m.busy = false
 		m.input.SetValue("")
@@ -213,21 +235,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
 			break
 		}
+		line := strings.TrimSpace(msg.line)
 		m.applySlashResponse(msg.resp)
-		if strings.TrimSpace(msg.resp.Output) != "" {
-			m.appendEvent("command", stageOfTask(m.task), msg.line, strings.TrimSpace(msg.resp.Output), "info")
+		if line == "/new" {
+			m.resetNewChatView()
+		} else if strings.HasPrefix(line, "/task") || msg.resp.ActiveSessionID != "" {
+			m.contextExpanded = true
+		}
+		if line != "/new" && strings.TrimSpace(msg.resp.Output) != "" {
+			m.appendEvent("command", stageOfTask(m.task), line, strings.TrimSpace(msg.resp.Output), "info")
 		}
 		if msg.resp.Done {
 			return m, tea.Quit
 		}
-		cmds = append(cmds, m.loadInitial())
+		if line == "/new" {
+			cmds = append(cmds, tea.ClearScreen, m.loadCurrentState())
+		} else if msg.resp.ActiveSessionID != "" {
+			cmds = append(cmds, m.loadSessionContext(msg.resp.ActiveSessionID))
+		} else {
+			cmds = append(cmds, m.loadCurrentState())
+		}
 	case memoryAppliedMsg:
 		if msg.err != nil {
 			m.err = app.AsError(msg.err)
 			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
 		} else {
 			m.appendEvent("memory", stageOfTask(m.task), "memory proposal updated", "proposal records applied/rejected", "info")
-			cmds = append(cmds, m.loadInitial())
+			m.contextExpanded = true
+			cmds = append(cmds, m.loadCurrentState())
 		}
 	case taskActionMsg:
 		if msg.err != nil {
@@ -235,6 +270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
 		} else {
 			m.task = &msg.task
+			m.contextExpanded = true
 			m.appendEvent("task", msg.task.Stage, "task updated", fmt.Sprintf("status=%s expected=%s", msg.task.Status, msg.task.ExpectedAction), "info")
 		}
 	case modelsLoadedMsg:
@@ -299,12 +335,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
+		case "up":
+			if m.slashMenuActive() {
+				m.moveSlashCursor(-1)
+				break
+			}
+		case "down":
+			if m.slashMenuActive() {
+				m.moveSlashCursor(1)
+				break
+			}
 		case "tab":
 			m.active = (m.active + 1) % 5
 		case "shift+tab":
 			m.active = (m.active + 4) % 5
 		case "enter":
 			text := strings.TrimSpace(m.input.Value())
+			text = completeSlashCommand(text, m.slashCursor)
 			if text == "" {
 				if m.hasPendingPlan() {
 					m.busy = true
@@ -363,6 +410,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
+		m.clampSlashCursor()
 	}
 	m.updateViewport()
 	return m, tea.Batch(cmds...)
@@ -373,17 +421,29 @@ func (m Model) View() string {
 		return "codingwriter tui\n"
 	}
 	header := m.headerView()
-	body := m.bodyView()
+	slashHelp := m.slashHelpView()
+	bodyModel := m
+	if slashHelp != "" {
+		bodyModel.timeline.Height = max(4, m.timeline.Height-lipgloss.Height(slashHelp))
+	}
+	body := bodyModel.bodyView()
 	footer := m.footerView()
 	input := m.input.View()
 	if m.modelPicker != nil {
 		body = m.modelPickerView()
+		slashHelp = ""
 		input = ""
 	} else if m.contextPicker != nil {
 		body = m.contextPickerView()
+		slashHelp = ""
 		input = ""
 	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer, input)
+	parts := []string{header, body}
+	if slashHelp != "" {
+		parts = append(parts, slashHelp)
+	}
+	parts = append(parts, footer, input)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m *Model) resize() {
@@ -442,6 +502,12 @@ func (m Model) bodyView() string {
 }
 
 func (m Model) sidebarView(width int) string {
+	if !m.contextExpanded {
+		return strings.Join([]string{
+			m.statusView(width),
+			m.freshChatView(width),
+		}, "\n")
+	}
 	sections := []string{
 		m.statusView(width),
 		m.planView(width),
@@ -478,10 +544,81 @@ func (m Model) footerView() string {
 	return styleHint().Render(trimWidth(line, m.width))
 }
 
+func (m Model) slashHelpView() string {
+	if m.busy || m.modelPicker != nil || m.contextPicker != nil {
+		return ""
+	}
+	query := strings.TrimSpace(m.input.Value())
+	if !strings.HasPrefix(query, "/") {
+		return ""
+	}
+	items := matchingSlashCommands(query)
+	lines := []string{section("Slash commands")}
+	if len(items) == 0 {
+		lines = append(lines, "no matches")
+		return boxed(m.width, lines)
+	}
+	cursor := clampIndex(m.slashCursor, len(items))
+	limit := min(len(items), max(4, m.height-8))
+	visible := visibleSlashCommands(items, cursor, limit)
+	for _, visibleItem := range visible {
+		item := visibleItem.Item
+		line := fmt.Sprintf("%-24s %s", item.Command, item.Description)
+		if visibleItem.Index == cursor {
+			line = styleSoftSelected().Render(line)
+		}
+		lines = append(lines, line)
+	}
+	if len(items) > limit {
+		lines = append(lines, styleHint().Render(fmt.Sprintf("↑/↓ select | enter run | %d/%d", cursor+1, len(items))))
+	}
+	return boxed(m.width, lines)
+}
+
+func (m Model) slashMenuActive() bool {
+	return !m.busy && m.modelPicker == nil && m.contextPicker == nil && strings.HasPrefix(strings.TrimSpace(m.input.Value()), "/")
+}
+
+func (m *Model) moveSlashCursor(delta int) {
+	items := matchingSlashCommands(m.input.Value())
+	if len(items) == 0 {
+		m.slashCursor = 0
+		return
+	}
+	m.slashCursor = (clampIndex(m.slashCursor, len(items)) + len(items) + delta) % len(items)
+}
+
+func (m *Model) clampSlashCursor() {
+	items := matchingSlashCommands(m.input.Value())
+	if len(items) == 0 {
+		m.slashCursor = 0
+		return
+	}
+	m.slashCursor = clampIndex(m.slashCursor, len(items))
+}
+
 func (m Model) statusView(width int) string {
+	cfg := m.backend.Config()
 	lines := []string{section("Status")}
+	lines = append(lines,
+		"storage: "+emptyDash(m.backend.StorageDir()),
+		"model: "+emptyDash(cfg.ActiveModel),
+		"profile: "+emptyDash(cfg.ActiveProfileID),
+		"session: "+emptyDash(m.sessionID),
+		"started: "+tuiSessionTime(m.startedAt),
+		fmt.Sprintf("latest audit: %d", len(m.audit)),
+	)
 	if m.task == nil || m.task.ID == "" {
 		lines = append(lines, "task: none", "stage: -", "expected: -")
+		return boxed(width, lines)
+	}
+	if !m.contextExpanded {
+		lines = append(lines,
+			"task focus: "+shortID(m.task.ID),
+			"stage: "+string(m.task.Stage),
+			"status: "+string(m.task.Status),
+			"work details hidden in new chat",
+		)
 		return boxed(width, lines)
 	}
 	lines = append(lines,
@@ -498,6 +635,135 @@ func (m Model) statusView(width int) string {
 	}
 	if m.proposal != nil && pendingProposalRecords(*m.proposal) > 0 {
 		lines = append(lines, fmt.Sprintf("pending memory: %d", pendingProposalRecords(*m.proposal)))
+	}
+	return boxed(width, lines)
+}
+
+func matchingSlashCommands(query string) []slashCommandItem {
+	query = strings.TrimSpace(query)
+	if query == "" || query == "/" {
+		return slashCommandCatalog()
+	}
+	matches := make([]slashCommandItem, 0)
+	for _, item := range slashCommandCatalog() {
+		if strings.HasPrefix(item.Command, query) || strings.HasPrefix(slashCommandBase(item.Command), query) {
+			matches = append(matches, item)
+		}
+	}
+	return matches
+}
+
+func completeSlashCommand(query string, cursor int) string {
+	query = strings.TrimSpace(query)
+	if query == "" || !strings.HasPrefix(query, "/") {
+		return query
+	}
+	matches := matchingSlashCommands(query)
+	if len(matches) == 0 {
+		return query
+	}
+	if exactSlashCommand(query) && cursor == 0 {
+		return query
+	}
+	return slashCommandRunnable(matches[clampIndex(cursor, len(matches))].Command)
+}
+
+func exactSlashCommand(query string) bool {
+	for _, item := range slashCommandCatalog() {
+		if item.Command == query {
+			return true
+		}
+	}
+	return false
+}
+
+func slashCommandBase(command string) string {
+	base, _, _ := strings.Cut(command, " ")
+	return base
+}
+
+func slashCommandRunnable(command string) string {
+	parts := strings.Fields(command)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.HasPrefix(part, "<") && strings.HasSuffix(part, ">") {
+			break
+		}
+		out = append(out, part)
+	}
+	return strings.Join(out, " ")
+}
+
+type visibleSlashCommand struct {
+	Index int
+	Item  slashCommandItem
+}
+
+func visibleSlashCommands(items []slashCommandItem, cursor, limit int) []visibleSlashCommand {
+	if len(items) == 0 {
+		return nil
+	}
+	limit = max(1, min(limit, len(items)))
+	cursor = clampIndex(cursor, len(items))
+	start := cursor - limit/2
+	if start < 0 {
+		start = 0
+	}
+	if start+limit > len(items) {
+		start = len(items) - limit
+	}
+	out := make([]visibleSlashCommand, 0, limit)
+	for i := start; i < start+limit; i++ {
+		out = append(out, visibleSlashCommand{Index: i, Item: items[i]})
+	}
+	return out
+}
+
+func clampIndex(index, count int) int {
+	if count <= 0 || index < 0 {
+		return 0
+	}
+	if index >= count {
+		return count - 1
+	}
+	return index
+}
+
+func slashCommandCatalog() []slashCommandItem {
+	return []slashCommandItem{
+		{Command: "/new", Description: "start new chat; keep task/work/profile/model"},
+		{Command: "/resume", Description: "list old chats"},
+		{Command: "/resume <session_id>", Description: "resume chat short memory"},
+		{Command: "/task", Description: "list saved tasks"},
+		{Command: "/task <task_id>", Description: "select task/work in this chat"},
+		{Command: "/task close", Description: "clear current task focus"},
+		{Command: "/task archive <task_id>", Description: "archive task from list"},
+		{Command: "/task restore <task_id>", Description: "restore archived task"},
+		{Command: "/profile", Description: "list profiles; includes new"},
+		{Command: "/profile <id>", Description: "switch profile/long memory"},
+		{Command: "/profile create <id>", Description: "create profile"},
+		{Command: "/model", Description: "open model picker"},
+		{Command: "/model <id>", Description: "set active model"},
+		{Command: "/memory <short|work|long>", Description: "show memory layer"},
+		{Command: "/memory propose", Description: "propose memory from latest exchange"},
+		{Command: "/memory apply", Description: "apply pending memory"},
+		{Command: "/save <short|work|long>", Description: "save note to memory"},
+		{Command: "/clear short", Description: "clear current chat memory"},
+		{Command: "/privacy", Description: "show privacy/storage summary"},
+		{Command: "/process audit", Description: "show process audit"},
+		{Command: "/exit", Description: "quit TUI"},
+	}
+}
+
+func (m Model) freshChatView(width int) string {
+	lines := []string{section("New chat")}
+	lines = append(lines,
+		"timeline starts empty",
+		"old chat: /resume",
+		"task details: /task",
+	)
+	if m.task != nil && m.task.ID != "" {
+		lines = append(lines, "current task/work is preserved")
 	}
 	return boxed(width, lines)
 }
@@ -590,16 +856,44 @@ func (m Model) filesView(width int) string {
 
 func (m *Model) loadInitial() tea.Cmd {
 	return func() tea.Msg {
-		var msg initialLoadedMsg
+		msg := initialLoadedMsg{mode: "startup"}
+		if task, ok, err := m.backend.CurrentTask(); err != nil {
+			msg.err = err
+		} else if ok {
+			msg.task = &task
+		}
+		return msg
+	}
+}
+
+func (m *Model) loadCurrentState() tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		msg := initialLoadedMsg{mode: "refresh"}
+		if task, ok, err := m.backend.CurrentTask(); err != nil {
+			msg.err = err
+		} else if ok {
+			msg.task = &task
+		}
+		if proposal, ok, err := m.backend.LatestPendingProposal(m.ctx, sessionID); err == nil && ok {
+			msg.proposal = &proposal
+		}
+		return msg
+	}
+}
+
+func (m *Model) loadSessionContext(sessionID string) tea.Cmd {
+	return func() tea.Msg {
+		msg := initialLoadedMsg{mode: "history"}
 		if task, ok, err := m.backend.CurrentTask(); err != nil {
 			msg.err = err
 		} else if ok {
 			msg.task = &task
 		}
 		if audit, err := m.backend.LatestAudit(80); err == nil {
-			msg.audit = audit
+			msg.audit = filterAuditForStartup(audit, msg.task, sessionID)
 		}
-		if proposal, ok, err := m.backend.LatestPendingProposal(m.ctx, ""); err == nil && ok {
+		if proposal, ok, err := m.backend.LatestPendingProposal(m.ctx, sessionID); err == nil && ok {
 			msg.proposal = &proposal
 		}
 		return msg
@@ -621,8 +915,9 @@ func (m Model) selectModel(modelID string) tea.Cmd {
 }
 
 func (m Model) selectSession(sessionID string) tea.Cmd {
+	currentSessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := m.backend.SelectSession(m.ctx, sessionID)
+		resp, err := m.backend.SelectSession(m.ctx, sessionID, currentSessionID)
 		return slashFinishedMsg{line: "/resume " + sessionID, resp: resp, err: err}
 	}
 }
@@ -636,15 +931,17 @@ func (m Model) selectTask(taskID string) tea.Cmd {
 }
 
 func (m Model) clearTask() tea.Cmd {
+	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := m.backend.ClearTask(m.ctx)
+		resp, err := m.backend.ClearTask(m.ctx, sessionID)
 		return slashFinishedMsg{line: "/task close", resp: resp, err: err}
 	}
 }
 
 func (m Model) archiveTask(taskID string) tea.Cmd {
+	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := m.backend.ArchiveTask(m.ctx, taskID)
+		resp, err := m.backend.ArchiveTask(m.ctx, taskID, sessionID)
 		return slashFinishedMsg{line: "/task archive " + taskID, resp: resp, err: err}
 	}
 }
@@ -658,15 +955,17 @@ func (m Model) restoreTask(taskID string) tea.Cmd {
 }
 
 func (m Model) selectProfile(profileID string) tea.Cmd {
+	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := m.backend.SelectProfile(m.ctx, profileID)
+		resp, err := m.backend.SelectProfile(m.ctx, profileID, sessionID)
 		return slashFinishedMsg{line: "/profile " + profileID, resp: resp, err: err}
 	}
 }
 
 func (m Model) createProfile(profileID string) tea.Cmd {
+	sessionID := m.sessionID
 	return func() tea.Msg {
-		resp, err := m.backend.CreateProfile(m.ctx, profileID)
+		resp, err := m.backend.CreateProfile(m.ctx, profileID, sessionID)
 		return slashFinishedMsg{line: "/profile create " + profileID, resp: resp, err: err}
 	}
 }
@@ -763,6 +1062,7 @@ func (m Model) resumeTask() tea.Cmd {
 }
 
 func (m *Model) applyResponse(resp ChatResponse) {
+	m.contextExpanded = true
 	if resp.Task != nil {
 		m.task = resp.Task
 	}
@@ -789,16 +1089,145 @@ func (m *Model) applyResponse(resp ChatResponse) {
 }
 
 func (m *Model) rebuildFromState() {
-	if m.task != nil && m.task.ID != "" {
-		m.appendEvent("task", m.task.Stage, "resume task", fmt.Sprintf("%s expected=%s", m.task.Title, m.task.ExpectedAction), "info")
-	}
-	for _, event := range m.audit {
-		m.appendAuditEvent(event)
-	}
-	if m.proposal != nil && pendingProposalRecords(*m.proposal) > 0 {
-		m.appendEvent("memory", stageOfTask(m.task), "pending memory proposal", fmt.Sprintf("%d records", pendingProposalRecords(*m.proposal)), "info")
-	}
+	m.appendStartupState()
 	m.refreshEvidence()
+}
+
+func (m *Model) resetNewChatView() {
+	m.events = nil
+	m.audit = nil
+	m.proposal = nil
+	m.evidence = nil
+	m.appliedArtifacts = nil
+	m.warnings = nil
+	m.err = nil
+	m.contextExpanded = false
+	m.appendStartupState()
+}
+
+func (m *Model) appendStartupState() {
+	parts := []string{
+		"new chat=" + emptyDash(m.sessionID),
+		"storage=" + emptyDash(m.backend.StorageDir()),
+	}
+	stage := app.TaskStage("")
+	if m.task != nil && m.task.ID != "" {
+		stage = m.task.Stage
+		parts = append(parts,
+			"current task="+m.task.ID,
+			"stage="+string(m.task.Stage),
+			"expected="+string(m.task.ExpectedAction),
+			"status="+string(m.task.Status),
+		)
+		if strings.TrimSpace(m.task.LastSessionID) != "" {
+			parts = append(parts, "task session="+m.task.LastSessionID)
+		}
+	} else {
+		parts = append(parts, "current task=none")
+	}
+	parts = append(parts, "history: /resume")
+	m.appendEvent("startup", stage, "new chat", strings.Join(parts, " | "), "info")
+}
+
+func (m *Model) appendResumeState() {
+	parts := []string{
+		"resumed chat=" + emptyDash(m.sessionID),
+		"storage=" + emptyDash(m.backend.StorageDir()),
+	}
+	stage := app.TaskStage("")
+	if m.task != nil && m.task.ID != "" {
+		stage = m.task.Stage
+		parts = append(parts,
+			"current task="+m.task.ID,
+			"stage="+string(m.task.Stage),
+			"expected="+string(m.task.ExpectedAction),
+			"status="+string(m.task.Status),
+		)
+	} else {
+		parts = append(parts, "current task=none")
+	}
+	parts = append(parts, fmt.Sprintf("loaded audit=%d", len(m.audit)))
+	m.appendEvent("startup", stage, "chat resumed", strings.Join(parts, " | "), "info")
+}
+
+func filterAuditForStartup(events []process.ProcessAuditEvent, task *app.TaskState, sessionID string) []process.ProcessAuditEvent {
+	taskID := ""
+	contextSessionID := strings.TrimSpace(sessionID)
+	if task != nil {
+		taskID = strings.TrimSpace(task.ID)
+		if strings.TrimSpace(task.LastSessionID) != "" {
+			contextSessionID = strings.TrimSpace(task.LastSessionID)
+		}
+	}
+	out := make([]process.ProcessAuditEvent, 0, len(events))
+	for _, event := range events {
+		eventTaskID := strings.TrimSpace(event.TaskID)
+		eventSessionID := strings.TrimSpace(event.SessionID)
+		if taskID != "" {
+			if eventTaskID == taskID || eventTaskID == "" && eventSessionID == contextSessionID {
+				out = append(out, event)
+			}
+			continue
+		}
+		if contextSessionID != "" && eventSessionID == contextSessionID {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func (m *Model) appendStartupAudit(events []process.ProcessAuditEvent) {
+	if len(events) == 0 {
+		return
+	}
+	last := events[len(events)-1]
+	summary := startupAuditSummary(events, last)
+	m.appendEvent("audit", last.Stage, "restored audit history", summary, auditSeverity(last))
+}
+
+func startupAuditSummary(events []process.ProcessAuditEvent, last process.ProcessAuditEvent) string {
+	counts := map[string]int{}
+	for _, event := range events {
+		key := strings.TrimSpace(event.Decision)
+		if key == "" {
+			key = string(event.ActionKind)
+		}
+		if key == "" {
+			key = "event"
+		}
+		counts[key]++
+	}
+	parts := []string{}
+	for _, key := range []string{"provider_call", "agent_call", "agent_accepted", "retried", "rejected", "transitioned", "accepted"} {
+		if counts[key] > 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d", key, counts[key]))
+			delete(counts, key)
+		}
+	}
+	lastReason := summarizeAuditReason(firstNonEmpty(strings.Join(last.ValidatorErrors, "; "), last.Reason, last.TransitionReason))
+	if lastReason != "" {
+		parts = append(parts, "last: "+lastReason)
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%d context audit events", len(events))
+	}
+	return fmt.Sprintf("%d context audit events; %s", len(events), strings.Join(parts, " "))
+}
+
+func summarizeAuditReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ""
+	}
+	lower := strings.ToLower(reason)
+	switch {
+	case strings.Contains(lower, "ready_for_validation") && strings.Contains(lower, "trusted evidence"):
+		return "validation blocked: trusted evidence required"
+	case strings.Contains(lower, "trusted evidence"):
+		return "trusted evidence required"
+	default:
+		return trimWidth(reason, 96)
+	}
 }
 
 func (m *Model) refreshEvidence() {
@@ -830,19 +1259,16 @@ func (m *Model) appendAuditEvent(event process.ProcessAuditEvent) {
 	if event.Decision == "" && summary == "" {
 		return
 	}
-	m.events = append(m.events, timelineEvent{At: event.CreatedAt, Kind: "audit", Stage: event.Stage, Title: title, Summary: summary, Severity: "info"})
+	m.events = append(m.events, timelineEvent{At: event.CreatedAt, Kind: "audit", Stage: event.Stage, Decision: event.Decision, Title: title, Summary: summary, Severity: auditSeverity(event)})
 }
 
 func (m *Model) updateViewport() {
 	lines := []string{}
 	for _, ev := range m.events {
-		prefix := ev.Kind
-		if ev.Stage != "" {
-			prefix += "/" + string(ev.Stage)
-		}
-		lines = append(lines, fmt.Sprintf("%s %s", lipgloss.NewStyle().Bold(true).Render(prefix), safe(ev.Title)))
+		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
 		if ev.Summary != "" {
-			lines = append(lines, wrap(safe(ev.Summary), max(20, m.timeline.Width-2))...)
+			summary := eventSummaryStyle(ev).Render(safe(ev.Summary))
+			lines = append(lines, wrap(summary, max(20, m.timeline.Width-2))...)
 		}
 	}
 	if len(lines) == 0 {
@@ -851,6 +1277,103 @@ func (m *Model) updateViewport() {
 	m.timeline.SetContent(strings.Join(lines, "\n"))
 	m.timeline.GotoBottom()
 	m.input.Placeholder = placeholder(m.task)
+}
+
+func auditSeverity(event process.ProcessAuditEvent) string {
+	switch event.Decision {
+	case "rejected", "transition_failed", "persistence_failed":
+		return "error"
+	case "retried", "prompt_improvement_skipped", "agent_rejected", "agent_invalid_json":
+		return "warning"
+	default:
+		return "info"
+	}
+}
+
+func renderEventPrefix(ev timelineEvent) string {
+	kind := eventKindStyle(ev.Kind).Render(emptyDash(ev.Kind))
+	if ev.Stage == "" {
+		return kind
+	}
+	return kind + styleHint().Render("/") + eventStageStyle(ev.Stage).Render(string(ev.Stage))
+}
+
+func eventKindStyle(kind string) lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true)
+	switch kind {
+	case "startup":
+		return style.Foreground(lipgloss.Color("117"))
+	case "task":
+		return style.Foreground(lipgloss.Color("81"))
+	case "transition":
+		return style.Foreground(lipgloss.Color("120"))
+	case "memory":
+		return style.Foreground(lipgloss.Color("177"))
+	case "files":
+		return style.Foreground(lipgloss.Color("110"))
+	case "audit":
+		return style.Foreground(lipgloss.Color("244"))
+	case "warning":
+		return style.Foreground(lipgloss.Color("214"))
+	case "error":
+		return style.Foreground(lipgloss.Color("209"))
+	default:
+		return style.Foreground(lipgloss.Color("250"))
+	}
+}
+
+func eventStageStyle(stage app.TaskStage) lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true)
+	switch stage {
+	case app.StagePlanning:
+		return style.Foreground(lipgloss.Color("81"))
+	case app.StageExecution:
+		return style.Foreground(lipgloss.Color("214"))
+	case app.StageValidation:
+		return style.Foreground(lipgloss.Color("177"))
+	case app.StageDone:
+		return style.Foreground(lipgloss.Color("120"))
+	default:
+		return style.Foreground(lipgloss.Color("244"))
+	}
+}
+
+func eventTitleStyle(ev timelineEvent) lipgloss.Style {
+	style := lipgloss.NewStyle()
+	switch ev.Severity {
+	case "error":
+		return style.Foreground(lipgloss.Color("209"))
+	case "warning":
+		return style.Foreground(lipgloss.Color("214"))
+	}
+	return eventDecisionStyle(ev.Decision)
+}
+
+func eventDecisionStyle(decision string) lipgloss.Style {
+	style := lipgloss.NewStyle()
+	switch decision {
+	case "accepted", "agent_accepted", "transitioned":
+		return style.Foreground(lipgloss.Color("120"))
+	case "retried", "prompt_improvement_skipped":
+		return style.Foreground(lipgloss.Color("214"))
+	case "rejected", "agent_rejected", "transition_failed", "persistence_failed":
+		return style.Foreground(lipgloss.Color("209"))
+	case "provider_call", "agent_call", "semantic_output_call", "semantic_intent_call":
+		return style.Foreground(lipgloss.Color("110"))
+	default:
+		return style.Foreground(lipgloss.Color("250"))
+	}
+}
+
+func eventSummaryStyle(ev timelineEvent) lipgloss.Style {
+	switch ev.Severity {
+	case "error":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("209"))
+	case "warning":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	default:
+		return styleHint()
+	}
 }
 
 func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -1072,9 +1595,13 @@ func (p *contextPickerState) contextLines(width int) []string {
 		if len(p.payload.Sessions) == 0 {
 			return []string{"no sessions"}
 		}
-		out := make([]string, 0, len(p.payload.Sessions))
+		out := make([]string, 0, len(p.payload.Sessions)*2)
 		for i, item := range p.payload.Sessions {
-			out = append(out, pickerLine(i == p.cursor, fmt.Sprintf("%s  %s", item.ID, item.LastActivity.Format(time.RFC3339)), width))
+			title := firstNonEmpty(item.Title, item.ID)
+			out = append(out, pickerLine(i == p.cursor, fmt.Sprintf("%s  %s", tuiSessionTime(item.StartedAt), title), width))
+			if item.Description != "" {
+				out = append(out, styleHint().Render(trimWidth("    "+item.Description, width-2)))
+			}
 		}
 		return out
 	case "tasks":
@@ -1114,6 +1641,13 @@ func (p *contextPickerState) contextLines(width int) []string {
 	default:
 		return []string{"no items"}
 	}
+}
+
+func tuiSessionTime(ts time.Time) string {
+	if ts.IsZero() {
+		return "-"
+	}
+	return ts.Local().Format("2006-01-02 15:04")
 }
 
 func pickerLine(selected bool, text string, width int) string {
@@ -1488,6 +2022,10 @@ func styleHint() lipgloss.Style {
 
 func styleSelected() lipgloss.Style {
 	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230")).Background(lipgloss.Color("63"))
+}
+
+func styleSoftSelected() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(lipgloss.Color("238"))
 }
 
 func styleActive() lipgloss.Style {

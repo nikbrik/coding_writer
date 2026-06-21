@@ -18,13 +18,13 @@ type Backend interface {
 	ListModels(ctx context.Context) (ModelCatalog, error)
 	SelectModel(ctx context.Context, modelID string) (app.AppConfig, error)
 	ToggleFavoriteModel(ctx context.Context, modelID string) (app.AppConfig, error)
-	SelectSession(ctx context.Context, sessionID string) (SlashResponse, error)
+	SelectSession(ctx context.Context, targetSessionID, currentSessionID string) (SlashResponse, error)
 	SelectTask(ctx context.Context, taskID, sessionID string) (SlashResponse, error)
-	ClearTask(ctx context.Context) (SlashResponse, error)
-	ArchiveTask(ctx context.Context, taskID string) (SlashResponse, error)
+	ClearTask(ctx context.Context, currentSessionID string) (SlashResponse, error)
+	ArchiveTask(ctx context.Context, taskID, currentSessionID string) (SlashResponse, error)
 	RestoreTask(ctx context.Context, taskID, sessionID string) (SlashResponse, error)
-	SelectProfile(ctx context.Context, profileID string) (SlashResponse, error)
-	CreateProfile(ctx context.Context, profileID string) (SlashResponse, error)
+	SelectProfile(ctx context.Context, profileID, currentSessionID string) (SlashResponse, error)
+	CreateProfile(ctx context.Context, profileID, currentSessionID string) (SlashResponse, error)
 	Exchange(ctx context.Context, req ChatRequest) (ChatResponse, error)
 	Slash(ctx context.Context, sessionID, line string) (SlashResponse, error)
 	ApplyMemory(ctx context.Context, req MemoryApplyRequest) (memory.ApplyResult, error)
@@ -91,6 +91,9 @@ type PickerPayload struct {
 
 type SessionSummary struct {
 	ID           string
+	Title        string
+	Description  string
+	StartedAt    time.Time
 	LastActivity time.Time
 }
 

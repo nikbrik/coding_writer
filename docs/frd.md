@@ -940,6 +940,9 @@ assistant privacy purge --audit [--transcripts] --yes
 
 ```text
 /help
+/new
+/resume
+/resume <session_id>
 /model
 /profile
 /profile create
@@ -965,6 +968,17 @@ assistant privacy purge --audit [--transcripts] --yes
 /clear short
 /exit
 ```
+
+Chat/session semantics:
+
+- `cw` in an interactive terminal starts a fresh chat session by default.
+- Startup may show current task/work metadata, but it must not auto-open old
+  short memory, old audit history, or pending memory proposals.
+- `/resume` lists old chat sessions.
+- `/resume <session_id>` explicitly resumes that chat/short context and loads
+  its relevant audit/proposal context.
+- `/task resume` is different: it resumes a paused task/work lifecycle in the
+  current chat.
 
 Canonical P0 automation matrix:
 

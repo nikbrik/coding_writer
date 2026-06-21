@@ -21,9 +21,10 @@
 export CW_ROOT="/Users/nikita/code/coding_writer"
 cd "$CW_ROOT"
 mkdir -p "$CW_ROOT/.codingwriter/bin"
-go build -o "$CW_ROOT/.codingwriter/bin/cw" ./cmd/cw
+scripts/build-cw.sh
 export PATH="$CW_ROOT/.codingwriter/bin:$PATH"
 which cw
+cw --version
 cw --help
 ```
 

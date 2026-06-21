@@ -42,4 +42,4 @@ manual_scratch/
 .codingwriter/storage/
 
 # Compiled binaries
-.codingwriter/bin/
+.codingwriter/bin/*
