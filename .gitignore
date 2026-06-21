@@ -11,6 +11,7 @@ Thumbs.db
 *~
 
 # Local caches / build output
+__pycache__/
 .assistant/
 .cache/
 .kilo/plans/*
