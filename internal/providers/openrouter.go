@@ -85,6 +85,15 @@ func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest
 		"model":    req.Model,
 		"messages": toOpenRouterMessages(req.Messages),
 	}
+	if len(req.Tools) > 0 {
+		body["tools"] = req.Tools
+		if req.ToolChoice != nil {
+			body["tool_choice"] = req.ToolChoice
+		}
+		if req.ParallelToolCalls != nil {
+			body["parallel_tool_calls"] = *req.ParallelToolCalls
+		}
+	}
 	if req.JSONMode {
 		body["response_format"] = map[string]string{"type": "json_object"}
 	}
@@ -167,7 +176,8 @@ func (p *OpenRouterProvider) completeOnce(ctx context.Context, key, model string
 		Model   string `json:"model"`
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string             `json:"content"`
+				ToolCalls []app.ChatToolCall `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -184,7 +194,10 @@ func (p *OpenRouterProvider) completeOnce(ctx context.Context, key, model string
 	if responseModel == "" {
 		responseModel = model
 	}
-	return newAssistantMessage(parsed.Choices[0].Message.Content, responseModel, parsed.ID), false, 0, nil
+	response := newAssistantMessage(parsed.Choices[0].Message.Content, responseModel, parsed.ID)
+	response.ToolCalls = append([]app.ChatToolCall(nil), parsed.Choices[0].Message.ToolCalls...)
+	response.Message.ToolCalls = append([]app.ChatToolCall(nil), response.ToolCalls...)
+	return response, false, 0, nil
 }
 
 func parseRetryAfter(value string) time.Duration {
@@ -220,10 +233,17 @@ func (p *OpenRouterProvider) client() *http.Client {
 	return &http.Client{Timeout: defaultOpenRouterTimeout}
 }
 
-func toOpenRouterMessages(messages []app.ChatMessage) []map[string]string {
-	out := make([]map[string]string, 0, len(messages))
+func toOpenRouterMessages(messages []app.ChatMessage) []map[string]any {
+	out := make([]map[string]any, 0, len(messages))
 	for _, msg := range messages {
-		out = append(out, map[string]string{"role": string(msg.Role), "content": msg.Content})
+		item := map[string]any{"role": string(msg.Role), "content": msg.Content}
+		if msg.ToolCallID != "" {
+			item["tool_call_id"] = msg.ToolCallID
+		}
+		if len(msg.ToolCalls) > 0 {
+			item["tool_calls"] = msg.ToolCalls
+		}
+		out = append(out, item)
 	}
 	return out
 }

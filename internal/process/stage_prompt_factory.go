@@ -88,12 +88,14 @@ func (f *StagePromptFactory) ToolPolicyPrompt(stage app.TaskStage, action Action
 	var b strings.Builder
 	b.WriteString("Tool and side-effect policy (P0):\n")
 	b.WriteString("- No file-editing tools.\n")
-	b.WriteString("- No shell or tool execution by the LLM.\n")
+	b.WriteString("- No shell execution by the LLM.\n")
+	b.WriteString("- You may request only application-attached, allowlisted, read-only MCP tools when the provider exposes tool schemas.\n")
+	b.WriteString("- Do not request tools that are not present in the current provider tool list.\n")
 	b.WriteString("- No commits or git automation.\n")
 	b.WriteString("- No tool_result in task state.\n")
-	b.WriteString("- You may only answer, plan, classify memory, produce findings or propose transition signals.\n")
+	b.WriteString("- You may not invent tool results; use only tool result messages returned by the application.\n")
 	if action == ActionAnswerQuestion {
-		b.WriteString("This is an informational answer action; return concise text only and do not use tools or side effects.")
+		b.WriteString("This is an informational answer action; return concise text. You may use attached read-only MCP tools when they directly answer the user request.")
 	} else {
 		b.WriteString(fmt.Sprintf("Selected action is %s; return structured output using the %s schema.", action, stage))
 	}

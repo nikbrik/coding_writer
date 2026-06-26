@@ -173,7 +173,7 @@ import re, sys
 raw = open(sys.argv[1], "rb").read().decode("utf-8", "replace")
 text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw).replace("\r", "\n")
 open(sys.argv[2], "w", encoding="utf-8").write(text)
-required = ["codingwriter", "Status", "Plan", "Evidence", "Files"]
+required = ["codingwriter", "Status", "Plan", "Evidence", "Decision", "Approve plan", "files/"]
 missing = [item for item in required if item not in text]
 if missing:
     raise SystemExit(f"TUI transcript missing {missing}")

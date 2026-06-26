@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -110,6 +111,38 @@ func TestOpenRouterRetriesTemporaryHTTP(t *testing.T) {
 	}
 	if calls != 2 || res.RetryCount != 1 || res.Message.Content != "ok" {
 		t.Fatalf("bad retry result calls=%d retry=%d res=%+v", calls, res.RetryCount, res)
+	}
+}
+
+func TestOpenRouterSendsToolsAndParsesToolCalls(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"completion_tool","model":"fake/model","choices":[{"message":{"content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"github_api__github_repo_info","arguments":"{\"owner\":\"nikbrik\",\"repo\":\"coding_writer\"}"}}]}}]}`))
+	}))
+	defer server.Close()
+	provider := NewOpenRouterProvider(server.URL)
+	parallel := false
+	res, err := provider.Complete(context.Background(), CompletionRequest{
+		Purpose:           PurposeChat,
+		Model:             "fake/model",
+		Messages:          []app.ChatMessage{{Role: app.RoleUser, Content: "repo info"}},
+		Tools:             []ToolDefinition{{Type: "function", Function: ToolFunction{Name: "github_api__github_repo_info", Parameters: map[string]any{"type": "object"}}}},
+		ToolChoice:        "auto",
+		ParallelToolCalls: &parallel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(requestBody["tools"].([]any)) != 1 || requestBody["tool_choice"] != "auto" || requestBody["parallel_tool_calls"] != false {
+		t.Fatalf("bad tool request: %+v", requestBody)
+	}
+	if len(res.ToolCalls) != 1 || res.ToolCalls[0].Function.Name != "github_api__github_repo_info" {
+		t.Fatalf("bad tool calls: %+v", res.ToolCalls)
 	}
 }
 

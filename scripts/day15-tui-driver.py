@@ -92,7 +92,7 @@ def main():
     messages = [
         ("model", args.model_id),
         ("line", "Спланируй и реши простую LeetCode-задачу Contains Duplicate на Go. Нужна функция ContainsDuplicate(nums []int) bool, решение O(n) через map/set, table tests для empty, single, duplicate positive, duplicate negative, no duplicate. Критерий готовности: пакет manual_scratch/day15_contains_duplicate проходит проверку проекта. Не проси меня вводить точную команду проверки; предложи план и критерии."),
-        ("key", "a"),
+        ("key", "enter"),
         ("line", "Готово к проверке: проверь результат."),
         ("line", "Проверь критерии и заверши задачу, если проверка подтверждает решение Contains Duplicate."),
     ]
@@ -124,8 +124,11 @@ def main():
                     drain(master, transcript, 1.0)
                     continue
                 if kind == "key":
-                    wait_for_screen(args.transcript, ["approval:"], args.timeout, master, transcript)
-                    os.write(master, message.encode("utf-8"))
+                    wait_for_screen(args.transcript, ["Decision", "Approve plan"], args.timeout, master, transcript)
+                    if message == "enter":
+                        os.write(master, b"\r")
+                    else:
+                        os.write(master, message.encode("utf-8"))
                 else:
                     send_line(master, message)
                 wait_for_turn(args.storage_dir, before, args.timeout, master, transcript)

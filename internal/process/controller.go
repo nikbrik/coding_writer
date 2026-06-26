@@ -38,6 +38,7 @@ type ProcessController struct {
 	PromptImprover     *PromptImprover
 	PlanningSwarm      *PlanningSwarm
 	AgentRunner        *AgentRunner
+	ToolRunner         ToolRunner
 }
 
 // ExchangeInput controls a single process-controlled exchange.
@@ -1503,12 +1504,74 @@ func (c *ProcessController) completePrimary(ctx context.Context, sessionID strin
 			Model:   run.Model,
 		}, nil
 	}
-	return c.Provider.Complete(ctx, providers.CompletionRequest{
-		Purpose:  providers.PurposeChat,
-		Model:    c.Model,
-		Messages: messages,
-		JSONMode: RequiresSchema(action),
-	})
+	return c.completePrimaryChat(ctx, sessionID, task, stage, action, messages, RequiresSchema(action))
+}
+
+func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, messages []app.ChatMessage, jsonMode bool) (providers.CompletionResponse, error) {
+	if c.ToolRunner == nil {
+		return c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:  providers.PurposeChat,
+			Model:    c.Model,
+			Messages: messages,
+			JSONMode: jsonMode,
+		})
+	}
+	tools, err := c.ToolRunner.Tools(ctx)
+	if err != nil {
+		_ = c.saveAudit(sessionID, task, stage, action, "mcp_tools_unavailable", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
+		return c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:  providers.PurposeChat,
+			Model:    c.Model,
+			Messages: messages,
+			JSONMode: jsonMode,
+		})
+	}
+	if len(tools) == 0 {
+		return c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:  providers.PurposeChat,
+			Model:    c.Model,
+			Messages: messages,
+			JSONMode: jsonMode,
+		})
+	}
+	parallel := false
+	working := append([]app.ChatMessage(nil), messages...)
+	for i := 0; i < maxPrimaryToolCalls; i++ {
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:           providers.PurposeChat,
+			Model:             c.Model,
+			Messages:          working,
+			JSONMode:          jsonMode,
+			Tools:             tools,
+			ToolChoice:        "auto",
+			ParallelToolCalls: &parallel,
+		})
+		if err != nil {
+			return res, err
+		}
+		if len(res.ToolCalls) == 0 {
+			return res, nil
+		}
+		assistant := res.Message
+		assistant.ToolCalls = append([]app.ChatToolCall(nil), res.ToolCalls...)
+		working = append(working, assistant)
+		for _, call := range res.ToolCalls {
+			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_call", nil, "", "", res.Model, auditReason(call.Function.Name))
+			toolMsg, err := c.ToolRunner.Run(ctx, call)
+			if err != nil {
+				return providers.CompletionResponse{}, err
+			}
+			working = append(working, toolMsg)
+			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_result", nil, "", "", res.Model, auditReason(call.Function.Name))
+		}
+		return c.Provider.Complete(ctx, providers.CompletionRequest{
+			Purpose:  providers.PurposeChat,
+			Model:    c.Model,
+			Messages: working,
+			JSONMode: jsonMode,
+		})
+	}
+	return providers.CompletionResponse{}, app.NewError(app.CategoryValidation, "mcp_tool_loop_limit", "MCP tool call limit reached", nil)
 }
 
 func currentPlanItem(task *app.TaskState) string {

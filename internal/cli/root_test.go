@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nikbrik/coding_writer/internal/app"
+	"github.com/nikbrik/coding_writer/internal/mcp"
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/providers"
@@ -227,6 +228,104 @@ func TestSlashHelpNewResumeAndPendingGuard(t *testing.T) {
 	}
 	if resumed.ActiveSessionID != "session_old" || resumed.ActiveTask == nil || resumed.ActiveTask.LastSessionID != "session_old" {
 		t.Fatalf("/resume did not switch session only: %+v", resumed)
+	}
+}
+
+func TestMCPSlashAddListAndRemoveServer(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	added, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp add github-api --command python3 --arg /tmp/server.py --allow-tool github_repo_info --auto-approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(added.Output, "mcp server registered: github-api") {
+		t.Fatalf("unexpected add output: %q", added.Output)
+	}
+	if len(rt.Config.MCPServers) != 1 || rt.Config.MCPServers[0].Name != "github-api" || len(rt.Config.MCPServers[0].Tools) != 1 {
+		t.Fatalf("server not persisted in runtime config: %+v", rt.Config.MCPServers)
+	}
+	if !rt.Config.MCPServers[0].Tools[0].AutoApprove {
+		t.Fatalf("auto approve not applied: %+v", rt.Config.MCPServers[0].Tools[0])
+	}
+
+	listed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mcp servers:", "github-api", "github_repo_info", "/mcp remove"} {
+		if !strings.Contains(listed.Output, want) {
+			t.Fatalf("list output missing %q:\n%s", want, listed.Output)
+		}
+	}
+
+	removed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp remove github-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(removed.Output, "mcp server removed: github-api") || len(rt.Config.MCPServers) != 0 {
+		t.Fatalf("remove failed: output=%q config=%+v", removed.Output, rt.Config.MCPServers)
+	}
+}
+
+func TestMCPRemoveCommandRemovesConfiguredServer(t *testing.T) {
+	storageDir := t.TempDir()
+	add := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var addOut bytes.Buffer
+	add.SetOut(&addOut)
+	add.SetErr(io.Discard)
+	add.SetArgs([]string{"mcp", "add", "github-api", "--command", "python3", "--arg", "/tmp/server.py", "--allow-tool", "github_repo_info", "--auto-approve"})
+	if err := add.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(addOut.String(), "mcp server registered: github-api") {
+		t.Fatalf("unexpected add output: %s", addOut.String())
+	}
+
+	remove := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var removeOut bytes.Buffer
+	remove.SetOut(&removeOut)
+	remove.SetErr(io.Discard)
+	remove.SetArgs([]string{"mcp", "remove", "github-api"})
+	if err := remove.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(removeOut.String(), "mcp server removed: github-api") {
+		t.Fatalf("unexpected remove output: %s", removeOut.String())
+	}
+
+	removeAgain := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	removeAgain.SetOut(io.Discard)
+	removeAgain.SetErr(io.Discard)
+	removeAgain.SetArgs([]string{"mcp", "remove", "github-api"})
+	if err := removeAgain.Execute(); app.AsError(err).Code != "mcp_server_missing" {
+		t.Fatalf("expected mcp_server_missing after remove, got %v", err)
+	}
+}
+
+func TestMCPCallTextPrintsRepositoryFields(t *testing.T) {
+	result := mcp.ToolResult{
+		Content: []mcp.ToolContent{{Type: "text", Text: `{"full_name":"nikbrik/coding_writer","description":null,"html_url":"https://github.com/nikbrik/coding_writer","default_branch":"main","language":"Go","stars":1,"forks":2,"open_issues":3,"visibility":"public","updated_at":"2026-06-21T14:48:46Z"}`}},
+	}
+	text := mcpCallText("github-api", "github_repo_info", result, parseMCPFirstTextJSON(result))
+	for _, want := range []string{
+		"status: ok",
+		"full_name: nikbrik/coding_writer",
+		"description: -",
+		"html_url: https://github.com/nikbrik/coding_writer",
+		"default_branch: main",
+		"language: Go",
+		"stars: 1",
+		"forks: 2",
+		"open_issues: 3",
+		"visibility: public",
+		"updated_at: 2026-06-21T14:48:46Z",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("mcp call text missing %q:\n%s", want, text)
+		}
 	}
 }
 

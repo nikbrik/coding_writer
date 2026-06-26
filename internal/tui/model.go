@@ -61,6 +61,29 @@ type slashCommandItem struct {
 	Description string
 }
 
+type decisionAction int
+
+const (
+	decisionApprovePlan decisionAction = iota
+	decisionRejectPlan
+	decisionReviewMemory
+	decisionSaveMemory
+	decisionDismissMemory
+)
+
+type decisionMenuItem struct {
+	Label  string
+	Detail string
+	Action decisionAction
+}
+
+type decisionMenuState struct {
+	Title    string
+	Detail   string
+	Optional bool
+	Items    []decisionMenuItem
+}
+
 type contextPickerState struct {
 	payload        PickerPayload
 	cursor         int
@@ -80,6 +103,7 @@ type Model struct {
 
 	input    textarea.Model
 	timeline viewport.Model
+	sidebar  viewport.Model
 	spinner  spinner.Model
 	active   Pane
 	busy     bool
@@ -100,6 +124,8 @@ type Model struct {
 	modelPicker         *modelPickerState
 	contextPicker       *contextPickerState
 	slashCursor         int
+	decisionCursor      int
+	dismissedProposalID string
 }
 
 type initialLoadedMsg struct {
@@ -151,9 +177,17 @@ type favoriteToggledMsg struct {
 
 func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) error {
 	m := NewModel(ctx, backend)
-	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen(), tea.WithMouseCellMotion()}
+	opts := []tea.ProgramOption{tea.WithInput(in), tea.WithOutput(out), tea.WithAltScreen()}
+	if tuiMouseEnabled() {
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
 	_, err := tea.NewProgram(m, opts...).Run()
 	return err
+}
+
+func tuiMouseEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("CODINGWRITER_TUI_MOUSE")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func NewModel(ctx context.Context, backend Backend) Model {
@@ -180,6 +214,7 @@ func NewModel(ctx context.Context, backend Backend) Model {
 		height:    40,
 		input:     ti,
 		timeline:  viewport.New(80, 20),
+		sidebar:   viewport.New(40, 20),
 		spinner:   sp,
 		active:    PaneTimeline,
 	}
@@ -193,6 +228,7 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	inputHandled := false
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		if msg.Width > 0 && msg.Height > 0 {
@@ -278,6 +314,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadCurrentState())
 		}
 	case memoryAppliedMsg:
+		m.busy = false
+		m.input.SetValue("")
+		m.input.Focus()
 		if msg.err != nil {
 			m.err = app.AsError(msg.err)
 			m.appendEvent("error", "", m.err.Code, m.err.Message, "error")
@@ -331,6 +370,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modelPicker.rebuild()
 		}
 	case tea.MouseMsg:
+		if m.contextPicker == nil && m.modelPicker == nil && isMouseWheel(msg) && m.mouseScrollsSidebar(msg) {
+			var cmd tea.Cmd
+			m.sidebar, cmd = m.sidebar.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			break
+		}
 		if m.contextPicker == nil && m.modelPicker == nil && isMouseWheel(msg) && m.mouseScrollsTimeline(msg) {
 			var cmd tea.Cmd
 			m.timeline, cmd = m.timeline.Update(msg)
@@ -363,6 +410,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			break
 		}
+		if m.decisionMenuActive() {
+			next, cmd, handled := m.updateDecisionMenu(msg)
+			m = next
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			if handled {
+				inputHandled = true
+				break
+			}
+		}
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Quit
@@ -377,21 +435,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				break
 			}
 		case "pgup", "ctrl+u":
+			if m.activeScrollsSidebar() {
+				m.sidebar.ViewUp()
+				break
+			}
 			if m.active == PaneTimeline {
 				m.timeline.ViewUp()
 				break
 			}
 		case "pgdown", "ctrl+d":
+			if m.activeScrollsSidebar() {
+				m.sidebar.ViewDown()
+				break
+			}
 			if m.active == PaneTimeline {
 				m.timeline.ViewDown()
 				break
 			}
 		case "home":
+			if m.input.Value() == "" && m.activeScrollsSidebar() {
+				m.sidebar.GotoTop()
+				break
+			}
 			if m.active == PaneTimeline && m.input.Value() == "" {
 				m.timeline.GotoTop()
 				break
 			}
 		case "end":
+			if m.input.Value() == "" && m.activeScrollsSidebar() {
+				m.sidebar.GotoBottom()
+				break
+			}
 			if m.active == PaneTimeline && m.input.Value() == "" {
 				m.timeline.GotoBottom()
 				break
@@ -404,13 +478,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			text := strings.TrimSpace(m.input.Value())
 			text = completeSlashCommand(text, m.slashCursor)
 			if text == "" {
-				if m.hasPendingPlan() {
-					m.busy = true
-					m.input.Blur()
-					cmds = append(cmds, m.approvePlan())
-				} else if m.hasPendingMemory() {
-					cmds = append(cmds, m.applyMemory(true))
-				} else if m.canContinueExecution() {
+				if m.canContinueExecution() {
 					m.busy = true
 					m.input.Blur()
 					m.appendEvent("system", stageOfTask(m.task), "execution continued", "running next approved step", "info")
@@ -444,22 +512,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				cmds = append(cmds, m.runExchange(text))
 			}
-		case "a", "A", "y", "Y", "ф", "Ф", "н", "Н":
-			if m.hasPendingPlan() {
-				m.busy = true
-				m.input.Blur()
-				cmds = append(cmds, m.approvePlan())
-			} else if m.hasPendingMemory() {
-				cmds = append(cmds, m.applyMemory(true))
-			}
-		case "r", "R", "n", "N", "к", "К", "т", "Т":
-			if m.hasPendingPlan() {
-				m.busy = true
-				m.input.Blur()
-				cmds = append(cmds, m.rejectPlan())
-			} else if m.hasPendingMemory() {
-				cmds = append(cmds, m.applyMemory(false))
-			}
 		case "p":
 			if m.task != nil && m.task.Status == app.TaskStatusPaused {
 				cmds = append(cmds, m.resumeTask())
@@ -469,7 +521,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	if !m.busy && m.modelPicker == nil && m.contextPicker == nil {
+	if !inputHandled && !m.busy && m.modelPicker == nil && m.contextPicker == nil {
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(msg)
 		cmds = append(cmds, cmd)
@@ -485,9 +537,19 @@ func (m Model) View() string {
 	}
 	header := m.headerView()
 	slashHelp := m.slashHelpView()
+	decisionHelp := m.decisionMenuView()
 	bodyModel := m
+	reservedHeight := 0
 	if slashHelp != "" {
-		bodyModel.timeline.Height = max(4, m.timeline.Height-lipgloss.Height(slashHelp))
+		reservedHeight += lipgloss.Height(slashHelp)
+	}
+	if decisionHelp != "" {
+		reservedHeight += lipgloss.Height(decisionHelp)
+	}
+	if reservedHeight > 0 {
+		bodyModel.timeline.Height = max(4, m.timeline.Height-reservedHeight)
+		bodyModel.sidebar.Height = bodyModel.timeline.Height
+		bodyModel.updateSidebarViewport()
 	}
 	body := bodyModel.bodyView()
 	footer := m.footerView()
@@ -495,15 +557,20 @@ func (m Model) View() string {
 	if m.modelPicker != nil {
 		body = m.modelPickerView()
 		slashHelp = ""
+		decisionHelp = ""
 		input = ""
 	} else if m.contextPicker != nil {
 		body = m.contextPickerView()
 		slashHelp = ""
+		decisionHelp = ""
 		input = ""
 	}
 	parts := []string{header, body}
 	if slashHelp != "" {
 		parts = append(parts, slashHelp)
+	}
+	if decisionHelp != "" {
+		parts = append(parts, decisionHelp)
 	}
 	parts = append(parts, footer, input)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -518,14 +585,27 @@ func (m *Model) resize() {
 	m.input.SetHeight(inputHeight)
 	m.timeline.Width = m.timelineWidth()
 	m.timeline.Height = bodyHeight
+	m.sidebar.Width = m.sidebarWidth()
+	m.sidebar.Height = bodyHeight
 	m.updateViewport()
 }
 
 func (m Model) timelineWidth() int {
 	if m.width >= 120 {
-		return max(20, m.width*60/100)
+		return max(20, m.wideLeftWidth())
 	}
 	return max(20, m.width-2)
+}
+
+func (m Model) sidebarWidth() int {
+	if m.width >= 120 {
+		return max(20, m.width-m.wideLeftWidth()-1)
+	}
+	return max(20, m.width-2)
+}
+
+func (m Model) wideLeftWidth() int {
+	return m.width * 60 / 100
 }
 
 func isMouseWheel(msg tea.MouseMsg) bool {
@@ -533,7 +613,18 @@ func isMouseWheel(msg tea.MouseMsg) bool {
 }
 
 func (m Model) mouseScrollsTimeline(msg tea.MouseMsg) bool {
+	if m.width >= 120 {
+		return msg.X < m.wideLeftWidth()
+	}
 	return m.active == PaneTimeline
+}
+
+func (m Model) mouseScrollsSidebar(msg tea.MouseMsg) bool {
+	return m.width >= 120 && msg.X > m.wideLeftWidth()
+}
+
+func (m Model) activeScrollsSidebar() bool {
+	return m.width >= 120 && m.active != PaneTimeline
 }
 
 func (m Model) inputHeight() int {
@@ -576,14 +667,18 @@ func (m Model) headerView() string {
 
 func (m Model) bodyView() string {
 	if m.width >= 120 {
-		leftW := m.width * 60 / 100
+		leftW := m.wideLeftWidth()
 		rightW := m.width - leftW - 1
 		leftText := m.timeline.View()
 		if strings.TrimSpace(leftText) == "" {
 			leftText = m.timelineFallbackView(leftW)
 		}
+		rightText := m.sidebar.View()
+		if strings.TrimSpace(rightText) == "" {
+			rightText = m.sidebarView(rightW)
+		}
 		left := lipgloss.NewStyle().Width(leftW).Height(m.timeline.Height).Render(fitHeight(leftText, m.timeline.Height))
-		right := lipgloss.NewStyle().Width(rightW).Height(m.timeline.Height).Render(fitHeight(m.sidebarView(rightW), m.timeline.Height))
+		right := lipgloss.NewStyle().Width(rightW).Height(m.sidebar.Height).Render(fitHeight(rightText, m.sidebar.Height))
 		return lipgloss.JoinHorizontal(lipgloss.Top, left, "│", right)
 	}
 	switch m.active {
@@ -649,18 +744,192 @@ func (m Model) footerView() string {
 		}
 		return styleHint().Render(trimWidth(line, m.width))
 	}
+	if menu, ok := m.decisionMenu(); ok && m.decisionMenuActive() {
+		line := "decision menu | ↑/↓ select | enter confirm"
+		if menu.Optional {
+			line += " | esc hide"
+		}
+		line += " | type to write"
+		return styleHint().Render(trimWidth(line, m.width))
+	}
 	pane := []string{"timeline", "plan", "evidence", "memory", "files"}[m.active]
 	approval := ""
 	if m.hasPendingPlan() {
-		approval = " | approval: a approve, r reject"
+		approval = " | decision pending"
 	} else if m.hasPendingMemory() {
-		approval = " | memory: a accept all, r reject all"
+		approval = " | optional memory pending"
 	}
-	line := fmt.Sprintf("tab pane=%s | wheel/pgup/pgdown scroll | home/end top/bottom | enter send | /exit quit | p pause/resume%s", pane, approval)
+	scroll := "pgup/pgdown scroll"
+	if tuiMouseEnabled() {
+		if m.width >= 120 {
+			scroll = "wheel left/right | " + scroll
+		} else {
+			scroll = "wheel/" + scroll
+		}
+	}
+	if m.activeScrollsSidebar() {
+		scroll += " right"
+	} else {
+		scroll += " timeline"
+	}
+	line := fmt.Sprintf("tab pane=%s | %s | home/end top/bottom | enter send | /exit quit | p pause/resume%s", pane, scroll, approval)
 	if m.err != nil && m.err.Hint != "" {
 		line += " | hint: " + m.err.Hint
 	}
 	return styleHint().Render(trimWidth(line, m.width))
+}
+
+func (m Model) decisionMenu() (decisionMenuState, bool) {
+	if m.hasPendingPlan() {
+		return decisionMenuState{
+			Title:  "Decision",
+			Detail: "Pending plan needs your confirmation.",
+			Items: []decisionMenuItem{
+				{Label: "Approve plan", Detail: "start execution", Action: decisionApprovePlan},
+				{Label: "Request changes", Detail: "keep planning", Action: decisionRejectPlan},
+			},
+		}, true
+	}
+	if m.hasPendingMemory() && !m.memoryProposalDismissed() {
+		return decisionMenuState{
+			Title:    "Optional memory proposal",
+			Detail:   "Choose what to do with suggested memory.",
+			Optional: true,
+			Items: []decisionMenuItem{
+				{Label: "Review details", Detail: "open memory pane", Action: decisionReviewMemory},
+				{Label: "Save memory", Detail: "accept all records", Action: decisionSaveMemory},
+				{Label: "Hide for now", Detail: "leave proposal unchanged", Action: decisionDismissMemory},
+			},
+		}, true
+	}
+	return decisionMenuState{}, false
+}
+
+func (m Model) decisionMenuActive() bool {
+	if m.busy || m.modelPicker != nil || m.contextPicker != nil || m.slashMenuActive() {
+		return false
+	}
+	if strings.TrimSpace(m.input.Value()) != "" {
+		return false
+	}
+	_, ok := m.decisionMenu()
+	return ok
+}
+
+func (m Model) decisionMenuView() string {
+	if !m.decisionMenuActive() {
+		return ""
+	}
+	menu, ok := m.decisionMenu()
+	if !ok || len(menu.Items) == 0 {
+		return ""
+	}
+	width := max(32, m.width-2)
+	cursor := clampIndex(m.decisionCursor, len(menu.Items))
+	lines := []string{section(menu.Title)}
+	if menu.Detail != "" {
+		lines = append(lines, menu.Detail)
+	}
+	for i, item := range menu.Items {
+		prefix := "  "
+		if i == cursor {
+			prefix = "› "
+		}
+		line := trimWidth(prefix+fmt.Sprintf("%-18s %s", item.Label, item.Detail), width-4)
+		if i == cursor {
+			line = styleSoftSelected().Render(line)
+		}
+		lines = append(lines, line)
+	}
+	hint := "↑/↓ select | Enter confirm"
+	if menu.Optional {
+		hint += " | Esc hide"
+	} else {
+		hint += " | type changes"
+	}
+	lines = append(lines, styleHint().Render(hint))
+	return boxed(m.width, lines)
+}
+
+func (m Model) updateDecisionMenu(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
+	menu, ok := m.decisionMenu()
+	if !ok || len(menu.Items) == 0 {
+		return m, nil, false
+	}
+	switch msg.String() {
+	case "up", "k":
+		m.moveDecisionCursor(-1)
+		return m, nil, true
+	case "down", "j":
+		m.moveDecisionCursor(1)
+		return m, nil, true
+	case "enter":
+		cursor := clampIndex(m.decisionCursor, len(menu.Items))
+		next, cmd := m.executeDecision(menu.Items[cursor].Action)
+		return next, cmd, true
+	case "esc":
+		if menu.Optional {
+			m.dismissMemoryProposal()
+		}
+		return m, nil, true
+	default:
+		return m, nil, false
+	}
+}
+
+func (m *Model) moveDecisionCursor(delta int) {
+	menu, ok := m.decisionMenu()
+	if !ok || len(menu.Items) == 0 {
+		m.decisionCursor = 0
+		return
+	}
+	count := len(menu.Items)
+	m.decisionCursor = (clampIndex(m.decisionCursor, count) + count + delta) % count
+}
+
+func (m Model) executeDecision(action decisionAction) (Model, tea.Cmd) {
+	switch action {
+	case decisionApprovePlan:
+		m.busy = true
+		m.input.Blur()
+		return m, m.approvePlan()
+	case decisionRejectPlan:
+		m.busy = true
+		m.input.Blur()
+		return m, m.rejectPlan()
+	case decisionReviewMemory:
+		m.active = PaneMemory
+		m.contextExpanded = true
+		return m, nil
+	case decisionSaveMemory:
+		m.busy = true
+		m.input.Blur()
+		return m, m.applyMemory(true)
+	case decisionDismissMemory:
+		m.dismissMemoryProposal()
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m *Model) dismissMemoryProposal() {
+	m.dismissedProposalID = m.memoryProposalKey()
+}
+
+func (m Model) memoryProposalDismissed() bool {
+	key := m.memoryProposalKey()
+	return key != "" && m.dismissedProposalID == key
+}
+
+func (m Model) memoryProposalKey() string {
+	if m.proposal != nil && strings.TrimSpace(m.proposal.ID) != "" {
+		return m.proposal.ID
+	}
+	if m.proposal != nil {
+		return fmt.Sprintf("latest:%d", len(m.proposal.Records))
+	}
+	return ""
 }
 
 func (m Model) slashHelpView() string {
@@ -880,6 +1149,11 @@ func slashCommandCatalog() []slashCommandItem {
 		{Command: "/profile create <id>", Description: "create profile"},
 		{Command: "/model", Description: "open model picker"},
 		{Command: "/model <id>", Description: "set active model"},
+		{Command: "/mcp", Description: "list configured MCP servers"},
+		{Command: "/mcp add <name>", Description: "register stdio MCP server"},
+		{Command: "/mcp remove <server>", Description: "remove MCP server"},
+		{Command: "/mcp tools <server>", Description: "list MCP tools"},
+		{Command: "/mcp call <server> <tool>", Description: "call MCP tool"},
 		{Command: "/memory <short|work|long>", Description: "show memory layer"},
 		{Command: "/memory propose", Description: "propose memory from latest exchange"},
 		{Command: "/memory apply", Description: "apply pending memory"},
@@ -899,9 +1173,6 @@ func (m Model) freshChatView(width int) string {
 		"old chat: /resume",
 		"task details: /task",
 	)
-	if m.task != nil && m.task.ID != "" {
-		lines = append(lines, "current task/work is preserved")
-	}
 	return boxed(width, lines)
 }
 
@@ -925,10 +1196,7 @@ func (m Model) nextAction() (string, string) {
 		return "Choose model.", "Type to filter, Enter to select."
 	}
 	if m.hasPendingPlan() {
-		return "Review pending plan.", "Press a to approve, r to reject."
-	}
-	if m.hasPendingMemory() {
-		return "Review memory proposal.", "Press a to accept all, r to reject all."
+		return "Review pending plan.", "Use the decision menu below, or type requested changes."
 	}
 	if m.task != nil && m.task.Status == app.TaskStatusPaused {
 		return "Task is paused.", "Press p to resume, or type a new task."
@@ -950,6 +1218,9 @@ func (m Model) nextAction() (string, string) {
 	}
 	if m.task != nil && m.task.Stage == app.StageDone {
 		return "Task is done.", "Type /new for a new chat or /task for saved tasks."
+	}
+	if m.hasPendingMemory() {
+		return "Optional memory proposal.", "Use the decision menu below to review, save, or hide it."
 	}
 	return "Type a coding task.", "Use /help or / for commands."
 }
@@ -1005,7 +1276,7 @@ func (m Model) planView(width int) string {
 		for i, item := range pp.Plan {
 			lines = append(lines, fmt.Sprintf("%d. %s", i+1, safe(item)))
 		}
-		lines = append(lines, "[a] approve  [r] reject")
+		lines = append(lines, "Decision menu: approve plan / request changes")
 	} else {
 		if m.task.Objective != "" {
 			lines = append(lines, "Objective: "+safe(m.task.Objective))
@@ -1061,7 +1332,7 @@ func (m Model) memoryView(width int) string {
 		lines = append(lines, safe(r.Content))
 	}
 	if pendingProposalRecords(*m.proposal) > 0 {
-		lines = append(lines, "[a] accept all  [r] reject all")
+		lines = append(lines, "optional: decision menu or /memory apply")
 	}
 	return boxed(width, lines)
 }
@@ -1082,23 +1353,21 @@ func (m Model) filesView(width int) string {
 func (m *Model) loadInitial() tea.Cmd {
 	return func() tea.Msg {
 		msg := initialLoadedMsg{mode: "startup"}
-		if task, ok, err := m.backend.CurrentTask(); err != nil {
-			msg.err = err
-		} else if ok {
-			msg.task = &task
-		}
 		return msg
 	}
 }
 
 func (m *Model) loadCurrentState() tea.Cmd {
 	sessionID := m.sessionID
+	includeTask := m.task != nil && m.task.ID != ""
 	return func() tea.Msg {
 		msg := initialLoadedMsg{mode: "refresh"}
-		if task, ok, err := m.backend.CurrentTask(); err != nil {
-			msg.err = err
-		} else if ok {
-			msg.task = &task
+		if includeTask {
+			if task, ok, err := m.backend.CurrentTask(); err != nil {
+				msg.err = err
+			} else if ok {
+				msg.task = &task
+			}
 		}
 		if proposal, ok, err := m.backend.LatestPendingProposal(m.ctx, sessionID); err == nil && ok {
 			msg.proposal = &proposal
@@ -1112,7 +1381,7 @@ func (m *Model) loadSessionContext(sessionID string) tea.Cmd {
 		msg := initialLoadedMsg{mode: "history"}
 		if task, ok, err := m.backend.CurrentTask(); err != nil {
 			msg.err = err
-		} else if ok {
+		} else if ok && strings.TrimSpace(task.LastSessionID) == strings.TrimSpace(sessionID) {
 			msg.task = &task
 		}
 		if audit, err := m.backend.LatestAudit(80); err == nil {
@@ -1300,6 +1569,7 @@ func (m *Model) applyResponse(resp ChatResponse) {
 	m.audit = resp.AuditEvents
 	m.warnings = append(m.warnings, resp.Warnings...)
 	m.appliedArtifacts = appendUnique(m.appliedArtifacts, resp.AppliedArtifacts...)
+	m.appendResponseMCPEvents(resp.AuditEvents)
 	m.appendResponseAuditSummary(resp.AuditEvents)
 	if resp.Transition != nil {
 		m.appendEvent("transition", resp.Transition.To, "transition", fmt.Sprintf("%s -> %s: %s", resp.Transition.From, resp.Transition.To, resp.Transition.Reason), "info")
@@ -1326,6 +1596,36 @@ func (m *Model) appendResponseAuditSummary(events []process.ProcessAuditEvent) {
 	m.appendEvent("audit", last.Stage, "audit summary", startupAuditSummary(events, last), auditSeverity(last))
 }
 
+func (m *Model) appendResponseMCPEvents(events []process.ProcessAuditEvent) {
+	for _, event := range events {
+		title, ok := mcpAuditTitle(event.Decision)
+		if !ok {
+			continue
+		}
+		summary := firstNonEmpty(event.Reason, strings.Join(event.ValidatorErrors, "; "), string(event.ActionKind))
+		m.events = append(m.events, timelineEvent{
+			At:       event.CreatedAt,
+			Kind:     "mcp",
+			Stage:    event.Stage,
+			Decision: event.Decision,
+			Title:    title,
+			Summary:  summary,
+			Severity: auditSeverity(event),
+		})
+	}
+}
+
+func mcpAuditTitle(decision string) (string, bool) {
+	switch decision {
+	case "mcp_tool_call":
+		return "MCP tool call", true
+	case "mcp_tool_result":
+		return "MCP tool result", true
+	default:
+		return "", false
+	}
+}
+
 func (m *Model) rebuildFromState() {
 	m.appendStartupState()
 	m.refreshEvidence()
@@ -1334,6 +1634,7 @@ func (m *Model) rebuildFromState() {
 func (m *Model) resetNewChatView() {
 	m.events = nil
 	m.audit = nil
+	m.task = nil
 	m.proposal = nil
 	m.evidence = nil
 	m.appliedArtifacts = nil
@@ -1555,6 +1856,7 @@ func (m *Model) updateViewport() {
 	m.debugLog("viewport width=%d height=%d lines=%d y=%d was_bottom=%t past_bottom=%t anchor_set=%t anchor_event=%d target=%d busy=%t",
 		m.timeline.Width, m.timeline.Height, len(lines), m.timeline.YOffset, wasAtBottom, m.timeline.PastBottom(), m.timelineAnchorSet, m.timelineAnchorEvent, targetOffset, m.busy)
 	m.input.Placeholder = placeholder(m.task)
+	m.updateSidebarViewport()
 }
 
 func (m Model) debugLog(format string, args ...any) {
@@ -1568,6 +1870,17 @@ func (m Model) debugLog(format string, args ...any) {
 	}
 	defer f.Close()
 	_, _ = fmt.Fprintf(f, time.Now().UTC().Format(time.RFC3339Nano)+" "+format+"\n", args...)
+}
+
+func (m *Model) updateSidebarViewport() {
+	if m.sidebar.Width <= 0 || m.sidebar.Height <= 0 {
+		return
+	}
+	content := m.sidebarView(m.sidebar.Width)
+	m.sidebar.SetContent(content)
+	if m.sidebar.PastBottom() {
+		m.sidebar.GotoBottom()
+	}
 }
 
 func (m *Model) anchorTimelineEvent(index int) {
@@ -1629,6 +1942,8 @@ func eventKindStyle(kind string) lipgloss.Style {
 		return style.Foreground(lipgloss.Color("110"))
 	case "audit":
 		return style.Foreground(lipgloss.Color("244"))
+	case "mcp":
+		return style.Foreground(lipgloss.Color("110"))
 	case "warning":
 		return style.Foreground(lipgloss.Color("214"))
 	case "error":
@@ -1674,7 +1989,7 @@ func eventDecisionStyle(decision string) lipgloss.Style {
 		return style.Foreground(lipgloss.Color("214"))
 	case "rejected", "agent_rejected", "transition_failed", "persistence_failed":
 		return style.Foreground(lipgloss.Color("209"))
-	case "provider_call", "agent_call", "semantic_output_call", "semantic_intent_call":
+	case "provider_call", "agent_call", "semantic_output_call", "semantic_intent_call", "mcp_tool_call", "mcp_tool_result":
 		return style.Foreground(lipgloss.Color("110"))
 	default:
 		return style.Foreground(lipgloss.Color("250"))
@@ -2320,7 +2635,7 @@ func placeholder(task *app.TaskState) string {
 		return "Type a task..."
 	}
 	if task.PendingPlanning != nil {
-		return "Approve plan or type changes..."
+		return "Use decision menu or type changes..."
 	}
 	switch task.Stage {
 	case app.StageExecution:

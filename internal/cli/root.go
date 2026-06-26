@@ -23,6 +23,7 @@ import (
 
 	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/invariants"
+	"github.com/nikbrik/coding_writer/internal/mcp"
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/profiles"
@@ -165,7 +166,7 @@ func newRootCommandForInvocation(opts *globalOptions, invocation string) *cobra.
 		cmd.Flags().BoolVar(&topChat.RenderPrompt, "render-prompt", false, "render prompt without provider call")
 		cmd.Flags().StringVar(&topChat.Verify, "verify", "", "run verification command and pass trusted evidence to validation")
 	}
-	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), invariantsCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts))
+	cmd.AddCommand(initCommand(opts), chatCommand(opts), profilesCommand(opts), memoryCommand(opts), invariantsCommand(opts), taskCommand(opts), processCommand(opts), privacyCommand(opts), mcpCommand(opts))
 	return cmd
 }
 
@@ -349,6 +350,11 @@ func (rt *runtime) attachProviderToProcess() *process.ProcessController {
 	provider := rt.ensureProvider()
 	pc.Provider = provider
 	pc.Classifier = rt.ensureClassifier()
+	if len(rt.Config.MCPServers) > 0 {
+		pc.ToolRunner = newAppMCPToolRunner(rt.Config.MCPServers)
+	} else {
+		pc.ToolRunner = nil
+	}
 	if semanticValidationEnabled(provider) {
 		pc.PromptImprover = &process.PromptImprover{Provider: provider, Model: rt.Config.ActiveModel}
 		pc.AgentRunner = &process.AgentRunner{Provider: provider, Model: rt.Config.ActiveModel, Factory: process.NewStagePromptFactory(rt.PolicyRegistry)}
@@ -2217,6 +2223,575 @@ func privacyPurgeCommand(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+func mcpCommand(opts *globalOptions) *cobra.Command {
+	cmd := &cobra.Command{Use: "mcp", Short: "Inspect and call configured MCP servers"}
+	cmd.AddCommand(mcpAddCommand(opts), mcpRemoveCommand(opts), mcpToolsCommand(opts), mcpCallCommand(opts))
+	return cmd
+}
+
+func mcpAddCommand(opts *globalOptions) *cobra.Command {
+	var command, protocolVersion string
+	var args, allowTools, envKeys []string
+	var autoApprove, readOnly bool
+	cmd := &cobra.Command{
+		Use:   "add <name>",
+		Short: "Register a stdio MCP server",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			name := strings.TrimSpace(argv[0])
+			if command == "" {
+				return app.NewError(app.CategoryCLI, "missing_mcp_command", "--command is required", nil)
+			}
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			tools := make([]app.MCPToolConfig, 0, len(allowTools))
+			for _, toolName := range allowTools {
+				toolName = strings.TrimSpace(toolName)
+				if toolName == "" {
+					return app.NewError(app.CategoryCLI, "invalid_mcp_tool", "tool names must be non-empty", nil)
+				}
+				tools = append(tools, app.MCPToolConfig{Name: toolName, AutoApprove: autoApprove, ReadOnly: readOnly})
+			}
+			server := app.MCPServerConfig{
+				Name:            name,
+				Command:         command,
+				Args:            append([]string(nil), args...),
+				EnvKeys:         append([]string(nil), envKeys...),
+				ProtocolVersion: protocolVersion,
+				Enabled:         true,
+				Tools:           tools,
+			}
+			cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+				replaced := false
+				for i, existing := range cfg.MCPServers {
+					if existing.Name == name {
+						cfg.MCPServers[i] = server
+						replaced = true
+						break
+					}
+				}
+				if !replaced {
+					cfg.MCPServers = append(cfg.MCPServers, server)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			rt.Config = cfg
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "server": server}, fmt.Sprintf("mcp server registered: %s\n", name))
+		},
+	}
+	cmd.Flags().StringVar(&command, "command", "", "server command")
+	cmd.Flags().StringArrayVar(&args, "arg", nil, "server argument, repeatable")
+	cmd.Flags().StringArrayVar(&allowTools, "allow-tool", nil, "allowlisted tool name, repeatable")
+	cmd.Flags().StringArrayVar(&envKeys, "env-key", nil, "environment variable name to pass through, repeatable")
+	cmd.Flags().StringVar(&protocolVersion, "protocol-version", mcp.DefaultProtocolVersion, "MCP protocol version")
+	cmd.Flags().BoolVar(&autoApprove, "auto-approve", false, "auto-approve allowlisted tools")
+	cmd.Flags().BoolVar(&readOnly, "read-only", true, "mark allowlisted tools as read-only")
+	return cmd
+}
+
+func mcpRemoveCommand(opts *globalOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a configured MCP server",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			name := strings.TrimSpace(argv[0])
+			removed := false
+			cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+				next := cfg.MCPServers[:0]
+				for _, server := range cfg.MCPServers {
+					if server.Name == name {
+						removed = true
+						continue
+					}
+					next = append(next, server)
+				}
+				cfg.MCPServers = next
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			if !removed {
+				return app.NewError(app.CategoryValidation, "mcp_server_missing", "MCP server is not configured", nil)
+			}
+			rt.Config = cfg
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, map[string]any{"ok": true, "removed": name}, fmt.Sprintf("mcp server removed: %s\n", name))
+		},
+	}
+}
+
+func mcpToolsCommand(opts *globalOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tools <server>",
+		Short: "List MCP tools from a configured server",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			server, err := configuredMCPServer(rt.Config, args[0])
+			if err != nil {
+				return err
+			}
+			client, err := startConfiguredMCP(cmd.Context(), server)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+			init, err := client.Initialize(cmd.Context())
+			if err != nil {
+				return err
+			}
+			tools, err := client.ListTools(cmd.Context())
+			if err != nil {
+				return err
+			}
+			out := map[string]any{"ok": true, "server": server.Name, "initialize": init, "tools": tools}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, out, mcpToolsText(server.Name, tools))
+		},
+	}
+}
+
+func mcpCallCommand(opts *globalOptions) *cobra.Command {
+	var argItems []string
+	cmd := &cobra.Command{
+		Use:   "call <server> <tool>",
+		Short: "Call an MCP tool on a configured server",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			server, err := configuredMCPServer(rt.Config, args[0])
+			if err != nil {
+				return err
+			}
+			toolName := args[1]
+			values, err := parseKeyValues(argItems)
+			if err != nil {
+				return err
+			}
+			toolArgs := make(map[string]any, len(values))
+			for key, value := range values {
+				toolArgs[key] = value
+			}
+			client, err := startConfiguredMCP(cmd.Context(), server)
+			if err != nil {
+				return err
+			}
+			defer client.Close()
+			if _, err := client.Initialize(cmd.Context()); err != nil {
+				return err
+			}
+			result, err := client.CallTool(cmd.Context(), toolName, toolArgs)
+			if err != nil {
+				return err
+			}
+			parsed := parseMCPFirstTextJSON(result)
+			out := map[string]any{"ok": true, "server": server.Name, "tool": toolName, "result": result, "parsed": parsed}
+			return writeOutput(cmd.OutOrStdout(), opts.JSON, out, mcpCallText(server.Name, toolName, result, parsed))
+		},
+	}
+	cmd.Flags().StringArrayVar(&argItems, "arg", nil, "tool argument key=value, repeatable")
+	return cmd
+}
+
+func configuredMCPServer(cfg app.AppConfig, name string) (app.MCPServerConfig, error) {
+	name = strings.TrimSpace(name)
+	for _, server := range cfg.MCPServers {
+		if server.Name == name {
+			if !server.Enabled {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryValidation, "mcp_server_disabled", "MCP server is disabled", nil)
+			}
+			return server, nil
+		}
+	}
+	return app.MCPServerConfig{}, app.ErrorWithHint(app.CategoryValidation, "mcp_server_missing", "MCP server is not configured", "run cw mcp add "+name+" --command <cmd>", nil)
+}
+
+func startConfiguredMCP(ctx context.Context, server app.MCPServerConfig) (*mcp.Client, error) {
+	env := make([]string, 0, len(server.EnvKeys))
+	for _, key := range server.EnvKeys {
+		key = strings.TrimSpace(key)
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			return nil, app.NewError(app.CategoryValidation, "invalid_mcp_env_key", "MCP env keys must be names, not values", nil)
+		}
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	return mcp.Start(ctx, mcp.ServerConfig{
+		Name:            server.Name,
+		Command:         server.Command,
+		Args:            append([]string(nil), server.Args...),
+		Env:             env,
+		ProtocolVersion: server.ProtocolVersion,
+	})
+}
+
+func parseMCPFirstTextJSON(result mcp.ToolResult) map[string]any {
+	if len(result.Content) == 0 || result.Content[0].Type != "text" || strings.TrimSpace(result.Content[0].Text) == "" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(result.Content[0].Text), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func mcpToolsText(server string, tools []mcp.Tool) string {
+	var b strings.Builder
+	b.WriteString("mcp server: ")
+	b.WriteString(server)
+	b.WriteByte('\n')
+	if len(tools) == 0 {
+		b.WriteString("tools: none\n")
+		return b.String()
+	}
+	b.WriteString("tools:\n")
+	for _, tool := range tools {
+		b.WriteString("  ")
+		b.WriteString(tool.Name)
+		if tool.Description != "" {
+			b.WriteString(" - ")
+			b.WriteString(safeTerminalText(tool.Description))
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func mcpCallText(server, tool string, result mcp.ToolResult, parsed map[string]any) string {
+	var b strings.Builder
+	b.WriteString("mcp call: ")
+	b.WriteString(server)
+	b.WriteString(" ")
+	b.WriteString(tool)
+	b.WriteByte('\n')
+	if result.IsError {
+		b.WriteString("status: error\n")
+	} else {
+		b.WriteString("status: ok\n")
+	}
+	if len(parsed) > 0 {
+		known := false
+		for _, key := range []string{"full_name", "description", "html_url", "default_branch", "language", "stars", "forks", "open_issues", "visibility", "updated_at"} {
+			value, ok := parsed[key]
+			if !ok {
+				continue
+			}
+			known = true
+			b.WriteString(key)
+			b.WriteString(": ")
+			b.WriteString(safeTerminalText(mcpDisplayValue(value)))
+			b.WriteByte('\n')
+		}
+		if status, ok := parsed["status"]; ok {
+			known = true
+			b.WriteString("error_status: ")
+			b.WriteString(fmt.Sprint(status))
+			b.WriteByte('\n')
+		}
+		if message, _ := parsed["error"].(string); message != "" {
+			known = true
+			b.WriteString("error: ")
+			b.WriteString(safeTerminalText(message))
+			b.WriteByte('\n')
+		}
+		if !known {
+			if data, err := json.Marshal(parsed); err == nil {
+				b.WriteString(safeTerminalText(string(data)))
+				b.WriteByte('\n')
+			}
+		}
+		return b.String()
+	}
+	if len(result.Content) > 0 && strings.TrimSpace(result.Content[0].Text) != "" {
+		b.WriteString(safeTerminalText(result.Content[0].Text))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func mcpDisplayValue(value any) string {
+	if value == nil {
+		return "-"
+	}
+	return fmt.Sprint(value)
+}
+
+func handleMCPSlashResult(ctx context.Context, rt *runtime, parts []string) (slashContextResult, error) {
+	if len(parts) == 1 || parts[1] == "list" {
+		return slashContextResult{Output: mcpServersText(rt.Config.MCPServers)}, nil
+	}
+	switch parts[1] {
+	case "add":
+		server, err := parseMCPSlashAdd(parts[2:])
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			replaced := false
+			for i, existing := range cfg.MCPServers {
+				if existing.Name == server.Name {
+					cfg.MCPServers[i] = server
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				cfg.MCPServers = append(cfg.MCPServers, server)
+			}
+			return nil
+		})
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		rt.Config = cfg
+		return slashContextResult{Output: fmt.Sprintf("mcp server registered: %s", server.Name)}, nil
+	case "remove", "rm":
+		if len(parts) != 3 || strings.TrimSpace(parts[2]) == "" {
+			return slashContextResult{}, app.NewError(app.CategoryCLI, "missing_mcp_server_name", "usage: /mcp remove <server>", nil)
+		}
+		name := strings.TrimSpace(parts[2])
+		removed := false
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			next := cfg.MCPServers[:0]
+			for _, server := range cfg.MCPServers {
+				if server.Name == name {
+					removed = true
+					continue
+				}
+				next = append(next, server)
+			}
+			cfg.MCPServers = next
+			return nil
+		})
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		if !removed {
+			return slashContextResult{}, app.NewError(app.CategoryValidation, "mcp_server_missing", "MCP server is not configured", nil)
+		}
+		rt.Config = cfg
+		return slashContextResult{Output: fmt.Sprintf("mcp server removed: %s", name)}, nil
+	case "tools":
+		mcpCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		serverName := ""
+		if len(parts) > 2 {
+			serverName = parts[2]
+		}
+		server, err := configuredMCPServerForSlash(rt.Config, serverName)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		client, err := startConfiguredMCP(mcpCtx, server)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		defer client.Close()
+		if _, err := client.Initialize(mcpCtx); err != nil {
+			return slashContextResult{}, err
+		}
+		tools, err := client.ListTools(mcpCtx)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{Output: strings.TrimSpace(mcpToolsText(server.Name, tools))}, nil
+	case "call":
+		mcpCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		server, toolName, argItems, err := parseMCPSlashCall(rt.Config, parts[2:])
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		values, err := parseMCPSlashToolArgs(argItems)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		toolArgs := make(map[string]any, len(values))
+		for key, value := range values {
+			toolArgs[key] = value
+		}
+		client, err := startConfiguredMCP(mcpCtx, server)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		defer client.Close()
+		if _, err := client.Initialize(mcpCtx); err != nil {
+			return slashContextResult{}, err
+		}
+		result, err := client.CallTool(mcpCtx, toolName, toolArgs)
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{Output: strings.TrimSpace(mcpCallText(server.Name, toolName, result, parseMCPFirstTextJSON(result)))}, nil
+	default:
+		return slashContextResult{}, app.ErrorWithHint(app.CategoryCLI, "unknown_mcp_command", "unknown MCP slash command", "usage: /mcp | /mcp add ... | /mcp remove <server> | /mcp tools [server] | /mcp call <server> <tool> key=value", nil)
+	}
+}
+
+func parseMCPSlashAdd(args []string) (app.MCPServerConfig, error) {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_server_name", "MCP server name is required", nil)
+	}
+	server := app.MCPServerConfig{Name: strings.TrimSpace(args[0]), ProtocolVersion: mcp.DefaultProtocolVersion, Enabled: true}
+	readOnly := true
+	autoApprove := false
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--command":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_command", "--command value is required", nil)
+			}
+			server.Command = args[i]
+		case "--arg":
+			i++
+			if i >= len(args) {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_arg", "--arg value is required", nil)
+			}
+			server.Args = append(server.Args, args[i])
+		case "--allow-tool":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_tool", "--allow-tool value is required", nil)
+			}
+			server.Tools = append(server.Tools, app.MCPToolConfig{Name: args[i], AutoApprove: autoApprove, ReadOnly: readOnly})
+		case "--env-key":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_env_key", "--env-key value is required", nil)
+			}
+			server.EnvKeys = append(server.EnvKeys, args[i])
+		case "--protocol-version":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_protocol_version", "--protocol-version value is required", nil)
+			}
+			server.ProtocolVersion = args[i]
+		case "--auto-approve":
+			autoApprove = true
+			for i := range server.Tools {
+				server.Tools[i].AutoApprove = true
+			}
+		case "--read-only":
+			readOnly = true
+			for i := range server.Tools {
+				server.Tools[i].ReadOnly = true
+			}
+		default:
+			return app.MCPServerConfig{}, app.ErrorWithHint(app.CategoryCLI, "invalid_mcp_add_arg", "unknown /mcp add argument", "usage: /mcp add <name> --command <cmd> [--arg <arg>] [--allow-tool <name>] [--auto-approve]", nil)
+		}
+	}
+	if server.Name == "" {
+		return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_server_name", "MCP server name is required", nil)
+	}
+	if strings.TrimSpace(server.Command) == "" {
+		return app.MCPServerConfig{}, app.NewError(app.CategoryCLI, "missing_mcp_command", "--command is required", nil)
+	}
+	return server, nil
+}
+
+func configuredMCPServerForSlash(cfg app.AppConfig, name string) (app.MCPServerConfig, error) {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		return configuredMCPServer(cfg, name)
+	}
+	enabled := make([]app.MCPServerConfig, 0, len(cfg.MCPServers))
+	for _, server := range cfg.MCPServers {
+		if server.Enabled {
+			enabled = append(enabled, server)
+		}
+	}
+	if len(enabled) == 1 {
+		return enabled[0], nil
+	}
+	if len(enabled) == 0 {
+		return app.MCPServerConfig{}, app.ErrorWithHint(app.CategoryValidation, "mcp_server_missing", "MCP server is not configured", "usage: /mcp add <name> --command <cmd>", nil)
+	}
+	return app.MCPServerConfig{}, app.ErrorWithHint(app.CategoryCLI, "mcp_server_required", "MCP server name is required", "usage: /mcp tools <server>", nil)
+}
+
+func parseMCPSlashCall(cfg app.AppConfig, args []string) (app.MCPServerConfig, string, []string, error) {
+	if len(args) < 2 {
+		return app.MCPServerConfig{}, "", nil, app.NewError(app.CategoryCLI, "missing_mcp_call_args", "usage: /mcp call <server> <tool> key=value", nil)
+	}
+	server, err := configuredMCPServer(cfg, args[0])
+	if err == nil {
+		return server, args[1], args[2:], nil
+	}
+	if len(cfg.MCPServers) == 1 {
+		server, defaultErr := configuredMCPServerForSlash(cfg, "")
+		if defaultErr != nil {
+			return app.MCPServerConfig{}, "", nil, defaultErr
+		}
+		return server, args[0], args[1:], nil
+	}
+	return app.MCPServerConfig{}, "", nil, err
+}
+
+func parseMCPSlashToolArgs(items []string) (map[string]string, error) {
+	argItems := make([]string, 0, len(items))
+	for i := 0; i < len(items); i++ {
+		if items[i] == "--arg" {
+			i++
+			if i >= len(items) {
+				return nil, app.NewError(app.CategoryCLI, "missing_mcp_arg", "--arg value is required", nil)
+			}
+			argItems = append(argItems, items[i])
+			continue
+		}
+		argItems = append(argItems, items[i])
+	}
+	return parseKeyValues(argItems)
+}
+
+func mcpServersText(servers []app.MCPServerConfig) string {
+	if len(servers) == 0 {
+		return "mcp servers: none\nusage: /mcp add <name> --command <cmd> [--arg <arg>] [--allow-tool <name>] [--auto-approve]"
+	}
+	var b strings.Builder
+	b.WriteString("mcp servers:\n")
+	for _, server := range servers {
+		status := "disabled"
+		if server.Enabled {
+			status = "enabled"
+		}
+		b.WriteString(fmt.Sprintf("  %s  %s  command=%s", server.Name, status, server.Command))
+		if len(server.Args) > 0 {
+			b.WriteString(" args=")
+			b.WriteString(strings.Join(server.Args, " "))
+		}
+		b.WriteByte('\n')
+		if len(server.Tools) > 0 {
+			toolNames := make([]string, 0, len(server.Tools))
+			for _, tool := range server.Tools {
+				toolNames = append(toolNames, tool.Name)
+			}
+			b.WriteString("      allowed tools: ")
+			b.WriteString(strings.Join(toolNames, ", "))
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("usage: /mcp tools [server] | /mcp call <server> <tool> key=value | /mcp remove <server>")
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int, error) {
 	if !purgeAudit && !purgeTranscripts {
 		return 0, app.NewError(app.CategoryCLI, "missing_purge_target", "choose --audit and/or --transcripts", nil)
@@ -2368,6 +2943,8 @@ func handleSlashResult(ctx context.Context, diag io.Writer, rt *runtime, session
 			return slashContextResult{Output: blocked, PendingBlocked: blocked}, nil
 		}
 		return handleProfileSlashResult(rt, parts)
+	case "/mcp":
+		return handleMCPSlashResult(ctx, rt, parts)
 	default:
 		var out bytes.Buffer
 		done, err := handleSlashLegacy(ctx, &out, diag, rt, sessionID, line)
@@ -2524,6 +3101,12 @@ Profile/long:
   /profile                     list profiles
   /profile <id>                switch profile / long context
   /profile create <id>         create profile with safe defaults
+MCP:
+  /mcp                         list configured MCP servers
+  /mcp add <name> --command <cmd> [--arg <arg>] [--allow-tool <name>] [--auto-approve]
+  /mcp remove <server>         remove configured MCP server
+  /mcp tools [server]          list tools from configured server
+  /mcp call <server> <tool> key=value ...
 Utility:
   /model <id>                  set active model
   /memory <short|work|long>    list memory layer

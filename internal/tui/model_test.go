@@ -325,6 +325,34 @@ func TestExchangeCompactsAuditAndEndsWithNextAction(t *testing.T) {
 	}
 }
 
+func TestExchangeShowsMCPToolEvents(t *testing.T) {
+	fake := &fakeBackend{
+		responses: []ChatResponse{{
+			OK:     true,
+			Answer: "Repository summary ready.",
+			AuditEvents: []process.ProcessAuditEvent{
+				{Stage: app.StageExecution, Decision: "provider_call"},
+				{Stage: app.StageExecution, Decision: "mcp_tool_call", Reason: "github_api__github_repo_info"},
+				{Stage: app.StageExecution, Decision: "mcp_tool_result", Reason: "github_api__github_repo_info"},
+				{Stage: app.StageExecution, Decision: "accepted"},
+			},
+		}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.input.SetValue("use github repo tool")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	next, _ = m.Update(exchangeFinishedFromCmd(t, cmd))
+	m = next.(Model)
+
+	view := m.View()
+	for _, want := range []string{"MCP tool call", "MCP tool result", "github_api__github_repo_info", "Repository summary ready."} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("timeline missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestSummarizeAnswerHidesStructuredControlFields(t *testing.T) {
 	answerBytes, err := json.Marshal(map[string]any{
 		"stage":        "execution",
@@ -349,54 +377,154 @@ func TestSummarizeAnswerHidesStructuredControlFields(t *testing.T) {
 	}
 }
 
-func TestMemoryShortcutAppliesPendingProposal(t *testing.T) {
+func TestMemoryProposalDoesNotHijackApprovalShortcut(t *testing.T) {
 	proposal := app.MemoryProposal{ID: "proposal_1", Records: []app.ProposedMemoryRecord{{ID: "rec_1", Status: app.ProposalPending, Layer: app.ProposedLayerWork, Content: "remember task"}}}
 	fake := &fakeBackend{proposal: &proposal}
 	m := NewModel(context.Background(), fake)
 	m.proposal = &proposal
-	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	m = next.(Model)
-	if cmd == nil {
-		t.Fatal("expected memory apply command")
+	view := m.View()
+	for _, want := range []string{"Optional memory proposal", "Review details", "Save memory", "Hide for now"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("memory decision menu missing %q:\n%s", want, view)
+		}
 	}
-	runTeaCommand(cmd)
-	if len(fake.applied) != 1 || !fake.applied[0].AcceptAll {
-		t.Fatalf("memory apply not called with accept all: %#v", fake.applied)
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = next.(Model)
+	if len(fake.applied) != 0 {
+		t.Fatalf("memory apply should require explicit decision, got %#v", fake.applied)
+	}
+	if strings.TrimSpace(m.input.Value()) != "a" {
+		t.Fatalf("plain key should go to input, got %q", m.input.Value())
 	}
 }
 
-func TestPlanningApprovalShortcuts(t *testing.T) {
-	for _, key := range []tea.KeyMsg{
-		{Type: tea.KeyRunes, Runes: []rune("a")},
-		{Type: tea.KeyRunes, Runes: []rune("ф")},
-		{Type: tea.KeyEnter},
-	} {
-		task := app.TaskState{
-			ID:              "task_plan",
-			Stage:           app.StagePlanning,
-			ExpectedAction:  app.ExpectedUserConfirmation,
-			Status:          app.TaskStatusActive,
-			PendingPlanning: &app.PlanningProposalState{ID: "plan_1", Summary: "plan", Plan: []string{"step"}},
+func TestPlanningDecisionMenuApprovesDefault(t *testing.T) {
+	task := pendingPlanTask()
+	fake := &fakeBackend{
+		task: &task,
+		responses: []ChatResponse{{
+			OK:     true,
+			Answer: "approved",
+			Task:   &task,
+		}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.task = &task
+	view := m.View()
+	for _, want := range []string{"Decision", "Pending plan needs your confirmation.", "Approve plan", "Request changes"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("planning decision menu missing %q:\n%s", want, view)
 		}
-		fake := &fakeBackend{
-			task: &task,
-			responses: []ChatResponse{{
-				OK:     true,
-				Answer: "approved",
-				Task:   &task,
-			}},
-		}
-		m := NewModel(context.Background(), fake)
-		m.task = &task
-		next, cmd := m.Update(key)
-		m = next.(Model)
-		if !m.busy || cmd == nil {
-			t.Fatalf("approval key %q did not start approval", key.String())
-		}
-		msg := exchangeFinishedFromCmd(t, cmd)
-		if msg.err != nil {
-			t.Fatalf("approval command failed: %v", msg.err)
-		}
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("enter on default decision should start approval")
+	}
+	msg := exchangeFinishedFromCmd(t, cmd)
+	if msg.err != nil {
+		t.Fatalf("approval command failed: %v", msg.err)
+	}
+	if msg.input != "approve planning" {
+		t.Fatalf("wrong decision command input: %q", msg.input)
+	}
+}
+
+func TestPlanningDecisionMenuRejectsSelectedItem(t *testing.T) {
+	task := pendingPlanTask()
+	fake := &fakeBackend{
+		task: &task,
+		responses: []ChatResponse{{
+			OK:     true,
+			Answer: "rejected",
+			Task:   &task,
+		}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.task = &task
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	if m.decisionCursor != 1 {
+		t.Fatalf("down should select reject item, cursor=%d", m.decisionCursor)
+	}
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("enter on selected decision should start rejection")
+	}
+	msg := exchangeFinishedFromCmd(t, cmd)
+	if msg.input != "reject planning" {
+		t.Fatalf("wrong decision command input: %q", msg.input)
+	}
+}
+
+func TestTypingHidesPlanningDecisionMenuForChanges(t *testing.T) {
+	task := pendingPlanTask()
+	m := NewModel(context.Background(), &fakeBackend{task: &task})
+	m.task = &task
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("нужны правки")})
+	m = next.(Model)
+	if m.busy {
+		t.Fatal("typing changes should not submit decision")
+	}
+	view := m.View()
+	if strings.Contains(view, "Pending plan needs your confirmation.") {
+		t.Fatalf("decision menu should hide while user types changes:\n%s", view)
+	}
+	if !strings.Contains(m.input.Value(), "нужны правки") {
+		t.Fatalf("typed changes missing from input: %q", m.input.Value())
+	}
+}
+
+func TestMemoryDecisionMenuReviewsSavesAndHides(t *testing.T) {
+	proposal := app.MemoryProposal{ID: "proposal_1", Records: []app.ProposedMemoryRecord{{ID: "rec_1", Status: app.ProposalPending, Layer: app.ProposedLayerWork, Content: "remember task"}}}
+	m := NewModel(context.Background(), &fakeBackend{proposal: &proposal})
+	m.proposal = &proposal
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.active != PaneMemory {
+		t.Fatalf("default memory decision should review details, pane=%v cmd=%v", m.active, cmd)
+	}
+
+	fake := &fakeBackend{proposal: &proposal}
+	m = NewModel(context.Background(), fake)
+	m.proposal = &proposal
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(Model)
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("save memory decision should call backend")
+	}
+	next, _ = m.Update(messageFromCmd[memoryAppliedMsg](t, cmd))
+	m = next.(Model)
+	if m.busy {
+		t.Fatal("memory apply completion should clear busy state")
+	}
+	if len(fake.applied) != 1 || !fake.applied[0].AcceptAll {
+		t.Fatalf("memory save did not accept all: %#v", fake.applied)
+	}
+
+	m = NewModel(context.Background(), &fakeBackend{proposal: &proposal})
+	m.proposal = &proposal
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(Model)
+	if m.hasPendingMemory() && m.decisionMenuActive() {
+		t.Fatalf("esc should hide optional memory decision menu:\n%s", m.View())
+	}
+}
+
+func pendingPlanTask() app.TaskState {
+	return app.TaskState{
+		ID:              "task_plan",
+		Stage:           app.StagePlanning,
+		ExpectedAction:  app.ExpectedUserConfirmation,
+		Status:          app.TaskStatusActive,
+		PendingPlanning: &app.PlanningProposalState{ID: "plan_1", Summary: "plan", Plan: []string{"step"}},
 	}
 }
 
@@ -794,21 +922,82 @@ func TestTimelineMouseWheelScrolls(t *testing.T) {
 	}
 }
 
-func TestTimelineMouseWheelScrollsFromRightPane(t *testing.T) {
+func TestWideRightPaneMouseWheelScrollsSidebarOnly(t *testing.T) {
 	m := NewModel(context.Background(), &fakeBackend{})
 	m.width = 140
 	m.height = 10
+	m.contextExpanded = true
+	m.task = longSidebarTask()
 	m.resize()
 	for i := 0; i < 30; i++ {
 		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), strings.Repeat("details ", 3), "info")
 	}
 	m.updateViewport()
-	before := m.timeline.YOffset
-	next, _ := m.Update(tea.MouseMsg{X: 120, Y: 3, Type: tea.MouseWheelUp, Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
+	timelineBefore := m.timeline.YOffset
+	sidebarBefore := m.sidebar.YOffset
+	next, _ := m.Update(tea.MouseMsg{X: 120, Y: 3, Type: tea.MouseWheelDown, Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	m = next.(Model)
-	if m.timeline.YOffset >= before {
-		t.Fatalf("right-pane wheel did not scroll timeline: before=%d after=%d", before, m.timeline.YOffset)
+	if m.sidebar.YOffset <= sidebarBefore {
+		t.Fatalf("right-pane wheel did not scroll sidebar: before=%d after=%d", sidebarBefore, m.sidebar.YOffset)
 	}
+	if m.timeline.YOffset != timelineBefore {
+		t.Fatalf("right-pane wheel should not scroll timeline: before=%d after=%d", timelineBefore, m.timeline.YOffset)
+	}
+}
+
+func TestWideSidebarKeyboardScrollsWhenInfoPaneActive(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 140
+	m.height = 10
+	m.contextExpanded = true
+	m.task = longSidebarTask()
+	m.appliedArtifacts = []string{"RIGHT_BOTTOM_MARKER"}
+	m.active = PanePlan
+	m.resize()
+	for i := 0; i < 30; i++ {
+		m.appendEvent("audit", app.StagePlanning, fmt.Sprintf("event-%02d", i), strings.Repeat("details ", 3), "info")
+	}
+	m.updateViewport()
+	timelineBefore := m.timeline.YOffset
+	sidebarBefore := m.sidebar.YOffset
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(Model)
+	if m.sidebar.YOffset <= sidebarBefore {
+		t.Fatalf("pgdown with info pane active did not scroll sidebar: before=%d after=%d", sidebarBefore, m.sidebar.YOffset)
+	}
+	if m.timeline.YOffset != timelineBefore {
+		t.Fatalf("pgdown with info pane active should not scroll timeline: before=%d after=%d", timelineBefore, m.timeline.YOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(Model)
+	if !strings.Contains(m.sidebar.View(), "RIGHT_BOTTOM_MARKER") {
+		t.Fatalf("end did not move sidebar to bottom:\n%s", m.sidebar.View())
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = next.(Model)
+	if m.sidebar.YOffset != 0 {
+		t.Fatalf("home did not move sidebar to top: offset=%d", m.sidebar.YOffset)
+	}
+}
+
+func longSidebarTask() *app.TaskState {
+	task := &app.TaskState{
+		ID:             "task_sidebar",
+		Title:          "Long sidebar task",
+		Objective:      "Keep enough right panel content to require independent scrolling.",
+		Stage:          app.StageExecution,
+		Status:         app.TaskStatusActive,
+		ExpectedAction: app.ExpectedUserInput,
+	}
+	for i := 0; i < 35; i++ {
+		task.Plan = append(task.Plan, fmt.Sprintf("sidebar plan item %02d", i))
+		task.AcceptanceCriteria = append(task.AcceptanceCriteria, fmt.Sprintf("sidebar criterion %02d", i))
+	}
+	task.AcceptanceCriteria = append(task.AcceptanceCriteria, "RIGHT_BOTTOM_MARKER")
+	return task
 }
 
 func TestTimelineMouseWheelScrollsAfterLongExchange(t *testing.T) {
@@ -1003,8 +1192,12 @@ func TestNextActionExplainsPendingPlan(t *testing.T) {
 	m.contextExpanded = true
 	m.resize()
 
+	title, detail := m.nextAction()
+	if title != "Review pending plan." || !strings.Contains(detail, "decision menu") {
+		t.Fatalf("wrong next action: title=%q detail=%q", title, detail)
+	}
 	view := m.View()
-	for _, want := range []string{"Next action", "Review pending plan.", "Press a to approve, r to reject."} {
+	for _, want := range []string{"Decision", "Pending plan needs your confirmation.", "Approve plan", "Request changes"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("next action view missing %q:\n%s", want, view)
 		}
@@ -1238,8 +1431,10 @@ func TestStartupDoesNotLoadOldAuditOrPendingProposal(t *testing.T) {
 	proposal := &app.MemoryProposal{ID: "proposal_old", SessionID: "session_old", Records: []app.ProposedMemoryRecord{
 		{ID: "record_old", Layer: app.ProposedLayerShort, Kind: "context", Content: "old", Status: app.ProposalPending},
 	}}
+	task := &app.TaskState{ID: "task_old", Title: "old task", Stage: app.StageExecution, Status: app.TaskStatusPaused, ExpectedAction: app.ExpectedLLMResponse}
 	fake := &fakeBackend{
 		proposal: proposal,
+		task:     task,
 		audit: []process.ProcessAuditEvent{
 			{SessionID: "session_old", Decision: "rejected", ValidatorErrors: []string{"old"}},
 		},
@@ -1249,12 +1444,12 @@ func TestStartupDoesNotLoadOldAuditOrPendingProposal(t *testing.T) {
 	if msg.mode != "startup" {
 		t.Fatalf("startup load mode mismatch: %q", msg.mode)
 	}
-	if len(msg.audit) != 0 || msg.proposal != nil || fake.auditCalls != 0 {
-		t.Fatalf("startup should not load old chat context: audit=%d proposal=%v auditCalls=%d", len(msg.audit), msg.proposal, fake.auditCalls)
+	if msg.task != nil || len(msg.audit) != 0 || msg.proposal != nil || fake.auditCalls != 0 {
+		t.Fatalf("startup should not load old task/chat context: task=%v audit=%d proposal=%v auditCalls=%d", msg.task, len(msg.audit), msg.proposal, fake.auditCalls)
 	}
 }
 
-func TestFreshStartupHidesOldTaskDetailsInSidebar(t *testing.T) {
+func TestFreshStartupDoesNotAttachOldCurrentTask(t *testing.T) {
 	task := &app.TaskState{
 		ID:             "task_current",
 		Title:          "Contains Duplicate",
@@ -1267,13 +1462,16 @@ func TestFreshStartupHidesOldTaskDetailsInSidebar(t *testing.T) {
 	m := NewModel(context.Background(), &fakeBackend{task: task})
 	m.width = 140
 	m.height = 36
-	m.task = task
-	m.resize()
+	msg := m.loadInitial()().(initialLoadedMsg)
+	next, _ := m.Update(msg)
+	m = next.(Model)
 	view := m.View()
-	if strings.Contains(view, "OLD_OBJECTIVE_MARKER") || strings.Contains(view, "OLD_PLAN_MARKER") {
-		t.Fatalf("fresh startup leaked old task details:\n%s", view)
+	for _, blocked := range []string{"task_current", "Contains Duplicate", "OLD_OBJECTIVE_MARKER", "OLD_PLAN_MARKER", "task focus:", "Continue execution.", "Task is paused."} {
+		if strings.Contains(view, blocked) {
+			t.Fatalf("fresh startup leaked old task marker %q:\n%s", blocked, view)
+		}
 	}
-	for _, want := range []string{"New chat", "old chat: /resume", "task details: /task", "task focus:"} {
+	for _, want := range []string{"New chat", "old chat: /resume", "task details: /task", "task: none", "Type a coding task."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("fresh startup missing %q:\n%s", want, view)
 		}
@@ -1316,6 +1514,9 @@ func TestSlashNewDoesNotLoadOldAuditOrExpandedTaskDetails(t *testing.T) {
 	if m.contextExpanded {
 		t.Fatal("/new should collapse task details in fresh chat")
 	}
+	if m.task != nil {
+		t.Fatalf("/new should clear task focus, got %+v", m.task)
+	}
 	if cmd == nil {
 		t.Fatal("/new should refresh current state without loading history")
 	}
@@ -1323,15 +1524,48 @@ func TestSlashNewDoesNotLoadOldAuditOrExpandedTaskDetails(t *testing.T) {
 		t.Fatal("/new should request terminal clear to remove stale slash help")
 	}
 	view := m.View()
-	for _, blocked := range []string{"restored audit history", "validation blocked: trusted evidence required", "OLD_OBJECTIVE_MARKER", "OLD_CRITERIA_MARKER", "OLD_PLAN_MARKER"} {
+	for _, blocked := range []string{"restored audit history", "validation blocked: trusted evidence required", "task_current", "OLD_OBJECTIVE_MARKER", "OLD_CRITERIA_MARKER", "OLD_PLAN_MARKER"} {
 		if strings.Contains(view, blocked) {
 			t.Fatalf("/new leaked old context %q:\n%s", blocked, view)
 		}
 	}
-	for _, want := range []string{"New chat", "old chat: /resume", "task focus:"} {
+	for _, want := range []string{"New chat", "old chat: /resume", "task details: /task", "task: none"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("/new fresh view missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestResumeDoesNotAttachUnrelatedCurrentTask(t *testing.T) {
+	task := &app.TaskState{
+		ID:            "task_unrelated",
+		Title:         "Unrelated task",
+		Stage:         app.StageExecution,
+		Status:        app.TaskStatusActive,
+		LastSessionID: "session_other",
+	}
+	fake := &fakeBackend{
+		task: task,
+		transcript: []TranscriptEntry{
+			{Role: app.RoleUser, Content: "selected session request", CreatedAt: time.Date(2026, 6, 21, 10, 0, 0, 0, time.UTC)},
+		},
+		audit: []process.ProcessAuditEvent{
+			{SessionID: "session_old", Decision: "provider_call"},
+			{SessionID: "session_other", TaskID: "task_unrelated", Decision: "rejected"},
+		},
+	}
+	m := NewModel(context.Background(), fake)
+	msg := m.loadSessionContext("session_old")().(initialLoadedMsg)
+	next, _ := m.Update(msg)
+	m = next.(Model)
+	view := m.View()
+	for _, blocked := range []string{"task_unrelated", "Unrelated task", "Task is paused.", "Continue execution."} {
+		if strings.Contains(view, blocked) {
+			t.Fatalf("resume leaked unrelated current task marker %q:\n%s", blocked, view)
+		}
+	}
+	if !strings.Contains(view, "selected session request") {
+		t.Fatalf("resume did not show selected session transcript:\n%s", view)
 	}
 }
 

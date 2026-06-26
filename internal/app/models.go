@@ -11,10 +11,23 @@ const (
 )
 
 type ChatMessage struct {
-	ID        string    `json:"id,omitempty"`
-	Role      ChatRole  `json:"role"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         string         `json:"id,omitempty"`
+	Role       ChatRole       `json:"role"`
+	Content    string         `json:"content"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+type ChatToolCall struct {
+	ID       string               `json:"id"`
+	Type     string               `json:"type"`
+	Function ChatToolCallFunction `json:"function"`
+}
+
+type ChatToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 type MemoryLayer string
@@ -205,13 +218,31 @@ type MicrotaskState struct {
 }
 
 type AppConfig struct {
-	ActiveProfileID           string   `json:"active_profile_id,omitempty"`
-	ActiveModel               string   `json:"active_model,omitempty"`
-	StorageDir                string   `json:"storage_dir"`
-	OpenRouterBaseURL         string   `json:"openrouter_base_url"`
-	TrustedOpenRouterBaseURLs []string `json:"trusted_openrouter_base_urls,omitempty"`
-	MemoryModel               string   `json:"memory_model,omitempty"`
-	FavoriteModels            []string `json:"favorite_models,omitempty"`
+	ActiveProfileID           string            `json:"active_profile_id,omitempty"`
+	ActiveModel               string            `json:"active_model,omitempty"`
+	StorageDir                string            `json:"storage_dir"`
+	OpenRouterBaseURL         string            `json:"openrouter_base_url"`
+	TrustedOpenRouterBaseURLs []string          `json:"trusted_openrouter_base_urls,omitempty"`
+	MemoryModel               string            `json:"memory_model,omitempty"`
+	FavoriteModels            []string          `json:"favorite_models,omitempty"`
+	MCPServers                []MCPServerConfig `json:"mcp_servers,omitempty"`
+}
+
+type MCPServerConfig struct {
+	Name            string          `json:"name"`
+	Command         string          `json:"command"`
+	Args            []string        `json:"args,omitempty"`
+	EnvKeys         []string        `json:"env_keys,omitempty"`
+	ProtocolVersion string          `json:"protocol_version,omitempty"`
+	Enabled         bool            `json:"enabled"`
+	Tools           []MCPToolConfig `json:"tools,omitempty"`
+}
+
+type MCPToolConfig struct {
+	Name        string `json:"name"`
+	AutoApprove bool   `json:"auto_approve,omitempty"`
+	ReadOnly    bool   `json:"read_only,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type MemoryBundle struct {

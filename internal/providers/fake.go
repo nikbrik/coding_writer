@@ -16,6 +16,7 @@ type FakeProvider struct {
 	Models              []string
 	ChatResponse        string
 	ChatResponses       []string
+	ChatToolCalls       [][]app.ChatToolCall
 	ClassifierResponse  string
 	ClassifierResponses []string
 	ValidatorResponse   string
@@ -86,10 +87,14 @@ func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (Com
 		return newAssistantMessage(content, req.Model, "fake"), nil
 	}
 	var content string
+	var toolCalls []app.ChatToolCall
 	if len(p.ChatResponses) > 0 {
 		p.mu.Lock()
 		if p.chatCallIdx < len(p.ChatResponses) {
 			content = p.ChatResponses[p.chatCallIdx]
+			if p.chatCallIdx < len(p.ChatToolCalls) {
+				toolCalls = append([]app.ChatToolCall(nil), p.ChatToolCalls[p.chatCallIdx]...)
+			}
 			p.chatCallIdx++
 		}
 		p.mu.Unlock()
@@ -105,7 +110,10 @@ func (p *FakeProvider) Complete(ctx context.Context, req CompletionRequest) (Com
 			content = defaultChatAnswer(prompt)
 		}
 	}
-	return newAssistantMessage(content, req.Model, "fake"), nil
+	res := newAssistantMessage(content, req.Model, "fake")
+	res.ToolCalls = toolCalls
+	res.Message.ToolCalls = append([]app.ChatToolCall(nil), toolCalls...)
+	return res, nil
 }
 
 func (p *FakeProvider) SnapshotCalls() []CompletionRequest {

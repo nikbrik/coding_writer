@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -83,6 +84,24 @@ func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvide
 	}, fake, dir
 }
 
+type fakeToolRunner struct {
+	tools []providers.ToolDefinition
+	calls []app.ChatToolCall
+	err   error
+}
+
+func (r *fakeToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinition, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return append([]providers.ToolDefinition(nil), r.tools...), nil
+}
+
+func (r *fakeToolRunner) Run(ctx context.Context, call app.ChatToolCall) (app.ChatMessage, error) {
+	r.calls = append(r.calls, call)
+	return ToolResultMessage(call, `{"server":"github-api","tool":"github_repo_info","isError":false,"parsed":{"full_name":"nikbrik/coding_writer","default_branch":"main","language":"Go"}}`), nil
+}
+
 func issueTestEvidence(t *testing.T, dir string, task app.TaskState, sessionID, source string) []string {
 	t.Helper()
 	token, _, err := NewTrustedEvidenceStore(dir).Issue(task.ID, sessionID, source, 0, "ok")
@@ -133,6 +152,37 @@ func TestProcessControllerInvariantInputConflictSkipsProvider(t *testing.T) {
 	}
 	if chatCalls(fake.SnapshotCalls()) != 0 {
 		t.Fatalf("provider should not be called: %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerFallsBackWhenMCPToolsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.ToolRunner = &fakeToolRunner{err: errors.New("mcp unavailable")}
+	fake.ChatResponse = "fallback answer"
+
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s1", Input: "обычный вопрос без MCP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "fallback answer" {
+		t.Fatalf("wrong fallback answer: %q", res.Answer)
+	}
+	calls := fake.SnapshotCalls()
+	if chatCalls(calls) == 0 {
+		t.Fatalf("fallback did not call provider: %+v", calls)
+	}
+	for _, call := range calls {
+		if call.Purpose == providers.PurposeChat && len(call.Tools) > 0 {
+			t.Fatalf("fallback chat should not send unavailable tools: %+v", call.Tools)
+		}
+	}
+	events, err := ctrl.AuditStore.Latest(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditDecisionCount(events, "mcp_tools_unavailable") != 1 {
+		t.Fatalf("missing mcp_tools_unavailable audit: %+v", events)
 	}
 }
 
@@ -415,6 +465,44 @@ func TestProcessControllerSuccessfulExchangeCallsProvider(t *testing.T) {
 	}
 	if chatCalls(fake.Calls) != 1 {
 		t.Fatalf("expected one chat provider call, got %d", chatCalls(fake.Calls))
+	}
+}
+
+func TestProcessControllerRunsAllowlistedToolCallBeforeFinalAnswer(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	runner := &fakeToolRunner{tools: []providers.ToolDefinition{{
+		Type: "function",
+		Function: providers.ToolFunction{
+			Name:        "github_api__github_repo_info",
+			Description: "Fetch repository info",
+			Parameters:  map[string]any{"type": "object"},
+		},
+	}}}
+	ctrl.ToolRunner = runner
+	fake.ChatResponses = []string{"", "Repo summary: nikbrik/coding_writer uses Go on main."}
+	fake.ChatToolCalls = [][]app.ChatToolCall{{
+		{
+			ID:   "call_1",
+			Type: "function",
+			Function: app.ChatToolCallFunction{
+				Name:      "github_api__github_repo_info",
+				Arguments: `{"owner":"nikbrik","repo":"coding_writer"}`,
+			},
+		},
+	}}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s_tool", Input: "summarize nikbrik/coding_writer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Answer, "nikbrik/coding_writer") {
+		t.Fatalf("final answer did not use tool result: %q", res.Answer)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].Function.Name != "github_api__github_repo_info" {
+		t.Fatalf("tool was not called: %+v", runner.calls)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 2 {
+		t.Fatalf("expected two chat calls around tool execution, got %+v", fake.SnapshotCalls())
 	}
 }
 
