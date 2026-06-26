@@ -2225,7 +2225,7 @@ func privacyPurgeCommand(opts *globalOptions) *cobra.Command {
 
 func mcpCommand(opts *globalOptions) *cobra.Command {
 	cmd := &cobra.Command{Use: "mcp", Short: "Inspect and call configured MCP servers"}
-	cmd.AddCommand(mcpAddCommand(opts), mcpRemoveCommand(opts), mcpToolsCommand(opts), mcpCallCommand(opts))
+	cmd.AddCommand(mcpAddCommand(opts), mcpRemoveCommand(opts), mcpToolsCommand(opts), mcpCallCommand(opts), mcpWatchCommand(opts), mcpWatchAgentCommand(opts))
 	return cmd
 }
 
@@ -2379,13 +2379,9 @@ func mcpCallCommand(opts *globalOptions) *cobra.Command {
 				return err
 			}
 			toolName := args[1]
-			values, err := parseKeyValues(argItems)
+			toolArgs, err := parseMCPToolArgs(argItems)
 			if err != nil {
 				return err
-			}
-			toolArgs := make(map[string]any, len(values))
-			for key, value := range values {
-				toolArgs[key] = value
 			}
 			client, err := startConfiguredMCP(cmd.Context(), server)
 			if err != nil {
@@ -2408,6 +2404,135 @@ func mcpCallCommand(opts *globalOptions) *cobra.Command {
 	return cmd
 }
 
+func mcpWatchCommand(opts *globalOptions) *cobra.Command {
+	var argItems []string
+	var interval time.Duration
+	var maxRuns int
+	cmd := &cobra.Command{
+		Use:   "watch <server> <tool>",
+		Short: "Periodically call an MCP tool and print summaries",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if interval <= 0 {
+				return app.NewError(app.CategoryCLI, "invalid_mcp_watch_interval", "--interval must be positive", nil)
+			}
+			if maxRuns < 0 {
+				return app.NewError(app.CategoryCLI, "invalid_mcp_watch_max_runs", "--max-runs must be non-negative", nil)
+			}
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			server, err := configuredMCPServer(rt.Config, args[0])
+			if err != nil {
+				return err
+			}
+			toolArgs, err := parseMCPToolArgs(argItems)
+			if err != nil {
+				return err
+			}
+			for run := 1; ; run++ {
+				result, err := callConfiguredMCPTool(cmd.Context(), server, args[1], toolArgs)
+				if err != nil {
+					return err
+				}
+				parsed := parseMCPFirstTextJSON(result)
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), mcpWatchText(server.Name, args[1], run, time.Now(), result, parsed)); err != nil {
+					return err
+				}
+				if maxRuns > 0 && run >= maxRuns {
+					return nil
+				}
+				timer := time.NewTimer(interval)
+				select {
+				case <-cmd.Context().Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					return app.NewError(app.CategoryCLI, "mcp_watch_canceled", "MCP watch canceled", cmd.Context().Err())
+				case <-timer.C:
+				}
+			}
+		},
+	}
+	cmd.Flags().StringArrayVar(&argItems, "arg", nil, "tool argument key=value, repeatable")
+	cmd.Flags().DurationVar(&interval, "interval", 30*time.Second, "watch interval")
+	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "stop after this many calls; 0 means forever")
+	return cmd
+}
+
+func mcpWatchAgentCommand(opts *globalOptions) *cobra.Command {
+	var argItems []string
+	var interval time.Duration
+	var maxRuns int
+	cmd := &cobra.Command{
+		Use:   "watch-agent <server> <tool>",
+		Short: "Periodically call an MCP tool and ask the active LLM to summarize it",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if interval <= 0 {
+				return app.NewError(app.CategoryCLI, "invalid_mcp_watch_interval", "--interval must be positive", nil)
+			}
+			if maxRuns < 0 {
+				return app.NewError(app.CategoryCLI, "invalid_mcp_watch_max_runs", "--max-runs must be non-negative", nil)
+			}
+			rt, err := newRuntime(cmd.Context(), opts)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(rt.Config.ActiveModel) == "" {
+				return app.ErrorWithHint(app.CategoryProvider, "missing_model", "active model is required", "run cw init --model <provider/model> or pass --model <provider/model>", nil)
+			}
+			provider := rt.ensureProvider()
+			ensureProviderDisclosure(cmd.ErrOrStderr(), rt)
+			server, err := configuredMCPServer(rt.Config, args[0])
+			if err != nil {
+				return err
+			}
+			toolArgs, err := parseMCPToolArgs(argItems)
+			if err != nil {
+				return err
+			}
+			for run := 1; ; run++ {
+				result, err := callConfiguredMCPTool(cmd.Context(), server, args[1], toolArgs)
+				if err != nil {
+					return err
+				}
+				parsed := parseMCPFirstTextJSON(result)
+				agentSummary, err := mcpWatchAgentSummary(cmd.Context(), provider, rt.Config.ActiveModel, server.Name, args[1], run, result, parsed)
+				if err != nil {
+					return err
+				}
+				if _, err := fmt.Fprint(cmd.OutOrStdout(), mcpWatchAgentText(server.Name, args[1], run, time.Now(), rt.Config.ActiveModel, result, parsed, agentSummary)); err != nil {
+					return err
+				}
+				if maxRuns > 0 && run >= maxRuns {
+					return nil
+				}
+				timer := time.NewTimer(interval)
+				select {
+				case <-cmd.Context().Done():
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					return app.NewError(app.CategoryCLI, "mcp_watch_agent_canceled", "MCP watch agent canceled", cmd.Context().Err())
+				case <-timer.C:
+				}
+			}
+		},
+	}
+	cmd.Flags().StringArrayVar(&argItems, "arg", nil, "tool argument key=value, repeatable")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Minute, "agent interval")
+	cmd.Flags().IntVar(&maxRuns, "max-runs", 0, "stop after this many agent loops; 0 means forever")
+	return cmd
+}
+
 func configuredMCPServer(cfg app.AppConfig, name string) (app.MCPServerConfig, error) {
 	name = strings.TrimSpace(name)
 	for _, server := range cfg.MCPServers {
@@ -2419,6 +2544,18 @@ func configuredMCPServer(cfg app.AppConfig, name string) (app.MCPServerConfig, e
 		}
 	}
 	return app.MCPServerConfig{}, app.ErrorWithHint(app.CategoryValidation, "mcp_server_missing", "MCP server is not configured", "run cw mcp add "+name+" --command <cmd>", nil)
+}
+
+func callConfiguredMCPTool(ctx context.Context, server app.MCPServerConfig, toolName string, toolArgs map[string]any) (mcp.ToolResult, error) {
+	client, err := startConfiguredMCP(ctx, server)
+	if err != nil {
+		return mcp.ToolResult{}, err
+	}
+	defer client.Close()
+	if _, err := client.Initialize(ctx); err != nil {
+		return mcp.ToolResult{}, err
+	}
+	return client.CallTool(ctx, toolName, toolArgs)
 }
 
 func startConfiguredMCP(ctx context.Context, server app.MCPServerConfig) (*mcp.Client, error) {
@@ -2523,6 +2660,147 @@ func mcpCallText(server, tool string, result mcp.ToolResult, parsed map[string]a
 		b.WriteString(safeTerminalText(result.Content[0].Text))
 		b.WriteByte('\n')
 	}
+	return b.String()
+}
+
+func mcpWatchText(server, tool string, run int, at time.Time, result mcp.ToolResult, parsed map[string]any) string {
+	var b strings.Builder
+	b.WriteString("[watch] run=")
+	b.WriteString(fmt.Sprint(run))
+	b.WriteString(" server=")
+	b.WriteString(server)
+	b.WriteString(" tool=")
+	b.WriteString(tool)
+	b.WriteString(" time=")
+	b.WriteString(at.UTC().Format(time.RFC3339))
+	b.WriteByte('\n')
+	if result.IsError {
+		b.WriteString("status: error\n")
+	} else {
+		b.WriteString("status: ok\n")
+	}
+	if len(parsed) > 0 {
+		if summary, _ := parsed["summary_text"].(string); summary != "" {
+			b.WriteString("summary: ")
+			b.WriteString(safeTerminalText(summary))
+			b.WriteByte('\n')
+		}
+		for _, key := range []string{"repo", "health", "total_runs", "ok_runs", "error_runs", "interval", "last_run_at", "next_run_at"} {
+			value, ok := parsed[key]
+			if !ok {
+				continue
+			}
+			b.WriteString(key)
+			b.WriteString(": ")
+			b.WriteString(safeTerminalText(mcpDisplayValue(value)))
+			b.WriteByte('\n')
+		}
+		if latest, ok := parsed["latest"].(map[string]any); ok && len(latest) > 0 {
+			for _, key := range []string{"stars", "forks", "open_issues", "updated_at"} {
+				value, ok := latest[key]
+				if !ok {
+					continue
+				}
+				b.WriteString("latest.")
+				b.WriteString(key)
+				b.WriteString(": ")
+				b.WriteString(safeTerminalText(mcpDisplayValue(value)))
+				b.WriteByte('\n')
+			}
+		}
+		if delta, ok := parsed["delta"].(map[string]any); ok && len(delta) > 0 {
+			for _, key := range []string{"stars", "forks", "open_issues"} {
+				value, ok := delta[key]
+				if !ok {
+					continue
+				}
+				b.WriteString("delta.")
+				b.WriteString(key)
+				b.WriteString(": ")
+				b.WriteString(safeTerminalText(mcpDisplayValue(value)))
+				b.WriteByte('\n')
+			}
+		}
+		b.WriteByte('\n')
+		return b.String()
+	}
+	if len(result.Content) > 0 && strings.TrimSpace(result.Content[0].Text) != "" {
+		b.WriteString(safeTerminalText(result.Content[0].Text))
+		b.WriteByte('\n')
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func mcpWatchAgentSummary(ctx context.Context, provider providers.LLMProvider, model, server, tool string, run int, result mcp.ToolResult, parsed map[string]any) (string, error) {
+	payload := any(parsed)
+	if len(parsed) == 0 {
+		payload = result
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", app.NewError(app.CategoryCLI, "mcp_watch_agent_payload", "failed to encode MCP payload for agent prompt", err)
+	}
+	res, err := provider.Complete(ctx, providers.CompletionRequest{
+		Purpose: providers.PurposeChat,
+		Model:   model,
+		Messages: []app.ChatMessage{
+			{ID: app.NewID("msg"), Role: app.RoleSystem, Content: mcpWatchAgentSystemPrompt()},
+			{ID: app.NewID("msg"), Role: app.RoleUser, Content: fmt.Sprintf("MCP server: %s\nMCP tool: %s\nRun: %d\nTool isError: %v\n\nJSON aggregate:\n%s", server, tool, run, result.IsError, string(data))},
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	answer := strings.TrimSpace(res.Message.Content)
+	if answer == "" {
+		return "", app.NewError(app.CategoryProvider, "empty_agent_summary", "LLM returned an empty summary", nil)
+	}
+	return answer, nil
+}
+
+func mcpWatchAgentSystemPrompt() string {
+	return strings.TrimSpace(`
+You are a long-running monitoring agent.
+Every tick you receive one persisted MCP aggregate.
+Write a concise Russian operational summary for a human.
+Mention health, run counts, important metric changes, and whether action is needed.
+Do not claim you fetched data yourself; the MCP tool already did that.
+Do not output JSON. Use 2-5 short lines.
+`)
+}
+
+func mcpWatchAgentText(server, tool string, run int, at time.Time, model string, result mcp.ToolResult, parsed map[string]any, summary string) string {
+	var b strings.Builder
+	b.WriteString("[agent] run=")
+	b.WriteString(fmt.Sprint(run))
+	b.WriteString(" server=")
+	b.WriteString(server)
+	b.WriteString(" tool=")
+	b.WriteString(tool)
+	b.WriteString(" model=")
+	b.WriteString(model)
+	b.WriteString(" time=")
+	b.WriteString(at.UTC().Format(time.RFC3339))
+	b.WriteByte('\n')
+	if result.IsError {
+		b.WriteString("mcp_status: error\n")
+	} else {
+		b.WriteString("mcp_status: ok\n")
+	}
+	for _, key := range []string{"repo", "health", "total_runs", "ok_runs", "error_runs", "interval", "last_run_at", "next_run_at"} {
+		value, ok := parsed[key]
+		if !ok {
+			continue
+		}
+		b.WriteString(key)
+		b.WriteString(": ")
+		b.WriteString(safeTerminalText(mcpDisplayValue(value)))
+		b.WriteByte('\n')
+	}
+	b.WriteString("llm_summary:\n")
+	b.WriteString(safeTerminalText(strings.TrimSpace(summary)))
+	b.WriteString("\n\n")
 	return b.String()
 }
 
@@ -3891,6 +4169,26 @@ func parseKeyValues(items []string) (map[string]string, error) {
 		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
 	}
 	return out, nil
+}
+
+func parseMCPToolArgs(items []string) (map[string]any, error) {
+	values, err := parseKeyValues(items)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(values))
+	for key, value := range values {
+		out[key] = parseMCPToolArgValue(value)
+	}
+	return out, nil
+}
+
+func parseMCPToolArgValue(value string) any {
+	var parsed any
+	if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+		return value
+	}
+	return parsed
 }
 
 func writeOutput(w io.Writer, asJSON bool, value any, text string) error {

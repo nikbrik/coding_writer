@@ -13,6 +13,9 @@
 **Fix**: rerun command with escalation или настроить writable Go cache для текущего workspace.
 **Статус**: resolved
 
+### Evidence
+- 2026-06-26 Day 18: sandboxed `go test ./internal/cli ./internal/mcp` failed writing `~/Library/Caches/go-build`; escalated rerun passed.
+
 ---
 
 ## 2026-06-19 | memory-apply-unknown-record-noop
@@ -33,6 +36,30 @@
 
 ### Evidence
 - 2026-06-19 `/evolve` audit: sandbox `ast-index update` не увидел cache; escalated run returned `Index is up to date`.
+
+---
+## 2026-06-26 | tui-external-tool-command-timeout
+**Pattern-Key**: tui-external-tool-command-timeout
+**Команда**: TUI slash commands around external stdio/API tools, for example `/mcp tools <server>` and `/mcp call <server> <tool>`.
+**Симптом**: TUI может ждать бесконечно или выглядеть зависшим, даже если эквивалентный CLI command работает.
+**Причина**: внешний stdio/API tool вызывался из TUI slash path без bounded context timeout.
+**Fix**: wrap external tool slash operations in bounded `context.WithTimeout`; keep explicit command failure visible, but do not let the TUI wait forever.
+**Статус**: resolved
+
+### Evidence
+- 2026-06-26 live TUI smoke: `/mcp tools github-api` завис в TUI, while `cw mcp tools github-api` worked immediately; fix added 20s timeouts for `/mcp tools` and `/mcp call`.
+
+---
+## 2026-06-26 | go-test-helper-process-same-package
+**Pattern-Key**: go-test-helper-process-same-package
+**Команда**: Go tests using `os.Args[0]` helper processes for stdio/MCP JSON-RPC.
+**Симптом**: MCP client read fails with `invalid character 'P' looking for beginning of value`.
+**Причина**: helper process target lives in another Go package test binary, so the current package binary does not run the intended helper and may print `PASS` instead of JSON-RPC.
+**Fix**: define the helper test function in the same package as the test binary that launches `os.Args[0]`; use exact `-test.run=^HelperName$` and a guard env var.
+**Статус**: resolved
+
+### Evidence
+- 2026-06-26 Day 18 `cw mcp watch` test initially reused `internal/mcp` helper from `internal/cli`; adding local `TestMCPWatchHelperProcess` fixed JSON-RPC reads.
 
 ---
 <!-- ERRORS:END -->

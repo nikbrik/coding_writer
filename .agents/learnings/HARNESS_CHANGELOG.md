@@ -70,4 +70,16 @@
 **Reason**: Product defects must be tracked as bugs and harness evolution must preserve root-cause, bug, validator, and Harness Value Test guardrails.
 
 ---
+## 2026-06-26 | MCP TUI manual proof
+**Applied**: LEARNING-001, ERROR-001, LEARNING-002
+**Files**: .agents/learnings/LEARNINGS.md, .agents/learnings/ERRORS.md
+**Reason**: Captured MCP/TUI demo lessons: requested UI surface must be the proof surface, external tool slash commands need timeouts, and MCP results must expose user-visible business fields.
+
+---
+## 2026-06-26 | Day 18 scheduled MCP demo
+**Applied**: LEARNING-001, ERROR-001, ERROR-002
+**Files**: .agents/learnings/LEARNINGS.md, .agents/learnings/ERRORS.md
+**Reason**: Captured Day 18 lessons: scheduled MCP demos need producer/consumer ownership split, Go cache sandbox rerun evidence, and same-package helper processes for stdio tests.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

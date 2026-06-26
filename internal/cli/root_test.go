@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -325,6 +326,187 @@ func TestMCPCallTextPrintsRepositoryFields(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp call text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestMCPWatchCommandCallsToolRepeatedly(t *testing.T) {
+	t.Setenv("GO_WANT_MCP_WATCH_HELPER", "1")
+	storageDir := t.TempDir()
+	add := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	add.SetOut(io.Discard)
+	add.SetErr(io.Discard)
+	add.SetArgs([]string{
+		"mcp", "add", "github-api",
+		"--command", os.Args[0],
+		"--arg=-test.run=^TestMCPWatchHelperProcess$",
+		"--env-key=GO_WANT_MCP_WATCH_HELPER",
+		"--allow-tool", "github_repo_info",
+		"--auto-approve",
+	})
+	if err := add.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	watch := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var out bytes.Buffer
+	watch.SetOut(&out)
+	watch.SetErr(io.Discard)
+	watch.SetArgs([]string{
+		"mcp", "watch", "github-api", "github_repo_info",
+		"--arg", "owner=nikbrik",
+		"--arg", "repo=coding_writer",
+		"--interval", "1ms",
+		"--max-runs", "2",
+	})
+	if err := watch.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"[watch] run=1 server=github-api tool=github_repo_info",
+		"[watch] run=2 server=github-api tool=github_repo_info",
+		"status: ok",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("watch output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestParseMCPToolArgsParsesJSONValues(t *testing.T) {
+	args, err := parseMCPToolArgs([]string{
+		"limit=2",
+		"include_archived=true",
+		"owner=nikbrik",
+		"quoted=\"coding_writer\"",
+		"empty=null",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := args["limit"].(float64); !ok || got != 2 {
+		t.Fatalf("limit parsed as %#v, want JSON number 2", args["limit"])
+	}
+	if got, ok := args["include_archived"].(bool); !ok || !got {
+		t.Fatalf("include_archived parsed as %#v, want true", args["include_archived"])
+	}
+	if got := args["owner"]; got != "nikbrik" {
+		t.Fatalf("owner parsed as %#v, want plain string", got)
+	}
+	if got := args["quoted"]; got != "coding_writer" {
+		t.Fatalf("quoted parsed as %#v, want JSON string", got)
+	}
+	if got, ok := args["empty"]; !ok || got != nil {
+		t.Fatalf("empty parsed as %#v, want nil", got)
+	}
+}
+
+func TestMCPWatchAgentCommandCallsToolAndLLM(t *testing.T) {
+	t.Setenv("GO_WANT_MCP_WATCH_HELPER", "1")
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	storageDir := t.TempDir()
+	add := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	add.SetOut(io.Discard)
+	add.SetErr(io.Discard)
+	add.SetArgs([]string{
+		"mcp", "add", "github-api",
+		"--command", os.Args[0],
+		"--arg=-test.run=^TestMCPWatchHelperProcess$",
+		"--env-key=GO_WANT_MCP_WATCH_HELPER",
+		"--allow-tool", "github_watch_summary",
+		"--auto-approve",
+	})
+	if err := add.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	watch := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var out bytes.Buffer
+	watch.SetOut(&out)
+	watch.SetErr(io.Discard)
+	watch.SetArgs([]string{
+		"mcp", "watch-agent", "github-api", "github_watch_summary",
+		"--interval", "1ms",
+		"--max-runs", "1",
+	})
+	if err := watch.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"[agent] run=1 server=github-api tool=github_watch_summary model=",
+		"mcp_status: ok",
+		"llm_summary:",
+		"fake assistant response",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("watch-agent output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestMCPWatchHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_MCP_WATCH_HELPER") != "1" {
+		return
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var msg map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			writeMCPWatchHelperRPC(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{"code": -32700, "message": err.Error()}})
+			continue
+		}
+		id, hasID := msg["id"]
+		if !hasID {
+			continue
+		}
+		method, _ := msg["method"].(string)
+		switch method {
+		case "initialize":
+			writeMCPWatchHelperRPC(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
+				"protocolVersion": mcp.DefaultProtocolVersion,
+				"serverInfo":      map[string]any{"name": "test-github-api", "version": "0.1.0"},
+				"capabilities":    map[string]any{"tools": map[string]any{}},
+			}})
+		case "tools/call":
+			writeMCPWatchHelperToolResult(id, map[string]any{"full_name": "nikbrik/coding_writer", "default_branch": "main", "language": "Go"}, false)
+		default:
+			writeMCPWatchHelperRPC(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32601, "message": fmt.Sprintf("unknown method %s", method)}})
+		}
+	}
+	os.Exit(0)
+}
+
+func writeMCPWatchHelperToolResult(id any, payload map[string]any, isError bool) {
+	data, _ := json.Marshal(payload)
+	writeMCPWatchHelperRPC(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
+		"content": []map[string]any{{"type": "text", "text": string(data)}},
+		"isError": isError,
+	}})
+}
+
+func writeMCPWatchHelperRPC(msg map[string]any) {
+	data, _ := json.Marshal(msg)
+	fmt.Fprintln(os.Stdout, string(data))
+}
+
+func TestMCPWatchTextPrintsDay18Aggregate(t *testing.T) {
+	result := mcp.ToolResult{
+		Content: []mcp.ToolContent{{Type: "text", Text: `{"summary_text":"nikbrik/coding_writer: samples=2/2, stars=1, forks=0, open_issues=3, delta_stars=0, worker=healthy","repo":"nikbrik/coding_writer","health":"healthy","total_runs":2,"ok_runs":2,"error_runs":0,"interval":"5s","last_run_at":"2026-06-26T10:00:00Z","next_run_at":"2026-06-26T10:00:05Z","latest":{"stars":1,"forks":0,"open_issues":3,"updated_at":"2026-06-26T09:59:00Z"},"delta":{"stars":0,"forks":0,"open_issues":0}}`}},
+	}
+	text := mcpWatchText("day18-github-watch", "github_watch_summary", 1, time.Date(2026, 6, 26, 10, 0, 1, 0, time.UTC), result, parseMCPFirstTextJSON(result))
+	for _, want := range []string{
+		"[watch] run=1 server=day18-github-watch tool=github_watch_summary time=2026-06-26T10:00:01Z",
+		"summary: nikbrik/coding_writer: samples=2/2",
+		"repo: nikbrik/coding_writer",
+		"health: healthy",
+		"total_runs: 2",
+		"latest.stars: 1",
+		"delta.open_issues: 0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("watch text missing %q:\n%s", want, text)
 		}
 	}
 }

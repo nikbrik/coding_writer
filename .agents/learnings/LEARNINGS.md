@@ -255,4 +255,61 @@ Day 15 live flow должен выводить trusted verification из approve
 - 2026-06-19 пользователь отклонил Go-specific fallback; implementation moved to language-agnostic `VerificationResolver` plus command policy tests.
 
 ---
+## 2026-06-26 | manual-proof-must-use-requested-ui-surface
+**Тип**: correction
+**Модуль**: manual testing
+**Приоритет**: HIGH
+**Recurrence-Count**: 1
+
+### Суть
+Если acceptance/demo просит TUI, доказательство должно идти через настоящий TUI. CLI probes допустимы как setup/debug, но не как финальный proof пользовательского сценария.
+
+### Когда важно
+Когда пользователь просит показать работу в TUI, записать видео, проверить manual acceptance или доказать end-to-end UX, особенно для tool/MCP/agent workflows.
+
+### Применение
+Финальный proof должен назвать реальную UI surface, provider/model, storage/evidence path и видимый результат на экране. CLI-команды можно использовать для подготовки storage/config или диагностики, но acceptance evidence должен проходить через запрошенный интерфейс.
+
+### Evidence
+- 2026-06-26 пользователь отклонил CLI-only MCP demo и потребовал "тестируй в настоящем TUI"; финальный proof прошёл через TUI slash `/mcp add/tools/call/remove` и timeline `MCP tool call/result`.
+
+---
+## 2026-06-26 | mcp-tool-results-need-user-visible-fields
+**Тип**: pattern
+**Модуль**: MCP / TUI output
+**Приоритет**: MEDIUM
+**Recurrence-Count**: 1
+
+### Суть
+Для MCP demo мало доказать `tools/call`; TUI/CLI output должен показывать фактически используемые business fields, не только raw success или один id.
+
+### Когда важно
+Когда интегрируется MCP/API tool и acceptance требует "получить и использовать результат" или пользователь записывает demo.
+
+### Применение
+Выводить поля, на которых строится ответ агента, например `full_name`, `html_url`, `default_branch`, `language`, counters/status fields. Добавлять тесты, которые проверяют видимые поля demo-контракта.
+
+### Evidence
+- 2026-06-26 review нашёл, что `/mcp call` печатал почти только `full_name`; fix вывел `description`, `html_url`, `default_branch`, `language`, `stars`, `forks`, `open_issues`, `visibility`, `updated_at`.
+
+---
+## 2026-06-26 | scheduled-mcp-two-repo-demo-contract
+**Тип**: pattern
+**Модуль**: MCP / scheduled demo
+**Приоритет**: MEDIUM
+**Recurrence-Count**: 1
+
+### Суть
+Для scheduled MCP homework с отдельным `mcp-server` и `coding_writer` держать ownership раздельным: `mcp-server` — scheduled producer/storage/MCP read tools, `coding_writer` — scheduled consumer/watch/demo surface.
+
+### Когда важно
+Когда задача требует MCP tool с отложенным/периодическим выполнением, persisted aggregate и наглядный demo agent workflow через несколько проектов.
+
+### Применение
+Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent/client side — polling/watch UI. Demo доказывать двумя поверхностями: worker ticks и consumer summaries.
+
+### Evidence
+- 2026-06-26 Day 18 implementation split: `/Users/nikita/Documents/mcp-server` owns GitHub scheduled worker and JSON/JSONL aggregate, while `coding_writer` owns `cw mcp watch` and two-terminal proof.
+
+---
 <!-- LEARNINGS:END -->
