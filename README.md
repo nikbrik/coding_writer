@@ -239,14 +239,10 @@ Day 19: chain from one MCP server в обычном тексте (без `pipeli
 LLM сам должен вызвать последовательно:
 `github_search_repos` → `github_make_report` → `save_report_to_file`.
 
-Демонстрационный setup:
+Демонстрационный setup. Отдельно запускать `server.py` не нужно:
+`cw` сам стартует stdio MCP server из `--command` и `--arg`.
 
 ```bash
-# terminal 1: MCP server
-cd /Users/nikita/Documents/mcp-server
-python3 server.py --storage-dir .data/day19
-
-# terminal 2: coding_writer chat
 cd /Users/nikita/code/coding_writer
 export ASSISTANT_STORAGE_DIR=/Users/nikita/code/coding_writer/.assistant/day19-manual
 cw mcp add day19-github-tools \
@@ -261,6 +257,13 @@ cw mcp add day19-github-tools \
 
 cw init --model google/gemini-3.1-flash-lite
 cw chat --once --input "Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл."
+```
+
+Если нужен второй терминал для наглядного наблюдения, откройте его после
+запуска запроса и смотрите persisted events:
+
+```bash
+tail -f /Users/nikita/Documents/mcp-server/.data/day19/pipeline_runs.jsonl
 ```
 
 Проверяем подтверждение:

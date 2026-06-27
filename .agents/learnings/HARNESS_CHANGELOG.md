@@ -88,4 +88,10 @@
 **Reason**: Captured that strict "agent 24/7" scheduled MCP demos require a real LLM loop over MCP aggregates, not only polling output.
 
 ---
+## 2026-06-27 | Day 19 MCP composition cleanup
+**Applied**: LEARNING-001, PROMOTE-001, LEARNING-002, LEARNING-003
+**Files**: .agents/learnings/LEARNINGS.md, .agents/rules/harness-evolution.md
+**Reason**: Captured MCP stdio demo ownership, multi-repo commit boundaries, and local review cache hygiene.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

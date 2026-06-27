@@ -297,7 +297,7 @@ Day 15 live flow должен выводить trusted verification из approve
 **Тип**: pattern
 **Модуль**: MCP / scheduled demo
 **Приоритет**: MEDIUM
-**Recurrence-Count**: 2
+**Recurrence-Count**: 3
 
 ### Суть
 Для scheduled MCP homework с отдельным `mcp-server` и `coding_writer` держать ownership раздельным: `mcp-server` — scheduled producer/storage/MCP read tools, `coding_writer` — LLM agent loop/demo surface. Если acceptance говорит "агент", demo must include real LLM interpretation, not only polling output.
@@ -306,11 +306,52 @@ Day 15 live flow должен выводить trusted verification из approve
 Когда задача требует MCP tool с отложенным/периодическим выполнением, persisted aggregate и наглядный demo agent workflow через несколько проектов.
 
 ### Применение
-Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent side — periodic LLM loop over MCP aggregate. Demo доказывать двумя поверхностями: worker ticks и LLM-generated summaries.
+Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent side — periodic LLM loop over MCP aggregate. Demo доказывать теми поверхностями, которые реально участвуют в transport: worker ticks и LLM-generated summaries для worker-based flows; no fake "server terminal" for stdio flows because the client spawns that process itself.
 
 ### Evidence
 - 2026-06-26 Day 18 implementation split: `/Users/nikita/Documents/mcp-server` owns GitHub scheduled worker and JSON/JSONL aggregate, while `coding_writer` owns `cw mcp watch` and two-terminal proof.
 - 2026-06-26 user clarified strict acceptance: "Не сервис, а агент. С ллм под капотом"; `cw mcp watch-agent` was added to call MCP summary, pass aggregate to active LLM, and print periodic LLM summary.
+- 2026-06-27 Day 19 review found README showed a manually-started stdio `server.py` terminal that `cw mcp add --command ...` did not consume; demo docs were corrected to show `cw` spawning stdio MCP itself.
+
+---
+
+## 2026-06-27 | multi-repo-change-commit-boundary
+**Тип**: correction
+**Модуль**: git / multi-repo tasks
+**Приоритет**: MEDIUM
+**Recurrence-Count**: 1
+
+### Суть
+Когда задача меняет несколько git repositories, commit в текущем repo не покрывает sibling repo changes.
+
+### Когда важно
+Когда работа затрагивает `coding_writer` и внешний проект, например `/Users/nikita/Documents/mcp-server`.
+
+### Применение
+Перед утверждением "все изменения закоммичены" явно проверять и сообщать per-repo commit state: какой repo закоммичен, какой repo ещё dirty, и почему один commit не может покрыть оба.
+
+### Evidence
+- 2026-06-27 Day 19 commit was created in `coding_writer`, while `/Users/nikita/Documents/mcp-server` still had uncommitted Day 19 changes because it is a separate git repository.
+
+---
+
+## 2026-06-27 | llm-review-cache-ignore
+**Тип**: pattern
+**Модуль**: review harness / git hygiene
+**Приоритет**: LOW
+**Recurrence-Count**: 1
+
+### Суть
+Local `/review` harness can create `.llm-review/cache/**`; these are runtime cache files, not product artifacts.
+
+### Когда важно
+After running `/review`, `llm_auto_review`, or review prompt generation that builds symbol indexes/cache.
+
+### Применение
+Keep `.llm-review/` ignored in repo `.gitignore`; do not stage review cache files.
+
+### Evidence
+- 2026-06-27 `/review extreme -n 1` created `.llm-review/cache/symbol_index/*.json` as untracked files until `.gitignore` was updated.
 
 ---
 <!-- LEARNINGS:END -->
