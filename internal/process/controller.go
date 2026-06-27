@@ -1564,12 +1564,7 @@ func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID s
 			working = append(working, toolMsg)
 			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_result", nil, "", "", res.Model, auditReason(call.Function.Name))
 		}
-		return c.Provider.Complete(ctx, providers.CompletionRequest{
-			Purpose:  providers.PurposeChat,
-			Model:    c.Model,
-			Messages: working,
-			JSONMode: jsonMode,
-		})
+		continue
 	}
 	return providers.CompletionResponse{}, app.NewError(app.CategoryValidation, "mcp_tool_loop_limit", "MCP tool call limit reached", nil)
 }

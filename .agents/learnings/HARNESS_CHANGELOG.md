@@ -82,4 +82,10 @@
 **Reason**: Captured Day 18 lessons: scheduled MCP demos need producer/consumer ownership split, Go cache sandbox rerun evidence, and same-package helper processes for stdio tests.
 
 ---
+## 2026-06-26 | Day 18 LLM agent demo
+**Applied**: LEARNING-001
+**Files**: .agents/learnings/LEARNINGS.md
+**Reason**: Captured that strict "agent 24/7" scheduled MCP demos require a real LLM loop over MCP aggregates, not only polling output.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

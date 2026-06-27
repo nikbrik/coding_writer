@@ -1,6 +1,7 @@
 package process
 
 import (
+	"encoding/json"
 	"context"
 	"errors"
 	"strings"
@@ -87,6 +88,7 @@ func newTestController(t *testing.T) (*ProcessController, *providers.FakeProvide
 type fakeToolRunner struct {
 	tools []providers.ToolDefinition
 	calls []app.ChatToolCall
+	errFn func(app.ChatToolCall) (string, bool)
 	err   error
 }
 
@@ -98,8 +100,43 @@ func (r *fakeToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinition,
 }
 
 func (r *fakeToolRunner) Run(ctx context.Context, call app.ChatToolCall) (app.ChatMessage, error) {
+	_ = ctx
 	r.calls = append(r.calls, call)
+	if r.err != nil {
+		return app.ChatMessage{}, r.err
+	}
+	if r.errFn != nil {
+		if text, ok := r.errFn(call); ok {
+			return ToolResultMessage(call, text), nil
+		}
+	}
 	return ToolResultMessage(call, `{"server":"github-api","tool":"github_repo_info","isError":false,"parsed":{"full_name":"nikbrik/coding_writer","default_branch":"main","language":"Go"}}`), nil
+}
+
+type day19ToolRunner struct {
+	tools  []providers.ToolDefinition
+	calls  []app.ChatToolCall
+	byName map[string]string
+	err    error
+}
+
+func (r *day19ToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinition, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return append([]providers.ToolDefinition(nil), r.tools...), nil
+}
+
+func (r *day19ToolRunner) Run(ctx context.Context, call app.ChatToolCall) (app.ChatMessage, error) {
+	_ = ctx
+	r.calls = append(r.calls, call)
+	if r.err != nil {
+		return app.ChatMessage{}, r.err
+	}
+	if payload, ok := r.byName[call.Function.Name]; ok {
+		return ToolResultMessage(call, payload), nil
+	}
+	return ToolResultMessage(call, `{"isError":true,"error":"tool missing scripted payload"}`), nil
 }
 
 func issueTestEvidence(t *testing.T, dir string, task app.TaskState, sessionID, source string) []string {
@@ -503,6 +540,121 @@ func TestProcessControllerRunsAllowlistedToolCallBeforeFinalAnswer(t *testing.T)
 	}
 	if chatCalls(fake.SnapshotCalls()) != 2 {
 		t.Fatalf("expected two chat calls around tool execution, got %+v", fake.SnapshotCalls())
+	}
+}
+
+func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	runner := &day19ToolRunner{tools: []providers.ToolDefinition{
+		{
+			Type: "function",
+			Function: providers.ToolFunction{
+				Name:        "day19_github_tools__github_search_repos",
+				Description: "Search repositories and persist search artifact.",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		},
+		{
+			Type: "function",
+			Function: providers.ToolFunction{
+				Name:        "day19_github_tools__github_make_report",
+				Description: "Build report from search artifact.",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		},
+		{
+			Type: "function",
+			Function: providers.ToolFunction{
+				Name:        "day19_github_tools__save_report_to_file",
+				Description: "Save report artifact to a file.",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		},
+	}, byName: map[string]string{
+		"day19_github_tools__github_search_repos": `{"server":"day19-github-tools","tool":"github_search_repos","isError":false,"parsed":{"search_id":"search_day19_1","query":"mcp server python","returned":2}}`,
+		"day19_github_tools__github_make_report":   `{"server":"day19-github-tools","tool":"github_make_report","isError":false,"parsed":{"report_id":"report_day19_2","search_id":"search_day19_1"}}`,
+		"day19_github_tools__save_report_to_file":  `{"server":"day19-github-tools","tool":"save_report_to_file","isError":false,"parsed":{"report_id":"report_day19_2","path":"/tmp/day19.md"}}`,
+	}}
+	ctrl.ToolRunner = runner
+	fake.ChatResponses = []string{"", "", "", "Day 19 report saved to /tmp/day19.md"}
+	fake.ChatToolCalls = [][]app.ChatToolCall{{
+		{
+			ID:   "call_1",
+			Type: "function",
+			Function: app.ChatToolCallFunction{
+				Name:      "day19_github_tools__github_search_repos",
+				Arguments: `{"query":"mcp server python","limit":3}`,
+			},
+		},
+	}, {
+		{
+			ID:   "call_2",
+			Type: "function",
+			Function: app.ChatToolCallFunction{
+				Name:      "day19_github_tools__github_make_report",
+				Arguments: `{"search_id":"search_day19_1"}`,
+			},
+		},
+	}, {
+		{
+			ID:   "call_3",
+			Type: "function",
+			Function: app.ChatToolCallFunction{
+				Name:      "day19_github_tools__save_report_to_file",
+				Arguments: `{"report_id":"report_day19_2"}`,
+			},
+		},
+	}}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s_day19", Input: "Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Answer, "/tmp/day19.md") {
+		t.Fatalf("final answer does not include output path: %q", res.Answer)
+	}
+	if len(runner.calls) != 3 {
+		t.Fatalf("expected three tool calls, got %d", len(runner.calls))
+	}
+	if runner.calls[0].Function.Name != "day19_github_tools__github_search_repos" {
+		t.Fatalf("first tool mismatch: %s", runner.calls[0].Function.Name)
+	}
+	if runner.calls[1].Function.Name != "day19_github_tools__github_make_report" {
+		t.Fatalf("second tool mismatch: %s", runner.calls[1].Function.Name)
+	}
+	if runner.calls[2].Function.Name != "day19_github_tools__save_report_to_file" {
+		t.Fatalf("third tool mismatch: %s", runner.calls[2].Function.Name)
+	}
+	var secondArgs struct {
+		SearchID string `json:"search_id"`
+	}
+	if err := json.Unmarshal([]byte(runner.calls[1].Function.Arguments), &secondArgs); err != nil {
+		t.Fatalf("invalid second tool args: %v", err)
+	}
+	if secondArgs.SearchID != "search_day19_1" {
+		t.Fatalf("expected search_id from first tool, got %q", secondArgs.SearchID)
+	}
+	var thirdArgs struct {
+		ReportID string `json:"report_id"`
+	}
+	if err := json.Unmarshal([]byte(runner.calls[2].Function.Arguments), &thirdArgs); err != nil {
+		t.Fatalf("invalid third tool args: %v", err)
+	}
+	if thirdArgs.ReportID != "report_day19_2" {
+		t.Fatalf("expected report_id from second tool, got %q", thirdArgs.ReportID)
+	}
+	if chatCalls(fake.SnapshotCalls()) != 4 {
+		t.Fatalf("expected 4 chat calls in tool loop, got %d", chatCalls(fake.SnapshotCalls()))
+	}
+	events, err := ctrl.AuditStore.Latest(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditDecisionCount(events, "mcp_tool_call") != 3 {
+		t.Fatalf("expected 3 tool_call audit events, got %d", auditDecisionCount(events, "mcp_tool_call"))
+	}
+	if auditDecisionCount(events, "mcp_tool_result") != 3 {
+		t.Fatalf("expected 3 tool_result audit events, got %d", auditDecisionCount(events, "mcp_tool_result"))
 	}
 }
 

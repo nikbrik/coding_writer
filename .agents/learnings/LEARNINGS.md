@@ -297,19 +297,20 @@ Day 15 live flow должен выводить trusted verification из approve
 **Тип**: pattern
 **Модуль**: MCP / scheduled demo
 **Приоритет**: MEDIUM
-**Recurrence-Count**: 1
+**Recurrence-Count**: 2
 
 ### Суть
-Для scheduled MCP homework с отдельным `mcp-server` и `coding_writer` держать ownership раздельным: `mcp-server` — scheduled producer/storage/MCP read tools, `coding_writer` — scheduled consumer/watch/demo surface.
+Для scheduled MCP homework с отдельным `mcp-server` и `coding_writer` держать ownership раздельным: `mcp-server` — scheduled producer/storage/MCP read tools, `coding_writer` — LLM agent loop/demo surface. Если acceptance говорит "агент", demo must include real LLM interpretation, not only polling output.
 
 ### Когда важно
 Когда задача требует MCP tool с отложенным/периодическим выполнением, persisted aggregate и наглядный demo agent workflow через несколько проектов.
 
 ### Применение
-Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent/client side — polling/watch UI. Demo доказывать двумя поверхностями: worker ticks и consumer summaries.
+Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent side — periodic LLM loop over MCP aggregate. Demo доказывать двумя поверхностями: worker ticks и LLM-generated summaries.
 
 ### Evidence
 - 2026-06-26 Day 18 implementation split: `/Users/nikita/Documents/mcp-server` owns GitHub scheduled worker and JSON/JSONL aggregate, while `coding_writer` owns `cw mcp watch` and two-terminal proof.
+- 2026-06-26 user clarified strict acceptance: "Не сервис, а агент. С ллм под капотом"; `cw mcp watch-agent` was added to call MCP summary, pass aggregate to active LLM, and print periodic LLM summary.
 
 ---
 <!-- LEARNINGS:END -->

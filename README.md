@@ -228,6 +228,48 @@ cw mcp add day18-github-watch \
 cw mcp watch-agent day18-github-watch github_watch_summary
 ```
 
+Day 19: chain from one MCP server в обычном тексте (без `pipeline-agent`)
+
+В одном запросе `cw chat`/TUI:
+
+```bash
+Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл.
+```
+
+LLM сам должен вызвать последовательно:
+`github_search_repos` → `github_make_report` → `save_report_to_file`.
+
+Демонстрационный setup:
+
+```bash
+# terminal 1: MCP server
+cd /Users/nikita/Documents/mcp-server
+python3 server.py --storage-dir .data/day19
+
+# terminal 2: coding_writer chat
+cd /Users/nikita/code/coding_writer
+export ASSISTANT_STORAGE_DIR=/Users/nikita/code/coding_writer/.assistant/day19-manual
+cw mcp add day19-github-tools \
+  --command python3 \
+  --arg /Users/nikita/Documents/mcp-server/server.py \
+  --arg --storage-dir \
+  --arg /Users/nikita/Documents/mcp-server/.data/day19 \
+  --allow-tool github_search_repos \
+  --allow-tool github_make_report \
+  --allow-tool save_report_to_file \
+  --auto-approve
+
+cw init --model google/gemini-3.1-flash-lite
+cw chat --once --input "Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл."
+```
+
+Проверяем подтверждение:
+
+- `process_audit.jsonl` содержит 3 пары `mcp_tool_call`/`mcp_tool_result` для `search -> report -> save`.
+- ассистентный ответ содержит путь:
+  `/Users/nikita/Documents/mcp-server/.data/day19/output/report_<id>.md`.
+- файл существует и не пустой.
+
 ## Запуск
 
 Сборка локального бинарника:
