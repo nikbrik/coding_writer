@@ -505,13 +505,16 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "provider_call", nil, "", "", c.Model, auditRetry(attempt)); auditErr != nil {
 			return result, auditErr
 		}
-		res, err := c.completePrimary(ctx, sessionID, taskPtr, stage, action, input, messages)
+		completion, err := c.completePrimary(ctx, sessionID, taskPtr, stage, action, input, messages)
 		if err != nil {
 			if auditErr := c.saveAudit(sessionID, taskPtr, stage, action, "rejected", nil, "", "", c.Model, auditError(err)); auditErr != nil {
 				result.Warnings = append(result.Warnings, "process audit skipped: "+app.AsError(auditErr).Code)
 			}
 			return result, err
 		}
+		res := completion.Response
+		trustedEvidence := append([]string(nil), input.TrustedEvidence...)
+		trustedEvidence = append(trustedEvidence, completion.TrustedEvidence...)
 		lastRaw = res.Message.Content
 		result.Model = res.Model
 		if c.Invariants != nil {
@@ -531,7 +534,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		parsed, parseErr = Parse(stage, action, lastRaw)
 		if parseErr == nil {
 			normalizeParsedActionForOutput(stage, &parsed)
-			parsed.TrustedEvidence = append([]string(nil), input.TrustedEvidence...)
+			parsed.TrustedEvidence = append([]string(nil), trustedEvidence...)
 			if c.SemanticValidator != nil {
 				validatorErrors = RunStructuralValidators(parsed)
 				if len(validatorErrors) == 0 {
@@ -545,7 +548,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 						ActionKind:      action,
 						Task:            taskPtr,
 						Parsed:          parsed,
-						TrustedEvidence: input.TrustedEvidence,
+						TrustedEvidence: trustedEvidence,
 					})
 					if err != nil {
 						if shouldSkipBrokenSemanticValidator(err, parsed) {
@@ -1452,9 +1455,14 @@ func (c *ProcessController) reviewerEvidenceContext(task *app.TaskState, session
 	return out
 }
 
-func (c *ProcessController) completePrimary(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, input ExchangeInput, messages []app.ChatMessage) (providers.CompletionResponse, error) {
+type primaryCompletion struct {
+	Response        providers.CompletionResponse
+	TrustedEvidence []string
+}
+
+func (c *ProcessController) completePrimary(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, input ExchangeInput, messages []app.ChatMessage) (primaryCompletion, error) {
 	if c.Provider == nil {
-		return providers.CompletionResponse{}, app.NewError(app.CategoryProvider, "missing_provider", "provider is required", nil)
+		return primaryCompletion{}, app.NewError(app.CategoryProvider, "missing_provider", "provider is required", nil)
 	}
 	if stage == app.StagePlanning && action != ActionAnswerQuestion && c.PlanningSwarm != nil {
 		c.PlanningSwarm.Audit = func(role AgentRole, microtaskID string, round int, decision string) {
@@ -1462,17 +1470,17 @@ func (c *ProcessController) completePrimary(ctx context.Context, sessionID strin
 		}
 		swarm, err := c.PlanningSwarm.Run(ctx, sessionID, task, input.Input)
 		if err != nil {
-			return providers.CompletionResponse{}, err
+			return primaryCompletion{}, err
 		}
 		for _, review := range swarm.Reviews {
 			reason := planningSpecialistSummary(review)
 			_ = c.saveAudit(sessionID, task, stage, action, "planning_specialist_summary", nil, "", "", c.Model, auditAgent(AgentRole(review.Role), ""), auditReason(reason))
 		}
 		_ = c.saveAudit(sessionID, task, stage, action, "planning_swarm_final", nil, "", "", c.Model, auditReason(planningSwarmSummary(swarm)))
-		return providers.CompletionResponse{
+		return primaryCompletion{Response: providers.CompletionResponse{
 			Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: swarm.Raw, CreatedAt: time.Now().UTC()},
 			Model:   c.Model,
-		}, nil
+		}}, nil
 	}
 	if (stage == app.StageExecution || stage == app.StageValidation) && c.AgentRunner != nil {
 		role := AgentRoleExecutor
@@ -1496,46 +1504,50 @@ func (c *ProcessController) completePrimary(ctx context.Context, sessionID strin
 			TrustedEvidence: input.TrustedEvidence,
 		})
 		if err != nil {
-			return providers.CompletionResponse{}, err
+			return primaryCompletion{}, err
 		}
 		_ = c.saveAudit(sessionID, task, stage, action, "agent_accepted", nil, "", "", run.Model, auditAgent(role, microtaskID))
-		return providers.CompletionResponse{
+		return primaryCompletion{Response: providers.CompletionResponse{
 			Message: app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleAssistant, Content: run.Raw, CreatedAt: time.Now().UTC()},
 			Model:   run.Model,
-		}, nil
+		}}, nil
 	}
 	return c.completePrimaryChat(ctx, sessionID, task, stage, action, messages, RequiresSchema(action))
 }
 
-func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, messages []app.ChatMessage, jsonMode bool) (providers.CompletionResponse, error) {
+func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID string, task *app.TaskState, stage app.TaskStage, action ActionKind, messages []app.ChatMessage, jsonMode bool) (primaryCompletion, error) {
 	if c.ToolRunner == nil {
-		return c.Provider.Complete(ctx, providers.CompletionRequest{
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:  providers.PurposeChat,
 			Model:    c.Model,
 			Messages: messages,
 			JSONMode: jsonMode,
 		})
+		return primaryCompletion{Response: res}, err
 	}
 	tools, err := c.ToolRunner.Tools(ctx)
 	if err != nil {
 		_ = c.saveAudit(sessionID, task, stage, action, "mcp_tools_unavailable", []string{app.AsError(err).Message}, "", "", c.Model, auditError(err))
-		return c.Provider.Complete(ctx, providers.CompletionRequest{
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:  providers.PurposeChat,
 			Model:    c.Model,
 			Messages: messages,
 			JSONMode: jsonMode,
 		})
+		return primaryCompletion{Response: res}, err
 	}
 	if len(tools) == 0 {
-		return c.Provider.Complete(ctx, providers.CompletionRequest{
+		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:  providers.PurposeChat,
 			Model:    c.Model,
 			Messages: messages,
 			JSONMode: jsonMode,
 		})
+		return primaryCompletion{Response: res}, err
 	}
 	parallel := false
 	working := append([]app.ChatMessage(nil), messages...)
+	trustedEvidence := []string{}
 	for i := 0; i < maxPrimaryToolCalls; i++ {
 		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:           providers.PurposeChat,
@@ -1547,10 +1559,10 @@ func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID s
 			ParallelToolCalls: &parallel,
 		})
 		if err != nil {
-			return res, err
+			return primaryCompletion{Response: res, TrustedEvidence: trustedEvidence}, err
 		}
 		if len(res.ToolCalls) == 0 {
-			return res, nil
+			return primaryCompletion{Response: res, TrustedEvidence: trustedEvidence}, nil
 		}
 		assistant := res.Message
 		assistant.ToolCalls = append([]app.ChatToolCall(nil), res.ToolCalls...)
@@ -1559,14 +1571,24 @@ func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID s
 			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_call", nil, "", "", res.Model, auditReason(call.Function.Name))
 			toolMsg, err := c.ToolRunner.Run(ctx, call)
 			if err != nil {
-				return providers.CompletionResponse{}, err
+				return primaryCompletion{}, err
 			}
 			working = append(working, toolMsg)
+			trustedEvidence = append(trustedEvidence, mcpToolTrustedEvidence(call.Function.Name, toolMsg.Content))
 			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_result", nil, "", "", res.Model, auditReason(call.Function.Name))
 		}
 		continue
 	}
-	return providers.CompletionResponse{}, app.NewError(app.CategoryValidation, "mcp_tool_loop_limit", "MCP tool call limit reached", nil)
+	return primaryCompletion{}, app.NewError(app.CategoryValidation, "mcp_tool_loop_limit", "MCP tool call limit reached", nil)
+}
+
+func mcpToolTrustedEvidence(toolName, result string) string {
+	result = strings.TrimSpace(result)
+	const maxResult = 1200
+	if len(result) > maxResult {
+		result = result[:maxResult] + "...(truncated)"
+	}
+	return fmt.Sprintf("app-issued MCP tool evidence: tool=%s result=%s", toolName, result)
 }
 
 func currentPlanItem(task *app.TaskState) string {

@@ -646,29 +646,25 @@ go test ./...
 
 ## Demo Setup
 
-### Terminal 1: register MCP server if needed
+### Terminal 1: start normal TUI/chat
 
-From `coding_writer` repo:
+From `coding_writer` repo, start the real product UI:
 
 ```bash
 cd /Users/nikita/code/coding_writer
-
-cw mcp add day19-github-tools \
-  --command python3 \
-  --arg /Users/nikita/Documents/mcp-server/server.py \
-  --arg --storage-dir \
-  --arg /Users/nikita/Documents/mcp-server/.data/day19 \
-  --allow-tool github_search_repos \
-  --allow-tool github_make_report \
-  --allow-tool save_report_to_file \
-  --auto-approve \
-  --read-only
+cw
 ```
 
-Check tools:
+Register MCP server inside TUI with a slash command:
 
-```bash
-cw mcp tools day19-github-tools
+```text
+/mcp add day19-github-tools --command python3 --arg /Users/nikita/Documents/mcp-server/server.py --arg --storage-dir --arg /Users/nikita/Documents/mcp-server/.data/day19 --allow-tool github_search_repos --allow-tool github_make_report --allow-tool save_report_to_file --auto-approve
+```
+
+Check tools inside TUI:
+
+```text
+/mcp tools day19-github-tools
 ```
 
 Expected tools:
@@ -682,16 +678,7 @@ save_report_to_file
 Note:
 
 - `save_report_to_file` writes to the MCP server local `.data/day19/output/`.
-- Even with `--read-only`, current local meaning may be app permission-oriented. If this blocks save, document why and register without `--read-only` only if the app's MCP permission model requires it. Do not broaden permissions unless necessary.
-
-### Terminal 2: start normal TUI/chat
-
-Run normal app:
-
-```bash
-cd /Users/nikita/code/coding_writer
-cw
-```
+- Top-level `cw mcp ...` commands are acceptable for setup debugging and automated smoke, but they are not accepted as the Day 19 product demo.
 
 Use plain text request in TUI:
 
@@ -895,11 +882,16 @@ Manual:
 
 ```bash
 cd /Users/nikita/code/coding_writer
-cw mcp tools day19-github-tools
 cw
 ```
 
 Then in TUI:
+
+```text
+/mcp tools day19-github-tools
+```
+
+Then send the normal prompt:
 
 ```text
 Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл.
@@ -918,4 +910,3 @@ MCP tools не вызывают LLM; они только выполняют св
 После выполнения мы проверяем transcript и persisted artifacts:
 search_id передан в report tool, report_id передан в save tool, markdown файл создан.
 ```
-

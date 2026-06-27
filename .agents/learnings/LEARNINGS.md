@@ -159,23 +159,24 @@ README для новой фичи должен сначала объяснять
 - 2026-06-19 README/demo docs для Day 15 сначала были сведены к ссылкам/commands; пользователь потребовал консистентное описание системы со схемами.
 
 ---
-## 2026-06-19 | day15-primary-demo-one-repl-app-owned-verification
+## 2026-06-19 | day15-primary-demo-one-tui-app-owned-verification
 **Тип**: correction
 **Модуль**: manual testing
 **Приоритет**: HIGH
 **Recurrence-Count**: 1
 
 ### Суть
-Primary Day 15 demo/manual proof должен быть одним `assistant chat` REPL session: пользователь запускает chat один раз и дальше пишет normal messages inside REPL. App-owned trusted verification может запускаться после approval approved plan или semantic check/finish intent; пользователь не вводит точную command и не управляет FSM командами.
+Primary Day 15+ demo/manual proof должен быть одним `cw` TUI session: пользователь запускает `cw` один раз и дальше пишет normal messages inside TUI. Старые формулировки `assistant chat` / REPL считаются legacy wording and must not replace the TUI proof. App-owned trusted verification может запускаться после approval approved plan или semantic check/finish intent; пользователь не вводит точную command и не управляет FSM командами.
 
 ### Когда важно
 Когда обновляется Day 15 demo-дока, manual regression script, PRD/FRD/architecture или live acceptance proof.
 
 ### Применение
-Не заменять primary demo на серию `assistant chat --once --input ...`. Сценарий должен сохранять human transcript, проверять отсутствие raw stage JSON, final state `done/none/ready_for_done`, app-issued evidence, audit roles planning specialists/orchestrator/executor/reviewer, provider `google/gemini-3.1-flash-lite` для live proof.
+Не заменять primary demo на серию `assistant chat --once --input ...`, `cw chat --once`, `cw mcp ...`, smoke scripts или direct storage edits. Сценарий должен идти через `cw` TUI, сохранять human transcript, проверять отсутствие raw stage JSON, final state `done/none/ready_for_done`, app-issued evidence, audit roles planning specialists/orchestrator/executor/reviewer, provider `google/gemini-3.1-flash-lite` для live proof.
 
 ### Evidence
-- 2026-06-19 live Gemini proof passed as one REPL process with app-owned `go test ./manual_scratch/day14_stock_profit` evidence; prior five-command `--once` flow was rejected as non-user scenario.
+- 2026-06-19 live Gemini proof passed as one interactive process with app-owned `go test ./manual_scratch/day14_stock_profit` evidence; prior five-command `--once` flow was rejected as non-user scenario.
+- 2026-06-27 hard rule update: current and future user-facing homework demos default to real `cw` TUI, not legacy `assistant chat` / CLI-only flows.
 
 ---
 ## 2026-06-19 | product-north-star-coding-agent-cli
@@ -210,7 +211,7 @@ Day 15 demo scenario должен жить только в общем `docs/manu
 Когда обновляется Day 15 manual demo, deterministic smoke, README/PRD/FRD/architecture links или сценарий для записи видео.
 
 ### Применение
-Держать Day 15 canonical scenario в `docs/manual-testing-demo.md`; если нужен smoke, он должен повторять тот же user flow через один `assistant chat` process. Для Day 15 использовать маленькую coding task вроде `Contains Duplicate`, где пользователь просит решить задачу, а приложение само выводит проверку из approved plan/criteria.
+Держать Day 15 canonical scenario в `docs/manual-testing-demo.md`; если нужен smoke, он должен повторять тот же user flow через один `cw` TUI process. Для Day 15 использовать маленькую coding task вроде `Contains Duplicate`, где пользователь просит решить задачу, а приложение само выводит проверку из approved plan/criteria.
 
 ### Evidence
 - 2026-06-19 пользователь указал, что Day 15 demo хранился в двух файлах и содержал странную задачу "проверить существующий Go package"; scenario заменён на `Contains Duplicate` и focused doc удалён.
@@ -306,11 +307,11 @@ Day 15 live flow должен выводить trusted verification из approve
 Когда задача требует MCP tool с отложенным/периодическим выполнением, persisted aggregate и наглядный demo agent workflow через несколько проектов.
 
 ### Применение
-Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent side — periodic LLM loop over MCP aggregate. Demo доказывать теми поверхностями, которые реально участвуют в transport: worker ticks и LLM-generated summaries для worker-based flows; no fake "server terminal" for stdio flows because the client spawns that process itself.
+Не привязывать 24/7 работу к lifetime stdio MCP call. Делать worker/producer отдельно, MCP tools — read-only над persisted data, а agent side — periodic LLM loop over MCP aggregate. Primary homework demo доказывать через реальный `cw` TUI, когда пользователь-facing acceptance не просит иное. CLI loops such as `cw mcp watch-agent` допустимы как legacy/debug/smoke helpers, but must not be the default demo template. Для worker-based flows можно дополнительно показывать worker ticks; no fake "server terminal" for stdio flows because the client spawns that process itself.
 
 ### Evidence
-- 2026-06-26 Day 18 implementation split: `/Users/nikita/Documents/mcp-server` owns GitHub scheduled worker and JSON/JSONL aggregate, while `coding_writer` owns `cw mcp watch` and two-terminal proof.
-- 2026-06-26 user clarified strict acceptance: "Не сервис, а агент. С ллм под капотом"; `cw mcp watch-agent` was added to call MCP summary, pass aggregate to active LLM, and print periodic LLM summary.
+- 2026-06-26 Day 18 implementation split: `/Users/nikita/Documents/mcp-server` owns GitHub scheduled worker and JSON/JSONL aggregate, while `coding_writer` owns the LLM consumer/agent demo surface.
+- 2026-06-26 user clarified strict acceptance: "Не сервис, а агент. С ллм под капотом"; `cw mcp watch-agent` was added to call MCP summary, pass aggregate to active LLM, and print periodic LLM summary, but later TUI-first policy makes this a helper unless explicitly requested.
 - 2026-06-27 Day 19 review found README showed a manually-started stdio `server.py` terminal that `cw mcp add --command ...` did not consume; demo docs were corrected to show `cw` spawning stdio MCP itself.
 
 ---

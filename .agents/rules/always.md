@@ -15,6 +15,11 @@ Load these canonical shared rule files before work:
 
 - Canonical validation policy lives in `.agents/rules/validation.md`.
 
+## User-Facing Surface
+
+- User-facing functionality and homework demos default to the real `cw` TUI. Do not substitute `cw chat --once`, `cw mcp ...`, direct storage edits, smoke scripts, or other CLI-only paths as acceptance proof unless the user explicitly asks for CLI/debug/smoke.
+- CLI commands are allowed for setup, deterministic tests, recovery, and diagnostics. The primary product proof must still go through TUI interactions such as normal text input and slash commands.
+
 ## Style
 
 - Default reply style: caveman ultra.

@@ -1,8 +1,8 @@
 package process
 
 import (
-	"encoding/json"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -546,6 +546,7 @@ func TestProcessControllerRunsAllowlistedToolCallBeforeFinalAnswer(t *testing.T)
 func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
 	runner := &day19ToolRunner{tools: []providers.ToolDefinition{
 		{
 			Type: "function",
@@ -573,11 +574,15 @@ func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
 		},
 	}, byName: map[string]string{
 		"day19_github_tools__github_search_repos": `{"server":"day19-github-tools","tool":"github_search_repos","isError":false,"parsed":{"search_id":"search_day19_1","query":"mcp server python","returned":2}}`,
-		"day19_github_tools__github_make_report":   `{"server":"day19-github-tools","tool":"github_make_report","isError":false,"parsed":{"report_id":"report_day19_2","search_id":"search_day19_1"}}`,
-		"day19_github_tools__save_report_to_file":  `{"server":"day19-github-tools","tool":"save_report_to_file","isError":false,"parsed":{"report_id":"report_day19_2","path":"/tmp/day19.md"}}`,
+		"day19_github_tools__github_make_report":  `{"server":"day19-github-tools","tool":"github_make_report","isError":false,"parsed":{"report_id":"report_day19_2","search_id":"search_day19_1"}}`,
+		"day19_github_tools__save_report_to_file": `{"server":"day19-github-tools","tool":"save_report_to_file","isError":false,"parsed":{"report_id":"report_day19_2","path":"/tmp/day19.md"}}`,
 	}}
 	ctrl.ToolRunner = runner
 	fake.ChatResponses = []string{"", "", "", "Day 19 report saved to /tmp/day19.md"}
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.9,"reason":"user asks agent to run MCP tool pipeline"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
 	fake.ChatToolCalls = [][]app.ChatToolCall{{
 		{
 			ID:   "call_1",
@@ -645,6 +650,33 @@ func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
 	}
 	if chatCalls(fake.SnapshotCalls()) != 4 {
 		t.Fatalf("expected 4 chat calls in tool loop, got %d", chatCalls(fake.SnapshotCalls()))
+	}
+	if validatorCalls(fake.SnapshotCalls()) != 2 {
+		t.Fatalf("expected intent and output validator calls, got %+v", fake.SnapshotCalls())
+	}
+	validatorPayload := ""
+	for _, call := range fake.SnapshotCalls() {
+		if call.Purpose != providers.PurposeValidator || len(call.Messages) < 2 {
+			continue
+		}
+		if strings.Contains(call.Messages[1].Content, `"parsed_response"`) {
+			validatorPayload = call.Messages[1].Content
+		}
+	}
+	if validatorPayload == "" {
+		t.Fatalf("semantic output validator payload not found: %+v", fake.SnapshotCalls())
+	}
+	for _, want := range []string{
+		"day19_github_tools__github_search_repos",
+		"day19_github_tools__github_make_report",
+		"day19_github_tools__save_report_to_file",
+		"search_day19_1",
+		"report_day19_2",
+		"/tmp/day19.md",
+	} {
+		if !strings.Contains(validatorPayload, want) {
+			t.Fatalf("validator payload missing trusted MCP evidence %q:\n%s", want, validatorPayload)
+		}
 	}
 	events, err := ctrl.AuditStore.Latest(20)
 	if err != nil {
