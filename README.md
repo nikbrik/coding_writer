@@ -186,6 +186,236 @@ sequenceDiagram
 
 Вывод для пользователя показывает вклад роли, количество замечаний и предложений, главное замечание и предложенные изменения, если они есть.
 
+## Как работает MCP
+
+MCP в `coding_writer` - это не отдельный режим и не ручной pipeline. Пользователь
+подключает один или несколько MCP-серверов, а дальше пишет обычный запрос в `cw`
+TUI. Приложение показывает модели только разрешённые tools, принимает tool calls
+от модели, маршрутизирует каждый вызов к нужному серверу, проверяет policy и
+записывает ordered audit trail.
+
+Главная идея: модель выбирает tool по задаче, но Go-код решает, какие tools
+вообще видны модели и можно ли выполнить конкретный вызов.
+
+```mermaid
+flowchart TD
+    User["Пользователь в TUI"] --> Connect["/mcp connect или /mcp allow"]
+    Connect --> Config["config.json<br/>mcp_servers[]"]
+    Config --> Registry["MCP tool registry"]
+    Registry --> ProviderTools["OpenRouter tools<br/>server__tool"]
+    User --> Prompt["Обычный chat-запрос"]
+    ProviderTools --> Model["Модель выбирает tool"]
+    Prompt --> Model
+    Model --> Call["tool call<br/>name=server__tool<br/>arguments=json"]
+    Call --> Router["MCP router"]
+    Router --> Policy["Policy gate<br/>approval, permission, path"]
+    Policy -->|allowed| Server["stdio MCP server process"]
+    Policy -->|blocked| Blocked["tool result<br/>isError=true"]
+    Server --> Result["MCP result"]
+    Result --> Audit["process_audit.jsonl<br/>ordinal, server, tool, status"]
+    Blocked --> Audit
+    Audit --> Model
+    Model --> Answer["Финальный ответ пользователю"]
+```
+
+### Что хранится в конфиге
+
+Каждый MCP server хранится в `AppConfig.MCPServers`. Это декларация того, как
+запустить сервер и какие tools разрешены.
+
+```mermaid
+classDiagram
+    class AppConfig {
+        MCPServers[] mcp_servers
+    }
+    class MCPServerConfig {
+        name
+        transport
+        command
+        args[]
+        env_keys[]
+        enabled
+        tools[]
+    }
+    class MCPToolConfig {
+        name
+        permission
+        approval
+        path_prefixes[]
+        description
+    }
+    AppConfig --> MCPServerConfig
+    MCPServerConfig --> MCPToolConfig
+```
+
+Пример подключения:
+
+```text
+/mcp connect github bin:.codingwriter/mcp-bin/github-mcp-server --env GITHUB_PERSONAL_ACCESS_TOKEN --allow search_repositories -- stdio --read-only --toolsets repos
+/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/day20 -- .data/day20
+```
+
+Что означает эта запись:
+
+- `github` и `filesystem` - имена серверов внутри приложения.
+- `bin:` запускает локальный бинарник; `npm:` разворачивается в `npx -y`.
+- аргументы после `--` передаются самому MCP server.
+- `--env GITHUB_PERSONAL_ACCESS_TOKEN` передаёт только имя переменной; значение
+  токена не пишется в config.
+- `--allow write_file:write:auto:.data/day20` разрешает tool `write_file`,
+  помечает его как write tool, разрешает auto execution и ограничивает путь
+  префиксом `.data/day20`.
+
+### Как tools попадают к модели
+
+Перед вызовом модели `appMCPToolRunner.Tools()` проходит по включённым серверам:
+
+1. стартует configured stdio MCP server;
+2. выполняет `initialize`;
+3. запрашивает `list_tools`;
+4. оставляет только tools из allowlist;
+5. отдаёт модели function tools с именами вида `server__tool`.
+
+```mermaid
+sequenceDiagram
+    participant R as appMCPToolRunner
+    participant S as MCP server
+    participant M as Model provider
+
+    R->>S: start command + args
+    R->>S: initialize
+    R->>S: list_tools
+    S-->>R: tools + input_schema
+    R->>R: filter by allowlist
+    R-->>M: function tools: github__search_repositories, filesystem__write_file
+```
+
+Имена tools специально namespaced. Если два сервера имеют tool `search`, модель
+всё равно видит разные функции: `github__search` и `docs__search`.
+
+### Как выбирается сервер
+
+Маршрутизация полностью определяется именем tool call:
+
+```mermaid
+flowchart LR
+    Call["github__search_repositories"] --> Split["split at __"]
+    Split --> Server["server=github"]
+    Split --> Tool["tool=search_repositories"]
+    Server --> Binding["binding from last Tools() discovery"]
+    Tool --> Binding
+    Binding --> Run["call MCP server tool"]
+```
+
+Модель не передаёт имя server отдельным полем. Она выбирает функцию
+`server__tool`, а приложение находит binding, созданный на этапе discovery.
+Если binding отсутствует или tool не allowlisted, модель получает tool result с
+ошибкой, а не прямой доступ к серверу.
+
+### Policy gate
+
+Перед реальным `call_tool` выполняется локальная policy проверка.
+
+| Поле | Значения | Что делает |
+| --- | --- | --- |
+| `approval` | `auto`, `ask`, `deny` | `auto` выполняется; `ask` пока блокируется как требующий явного подтверждения; `deny` скрывает или запрещает tool |
+| `permission` | `read`, `browser`, `write` | классифицирует риск tool |
+| `path_prefixes` | список путей | обязателен для `write`; ограничивает целевой путь |
+
+```mermaid
+flowchart TD
+    Call["Tool call"] --> Approval{"approval"}
+    Approval -->|deny| Deny["blocked"]
+    Approval -->|ask| Ask["blocked: requires explicit approval"]
+    Approval -->|auto| Permission{"permission"}
+    Permission -->|read| Run["run tool"]
+    Permission -->|browser| Run
+    Permission -->|write| Path{"path inside allowed prefixes?"}
+    Path -->|yes| Run
+    Path -->|no| Block["blocked: mcp_write_path_denied"]
+```
+
+Для write tools приложение ищет path-like argument (`path`, `file`, `filename`
+и похожие поля) и проверяет, что путь остаётся внутри разрешённых префиксов.
+Поэтому filesystem MCP может сохранить `.data/day20/multi-mcp-report.md`, но не
+может писать произвольные файлы репозитория, если это не разрешено policy.
+
+### Длинный flow через несколько серверов
+
+Day 20 демонстрирует именно orchestration: один обычный запрос приводит к
+цепочке вызовов на разных MCP-серверах.
+
+```mermaid
+sequenceDiagram
+    participant U as Пользователь
+    participant C as cw controller
+    participant L as LLM
+    participant G as GitHub MCP
+    participant D as Context7 MCP
+    participant B as Playwright MCP
+    participant F as filesystem MCP
+    participant A as Audit
+
+    U->>C: Собери Day 20 отчет
+    C->>L: prompt + allowlisted MCP tools
+    L->>C: github__search_repositories
+    C->>G: search_repositories
+    G-->>C: repositories
+    C->>A: ordinal=1 server=github tool=search_repositories
+    C->>L: tool result
+    L->>C: context7__resolve-library-id
+    C->>D: resolve-library-id
+    D-->>C: library id
+    C->>A: ordinal=2 server=context7 tool=resolve-library-id
+    L->>C: context7__get-library-docs
+    C->>D: get-library-docs
+    D-->>C: docs
+    C->>A: ordinal=3 server=context7 tool=get-library-docs
+    L->>C: playwright__browser_navigate
+    C->>B: browser_navigate
+    B-->>C: page loaded
+    C->>A: ordinal=4 server=playwright tool=browser_navigate
+    L->>C: playwright__browser_snapshot
+    C->>B: browser_snapshot
+    B-->>C: snapshot
+    C->>A: ordinal=5 server=playwright tool=browser_snapshot
+    L->>C: filesystem__write_file
+    C->>F: write_file .data/day20/multi-mcp-report.md
+    F-->>C: saved
+    C->>A: ordinal=6 server=filesystem tool=write_file
+    C->>L: all tool results
+    L-->>U: final answer with file path and call order
+```
+
+Каждый call/result попадает в `process_audit.jsonl`. В TUI эти события видны как
+цветные `mcp` события, а в следующих запросах same-session MCP audit evidence
+добавляется в prompt как trusted context. Это позволяет спросить после flow:
+`какие MCP tools ты использовал?` - и модель отвечает по audit evidence, а не по
+догадке.
+
+### Что видит пользователь
+
+`/mcp` показывает компактный список серверов и разрешённых tools:
+
+```text
+mcp servers:
+  github       enabled  stdio  cmd=github-mcp-server args=4
+    search_repositories      read    auto
+  context7     enabled  stdio  cmd=npx args=2
+    resolve-library-id       read    auto
+    get-library-docs         read    auto
+  playwright   enabled  stdio  cmd=npx args=6
+    browser_navigate         browser auto
+    browser_snapshot         browser auto
+  filesystem   enabled  stdio  cmd=npx args=3
+    write_file               write   auto paths=.data/day20
+help: /mcp connect | /mcp tools <server> | /mcp allow | /mcp call | /mcp remove
+```
+
+Это не подсказка модели, какие tools вызвать. Это user-facing состояние
+подключений: какие серверы включены, какие tools allowlisted, какие permissions
+и path gates активны.
+
 ## Приёмочные дни
 
 Day 11: память разделена на `short`, `work`, `long`; модель предлагает, что сохранить, пользователь подтверждает.
