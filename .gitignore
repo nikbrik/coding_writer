@@ -32,6 +32,10 @@ Artifacts/consensus/
 
 # Scratch / manual test artifacts
 manual_scratch/
+.data/*
+!.data/day20/
+.data/day20/*
+!.data/day20/multi-mcp-report.md
 
 # Logs
 *.log
