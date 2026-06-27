@@ -101,7 +101,9 @@ flowchart TD
     Evidence --> Gate["Переход этапа"]
 ```
 
-Нельзя угадывать язык по пути, например `Go package path -> go test`. Сначала используется точная команда из утверждённого состояния задачи. `--verify` нужен только для отладки или восстановления, не для основного Day 15 сценария.
+Нельзя угадывать язык по пути, например `Go package path -> go test`. Сначала
+используется точная команда из утверждённого состояния задачи. `--verify` нужен
+только для отладки или восстановления, не для основного интерактивного пути.
 
 ## Память
 
@@ -145,9 +147,11 @@ flowchart TD
 
 В интерактивном терминале заголовки, статусы timeline, stage, severity и decisions подсвечиваются ANSI-стилями. При перенаправлении вывода текст остаётся без escape-кодов, чтобы журналы и тесты читались стабильно.
 
-## День 15
+## Рабочий цикл
 
-Day 15 доказывает, что это рабочий помощник для кода, а не ручное управление внутренним состоянием. Пользователь работает в одном `cw` TUI; переходы этапов, применение файлов и проверку выполняет приложение.
+`coding_writer` работает как помощник для кода, а не как ручное управление
+внутренним состоянием. Пользователь работает в одном `cw` TUI; переходы этапов,
+применение файлов и проверку выполняет приложение.
 
 ```mermaid
 sequenceDiagram
@@ -252,7 +256,7 @@ classDiagram
 
 ```text
 /mcp connect github bin:.codingwriter/mcp-bin/github-mcp-server --env GITHUB_PERSONAL_ACCESS_TOKEN --allow search_repositories -- stdio --read-only --toolsets repos
-/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/day20 -- .data/day20
+/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/reports -- .data/reports
 ```
 
 Что означает эта запись:
@@ -262,9 +266,9 @@ classDiagram
 - аргументы после `--` передаются самому MCP server.
 - `--env GITHUB_PERSONAL_ACCESS_TOKEN` передаёт только имя переменной; значение
   токена не пишется в config.
-- `--allow write_file:write:auto:.data/day20` разрешает tool `write_file`,
+- `--allow write_file:write:auto:.data/reports` разрешает tool `write_file`,
   помечает его как write tool, разрешает auto execution и ограничивает путь
-  префиксом `.data/day20`.
+  префиксом `.data/reports`.
 
 ### Как tools попадают к модели
 
@@ -337,13 +341,13 @@ flowchart TD
 
 Для write tools приложение ищет path-like argument (`path`, `file`, `filename`
 и похожие поля) и проверяет, что путь остаётся внутри разрешённых префиксов.
-Поэтому filesystem MCP может сохранить `.data/day20/multi-mcp-report.md`, но не
+Поэтому filesystem MCP может сохранить `.data/reports/mcp-report.md`, но не
 может писать произвольные файлы репозитория, если это не разрешено policy.
 
 ### Длинный flow через несколько серверов
 
-Day 20 демонстрирует именно orchestration: один обычный запрос приводит к
-цепочке вызовов на разных MCP-серверах.
+MCP orchestration работает как один обычный запрос, который приводит к цепочке
+вызовов на разных MCP-серверах.
 
 ```mermaid
 sequenceDiagram
@@ -356,7 +360,7 @@ sequenceDiagram
     participant F as filesystem MCP
     participant A as Audit
 
-    U->>C: Собери Day 20 отчет
+    U->>C: Собери отчет через несколько MCP servers
     C->>L: prompt + allowlisted MCP tools
     L->>C: github__search_repositories
     C->>G: search_repositories
@@ -380,7 +384,7 @@ sequenceDiagram
     B-->>C: snapshot
     C->>A: ordinal=5 server=playwright tool=browser_snapshot
     L->>C: filesystem__write_file
-    C->>F: write_file .data/day20/multi-mcp-report.md
+    C->>F: write_file .data/reports/mcp-report.md
     F-->>C: saved
     C->>A: ordinal=6 server=filesystem tool=write_file
     C->>L: all tool results
@@ -408,188 +412,13 @@ mcp servers:
     browser_navigate         browser auto
     browser_snapshot         browser auto
   filesystem   enabled  stdio  cmd=npx args=3
-    write_file               write   auto paths=.data/day20
+    write_file               write   auto paths=.data/reports
 help: /mcp connect | /mcp tools <server> | /mcp allow | /mcp call | /mcp remove
 ```
 
 Это не подсказка модели, какие tools вызвать. Это user-facing состояние
 подключений: какие серверы включены, какие tools allowlisted, какие permissions
 и path gates активны.
-
-## Приёмочные дни
-
-Day 11: память разделена на `short`, `work`, `long`; модель предлагает, что сохранить, пользователь подтверждает.
-
-Day 12: активный профиль влияет на каждый запрос; разные профили дают разные стили ответа.
-
-Day 13: задача хранит этап, текущий шаг и ожидаемое действие; pause/resume сохраняет состояние.
-
-Day 14: правила проекта хранятся отдельно, видны модели в запросе и проверяются до сохранения результата.
-
-Day 15: весь основной путь идёт через один обычный чат; приложение управляет этапами, файлами и проверкой.
-
-Day 18: scheduled MCP flow связывает `coding_writer` с отдельным
-`/Users/nikita/Documents/mcp-server`. MCP server в первом терминале работает как
-фоновой GitHub monitor: по расписанию читает public GitHub API, пишет
-JSON/JSONL evidence и обновляет aggregate summary. `cw` во втором терминале
-запускает LLM-agent loop: периодически вызывает read-only MCP tool, передаёт
-aggregate в активную модель и печатает человеческую сводку. Интервал agent loop
-по умолчанию редкий (`2m`), чтобы медленная LLM успевала ответить без
-наложения запросов.
-
-Этот блок ниже — legacy CLI helper/smoke для Day 18. Он не является шаблоном
-для новых user-facing homework demos: основной acceptance proof должен идти
-через обычный `cw` TUI.
-
-```bash
-# terminal 1
-cd /Users/nikita/Documents/mcp-server
-python3 server.py worker --storage-dir .data/day18 --repo nikbrik/coding_writer --interval 5s --demo
-
-# terminal 2
-cd /Users/nikita/code/coding_writer
-cw mcp add day18-github-watch \
-  --command python3 \
-  --arg /Users/nikita/Documents/mcp-server/server.py \
-  --arg --storage-dir \
-  --arg /Users/nikita/Documents/mcp-server/.data/day18 \
-  --allow-tool github_watch_status \
-  --allow-tool github_watch_summary \
-  --allow-tool github_watch_history \
-  --auto-approve \
-  --read-only
-
-cw mcp watch-agent day18-github-watch github_watch_summary
-```
-
-Day 19: chain from one MCP server в обычном тексте (без `pipeline-agent`)
-
-В одном запросе `cw chat`/TUI:
-
-```bash
-Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл.
-```
-
-LLM сам должен вызвать последовательно:
-`github_search_repos` → `github_make_report` → `save_report_to_file`.
-
-Демонстрационный setup через TUI. Отдельно запускать `server.py` не нужно:
-`cw` сам стартует stdio MCP server из `--command` и `--arg`.
-
-```bash
-cd /Users/nikita/code/coding_writer
-export ASSISTANT_STORAGE_DIR=/Users/nikita/code/coding_writer/.assistant/day19-manual
-cw init --model google/gemini-3.1-flash-lite
-cw
-```
-
-Внутри TUI сначала зарегистрируйте MCP server slash-командой:
-
-```text
-/mcp add day19-github-tools --command python3 --arg /Users/nikita/Documents/mcp-server/server.py --arg --storage-dir --arg /Users/nikita/Documents/mcp-server/.data/day19 --allow-tool github_search_repos --allow-tool github_make_report --allow-tool save_report_to_file --auto-approve
-```
-
-Проверьте tools прямо в TUI:
-
-```text
-/mcp tools day19-github-tools
-```
-
-Затем в том же TUI отправьте обычный текстовый запрос:
-
-```text
-Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл.
-```
-
-Если нужен второй терминал для наглядного наблюдения, откройте его после
-запуска запроса и смотрите persisted events:
-
-```bash
-tail -f /Users/nikita/Documents/mcp-server/.data/day19/pipeline_runs.jsonl
-```
-
-Проверяем подтверждение:
-
-- `process_audit.jsonl` содержит 3 пары `mcp_tool_call`/`mcp_tool_result` для `search -> report -> save`.
-- ассистентный ответ содержит путь:
-  `/Users/nikita/Documents/mcp-server/.data/day19/output/report_<id>.md`.
-- файл существует и не пустой.
-
-Day 20: orchestration across several existing MCP servers in one ordinary TUI
-chat. The detailed plan, policies, and evidence checklist are in
-[`docs/day20-multi-mcp-orchestration-plan.md`](docs/day20-multi-mcp-orchestration-plan.md).
-
-Demo setup uses popular existing servers:
-
-- GitHub MCP for public repo metadata.
-- Context7 MCP for current library docs.
-- Playwright MCP for browser/page inspection.
-- filesystem MCP for saving the final report.
-
-```bash
-cd /Users/nikita/code/coding_writer
-export ASSISTANT_STORAGE_DIR=/Users/nikita/code/coding_writer/.assistant/day20-manual
-export ASSISTANT_MODEL=google/gemini-3.1-flash-lite
-export GITHUB_PERSONAL_ACCESS_TOKEN=...
-mkdir -p .data/day20/playwright
-cw init --model "$ASSISTANT_MODEL"
-cw
-```
-
-Install the official GitHub MCP server once if the repo-local binary is missing:
-
-```bash
-mkdir -p .codingwriter/mcp-bin
-GOBIN=/Users/nikita/code/coding_writer/.codingwriter/mcp-bin \
-  go install github.com/github/github-mcp-server/cmd/github-mcp-server@latest
-```
-
-Connect MCP servers inside the same TUI session using the generic shorthand:
-
-```text
-/mcp connect github bin:.codingwriter/mcp-bin/github-mcp-server --env GITHUB_PERSONAL_ACCESS_TOKEN --allow search_repositories -- stdio --read-only --toolsets repos
-/mcp connect context7 npm:@upstash/context7-mcp --allow resolve-library-id,get-library-docs
-/mcp connect playwright npm:@playwright/mcp --allow browser_navigate:browser,browser_snapshot:browser -- --headless --isolated --output-dir .data/day20/playwright
-/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/day20 -- .data/day20
-/mcp
-```
-
-`/mcp connect` is generic: `npm:` expands to `npx -y`, `bin:` runs a local
-binary, and `cmd:` runs a command from `PATH`. Server-specific args go after
-`--`. Compact `--allow` specs use
-`tool[:permission[:approval[:path-prefix]]]`.
-
-If a new MCP server's tools are unknown, connect it first without `--allow`,
-inspect tools, then allow only the tools the agent may use:
-
-```text
-/mcp connect docs npm:@vendor/example-mcp
-/mcp tools docs
-/mcp allow docs search --permission read --approval auto
-```
-
-For the ready-made Day 20 setup, `/mcp preset day20` remains available as a
-shortcut. Raw `/mcp add` remains available as a low-level escape hatch.
-
-Then send a normal chat message, not a pipeline command:
-
-```text
-Собери Day 20 отчет о популярных MCP-серверах для coding agent.
-
-Нужны 4 типа evidence: репозитории, документация, браузерная проверка страницы проекта и сохраненный markdown-файл .data/day20/multi-mcp-report.md.
-
-В конце покажи путь к файлу и фактический порядок вызванных инструментов.
-```
-
-Проверяем подтверждение:
-
-- `process_audit.jsonl` содержит ordered MCP trace с `ordinal`, `server`,
-  `tool`, `status` и summary результата.
-- TUI показывает MCP tool call/result события в порядке:
-  GitHub -> Context7 -> Playwright -> filesystem.
-- `.data/day20/multi-mcp-report.md` существует и создан через filesystem MCP.
-- write tool явно разрешен через `/mcp allow`; запись вне `.data/day20`
-  блокируется policy gate.
 
 ## Запуск
 
@@ -614,34 +443,13 @@ cw init --model "google/gemini-3.1-flash-lite"
 cw
 ```
 
-Live-сценарий Day 15:
-
-```bash
-test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
-scripts/day15-demo.sh
-```
-
-Локальная репетиция без OpenRouter:
-
-```bash
-scripts/day15-demo.sh --fake
-```
-
-Автоматическая проверка регрессий без OpenRouter:
-
-```bash
-scripts/day15-demo.sh --fake --auto
-```
-
-Подробные ручные сценарии находятся в [docs/manual-testing-demo.md](docs/manual-testing-demo.md). Day 15 live-сценарий хранится только там, чтобы не было второго источника правды.
-
 ## Проверка разработки
 
 Основные команды:
 
 ```bash
 go test ./...
-go test ./internal/cli ./internal/process ./internal/tasks ./manual_scratch/day15_contains_duplicate
+go test ./internal/cli ./internal/process ./internal/tasks
 git diff --check
 ```
 
