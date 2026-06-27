@@ -585,21 +585,22 @@ type chatResult struct {
 	AuditEvents      []process.ProcessAuditEvent `json:"-"`
 }
 
-func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
+func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string, ignoreCurrentTask ...bool) (chatResult, error) {
+	ignoreTask := len(ignoreCurrentTask) > 0 && ignoreCurrentTask[0]
 	if !renderOnly {
 		var result chatResult
-		err := withChatTurnLock(rt, sessionID, func() error {
+		err := withChatTurnLock(rt, sessionID, ignoreTask, func() error {
 			var runErr error
-			result, runErr = runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand)
+			result, runErr = runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand, ignoreTask)
 			return runErr
 		})
 		return result, err
 	}
-	return runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand)
+	return runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand, ignoreTask)
 }
 
-func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string) (chatResult, error) {
-	if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly}); err != nil {
+func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string, ignoreCurrentTask bool) (chatResult, error) {
+	if err := rt.preflightProcess(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, IgnoreCurrentTask: ignoreCurrentTask}); err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
 	if !renderOnly {
@@ -614,7 +615,10 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 	if !renderOnly {
 		pc = rt.attachProviderToProcess()
 	}
-	currentTask, _ := rt.Tasks.Current()
+	var currentTask app.TaskState
+	if !ignoreCurrentTask {
+		currentTask, _ = rt.Tasks.Current()
+	}
 	autoVerifyCommand := ""
 	if strings.TrimSpace(verifyCommand) == "" {
 		var autoErr error
@@ -628,7 +632,7 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 	if err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal, TrustedEvidence: trustedEvidence})
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal, TrustedEvidence: trustedEvidence, IgnoreCurrentTask: ignoreCurrentTask})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel, RenderedPromptID: app.NewID("prompt")}
 	if procResult != nil {
 		result.Answer = procResult.Answer
@@ -652,15 +656,19 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 	}
 	if err != nil {
 		result.OK = false
-		if task, taskErr := rt.Tasks.Current(); taskErr == nil {
-			result.Task = &task
+		if !ignoreCurrentTask {
+			if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+				result.Task = &task
+			}
 		}
 		return result, err
 	}
 	if postResult, postCommand, postErr := runPostApprovalTrustedVerification(ctx, rt, pc, sessionID, renderOnly, procResult); postErr != nil {
 		result.OK = false
-		if task, taskErr := rt.Tasks.Current(); taskErr == nil {
-			result.Task = &task
+		if !ignoreCurrentTask {
+			if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+				result.Task = &task
+			}
 		}
 		return result, postErr
 	} else if postResult != nil {
@@ -679,20 +687,24 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 			result.Warnings = append(result.Warnings, "auto verification: "+postCommand)
 		}
 	}
-	if task, taskErr := rt.Tasks.Current(); taskErr == nil {
-		result.Task = &task
+	if !ignoreCurrentTask {
+		if task, taskErr := rt.Tasks.Current(); taskErr == nil {
+			result.Task = &task
+		}
 	}
 	result.AuditEvents = chatAuditEvents(rt.StorageDir, sessionID, result.Task)
 	return result, nil
 }
 
-func withChatTurnLock(rt *runtime, sessionID string, fn func() error) error {
+func withChatTurnLock(rt *runtime, sessionID string, ignoreCurrentTask bool, fn func() error) error {
 	if rt == nil || strings.TrimSpace(rt.StorageDir) == "" {
 		return fn()
 	}
 	key := "session_" + sessionID
-	if task, err := rt.Tasks.Current(); err == nil && strings.TrimSpace(task.ID) != "" {
-		key = "task_" + task.ID
+	if !ignoreCurrentTask {
+		if task, err := rt.Tasks.Current(); err == nil && strings.TrimSpace(task.ID) != "" {
+			key = "task_" + task.ID
+		}
 	}
 	if err := storage.ValidateID(key); err != nil {
 		return app.NewError(app.CategoryValidation, "unsafe_turn_lock_id", "unsafe chat turn lock id", err)

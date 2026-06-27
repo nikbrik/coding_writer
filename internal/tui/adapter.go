@@ -62,6 +62,7 @@ type ChatRequest struct {
 	RenderOnly            bool
 	RequireMemoryProposal bool
 	VerifyCommand         string
+	IgnoreCurrentTask     bool
 }
 
 type ChatResponse struct {

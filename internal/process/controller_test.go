@@ -177,6 +177,37 @@ func moveCurrentTaskToExecutionWithApprovedPlan(t *testing.T, ctrl *ProcessContr
 	}
 }
 
+func TestProcessControllerIgnoreCurrentTaskTreatsFreshChatAsNoTask(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	if _, err := ctrl.Tasks.Start("ContainsDuplicate"); err != nil {
+		t.Fatal(err)
+	}
+	moveCurrentTaskToExecutionWithApprovedPlan(t, ctrl)
+	fake.ChatResponse = "Repository report saved."
+
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{
+		SessionID:         "fresh_tui",
+		Input:             "Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл.",
+		IgnoreCurrentTask: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Answer != "Repository report saved." {
+		t.Fatalf("fresh chat did not answer as no-task chat: %q", res.Answer)
+	}
+	events, err := ctrl.AuditStore.Latest(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.SessionID == "fresh_tui" && event.TaskID != "" {
+			t.Fatalf("fresh chat audit should not attach old task: %+v", event)
+		}
+	}
+}
+
 func TestProcessControllerInvariantInputConflictSkipsProvider(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)
@@ -294,6 +325,26 @@ func TestProcessControllerInvariantOutputRejectedBeforePersistence(t *testing.T)
 
 func newTestPromptBuilder() PromptBuilder {
 	return &testPromptBuilder{factory: NewStagePromptFactory(NewStagePolicyRegistry())}
+}
+
+func TestToolPolicyPromptTellsAnswerQuestionToUseMCPPipelineTools(t *testing.T) {
+	factory := NewStagePromptFactory(NewStagePolicyRegistry())
+	prompt, err := factory.ToolPolicyPrompt(app.StagePlanning, ActionAnswerQuestion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"allowlisted MCP tools",
+		"search, fetch, build a report, or save",
+		"call the matching allowlisted MCP tools before answering",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("tool policy prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "read-only MCP tools") {
+		t.Fatalf("tool policy should not describe MCP tools as read-only only:\n%s", prompt)
+	}
 }
 
 type testPromptBuilder struct {
@@ -687,6 +738,63 @@ func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
 	}
 	if auditDecisionCount(events, "mcp_tool_result") != 3 {
 		t.Fatalf("expected 3 tool_result audit events, got %d", auditDecisionCount(events, "mcp_tool_result"))
+	}
+
+	fake.ChatResponses = append(fake.ChatResponses, "Да, я использовал все три MCP tools: github_search_repos, github_make_report и save_report_to_file.")
+	fake.ValidatorResponses = append(fake.ValidatorResponses,
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.9,"reason":"user asks about prior MCP tool usage"}`,
+		`{"verdict":"pass","findings":[]}`,
+	)
+	followup, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s_day19", Input: "ты использовал все mcp tools"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(followup.Answer, "github_search_repos") || !strings.Contains(followup.Answer, "save_report_to_file") {
+		t.Fatalf("follow-up did not answer from prior MCP tool usage: %q", followup.Answer)
+	}
+	followupChatPrompt := ""
+	for _, call := range fake.SnapshotCalls() {
+		if call.Purpose != providers.PurposeChat || len(call.Messages) == 0 {
+			continue
+		}
+		if call.Messages[len(call.Messages)-1].Content == "ты использовал все mcp tools" {
+			followupChatPrompt = renderMessages(call.Messages)
+		}
+	}
+	if followupChatPrompt == "" {
+		t.Fatalf("follow-up chat prompt not found: %+v", fake.SnapshotCalls())
+	}
+	for _, want := range []string{
+		"Trusted same-session MCP audit evidence",
+		"day19_github_tools__github_search_repos",
+		"day19_github_tools__github_make_report",
+		"day19_github_tools__save_report_to_file",
+	} {
+		if !strings.Contains(followupChatPrompt, want) {
+			t.Fatalf("follow-up chat prompt missing prior MCP audit context %q:\n%s", want, followupChatPrompt)
+		}
+	}
+	followupValidatorPayload := ""
+	for _, call := range fake.SnapshotCalls() {
+		if call.Purpose != providers.PurposeValidator || len(call.Messages) < 2 {
+			continue
+		}
+		if strings.Contains(call.Messages[1].Content, "ты использовал все mcp tools") && strings.Contains(call.Messages[1].Content, `"parsed_response"`) {
+			followupValidatorPayload = call.Messages[1].Content
+		}
+	}
+	if followupValidatorPayload == "" {
+		t.Fatalf("follow-up semantic output validator payload not found: %+v", fake.SnapshotCalls())
+	}
+	for _, want := range []string{
+		"app-issued process audit evidence",
+		"day19_github_tools__github_search_repos",
+		"day19_github_tools__github_make_report",
+		"day19_github_tools__save_report_to_file",
+	} {
+		if !strings.Contains(followupValidatorPayload, want) {
+			t.Fatalf("follow-up validator payload missing prior MCP audit evidence %q:\n%s", want, followupValidatorPayload)
+		}
 	}
 }
 

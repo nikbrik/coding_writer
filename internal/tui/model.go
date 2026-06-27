@@ -101,12 +101,13 @@ type Model struct {
 	width  int
 	height int
 
-	input    textarea.Model
-	timeline viewport.Model
-	sidebar  viewport.Model
-	spinner  spinner.Model
-	active   Pane
-	busy     bool
+	input     textarea.Model
+	timeline  viewport.Model
+	sidebar   viewport.Model
+	spinner   spinner.Model
+	active    Pane
+	busy      bool
+	busyLabel string
 
 	task                *app.TaskState
 	proposal            *app.MemoryProposal
@@ -269,6 +270,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case exchangeFinishedMsg:
 		m.busy = false
+		m.busyLabel = ""
 		m.input.SetValue("")
 		m.input.Focus()
 		if msg.err != nil {
@@ -280,12 +282,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyResponse(msg.resp)
 		if shouldAutoContinueAfterPlanningApproval(msg.resp) {
 			m.busy = true
+			m.busyLabel = "LLM выполняет следующий шаг"
 			m.input.Blur()
 			m.appendEvent("system", stageOfTask(m.task), "execution started", "approved plan is running", "info")
 			cmds = append(cmds, m.runExchange(executionContinuationInput()))
 		}
 	case slashFinishedMsg:
 		m.busy = false
+		m.busyLabel = ""
 		m.input.SetValue("")
 		m.input.Focus()
 		if msg.err != nil {
@@ -315,6 +319,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case memoryAppliedMsg:
 		m.busy = false
+		m.busyLabel = ""
 		m.input.SetValue("")
 		m.input.Focus()
 		if msg.err != nil {
@@ -480,6 +485,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if text == "" {
 				if m.canContinueExecution() {
 					m.busy = true
+					m.busyLabel = "LLM выполняет следующий шаг"
 					m.input.Blur()
 					m.appendEvent("system", stageOfTask(m.task), "execution continued", "running next approved step", "info")
 					cmds = append(cmds, m.runExchange(executionContinuationInput()))
@@ -497,9 +503,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.appendEvent("user", stageOfTask(m.task), "command", text, "info")
 			}
 			m.busy = true
+			m.busyLabel = "LLM отвечает"
 			m.input.Blur()
 			m.input.SetValue("")
 			if text == "/model" {
+				m.busyLabel = "загружаю список моделей"
 				m.modelPicker = newModelPickerState(ModelCatalog{
 					Models:    fallbackModelIDs(),
 					Favorites: m.backend.Config().FavoriteModels,
@@ -508,6 +516,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 				cmds = append(cmds, m.loadModels())
 			} else if strings.HasPrefix(text, "/") {
+				m.busyLabel = "выполняю команду"
 				cmds = append(cmds, m.runSlash(text))
 			} else {
 				cmds = append(cmds, m.runExchange(text))
@@ -655,13 +664,9 @@ func (m Model) headerView() string {
 		expected = string(m.task.ExpectedAction)
 		status = string(m.task.Status)
 	}
-	busy := ""
-	if m.busy {
-		busy = " " + m.spinner.View() + " model call"
-	}
 	title := styleTitle().Render("codingwriter")
-	line := fmt.Sprintf("%s %s | model=%s | profile=%s | task=%s | stage=%s | expected=%s | status=%s%s",
-		title, shortBuildVersion(build), emptyDash(cfg.ActiveModel), emptyDash(cfg.ActiveProfileID), task, stage, expected, status, busy)
+	line := fmt.Sprintf("%s %s | model=%s | profile=%s | task=%s | stage=%s | expected=%s | status=%s",
+		title, shortBuildVersion(build), emptyDash(cfg.ActiveModel), emptyDash(cfg.ActiveProfileID), task, stage, expected, status)
 	return trimWidth(line, m.width) + "\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("63")).Render(strings.Repeat("─", max(1, m.width)))
 }
 
@@ -891,10 +896,12 @@ func (m Model) executeDecision(action decisionAction) (Model, tea.Cmd) {
 	switch action {
 	case decisionApprovePlan:
 		m.busy = true
+		m.busyLabel = "LLM выполняет approved plan"
 		m.input.Blur()
 		return m, m.approvePlan()
 	case decisionRejectPlan:
 		m.busy = true
+		m.busyLabel = "LLM обрабатывает отклонение"
 		m.input.Blur()
 		return m, m.rejectPlan()
 	case decisionReviewMemory:
@@ -903,6 +910,7 @@ func (m Model) executeDecision(action decisionAction) (Model, tea.Cmd) {
 		return m, nil
 	case decisionSaveMemory:
 		m.busy = true
+		m.busyLabel = "сохраняю memory proposal"
 		m.input.Blur()
 		return m, m.applyMemory(true)
 	case decisionDismissMemory:
@@ -1476,8 +1484,9 @@ func (m Model) toggleFavoriteModel(modelID string) tea.Cmd {
 
 func (m Model) runExchange(text string) tea.Cmd {
 	sessionID := m.sessionID
+	ignoreCurrentTask := m.task == nil || m.task.ID == ""
 	return func() tea.Msg {
-		resp, err := m.backend.Exchange(m.ctx, ChatRequest{SessionID: sessionID, Input: text, RequireMemoryProposal: true})
+		resp, err := m.backend.Exchange(m.ctx, ChatRequest{SessionID: sessionID, Input: text, RequireMemoryProposal: true, IgnoreCurrentTask: ignoreCurrentTask})
 		return exchangeFinishedMsg{input: text, resp: resp, err: err}
 	}
 }
@@ -1697,12 +1706,7 @@ func (m *Model) appendTranscript(entries []TranscriptEntry) {
 		}
 		switch entry.Role {
 		case app.RoleUser:
-			title := "you: " + truncate(safe(content), 96)
-			summary := ""
-			if len([]rune(content)) > 96 {
-				summary = content
-			}
-			m.events = append(m.events, timelineEvent{At: entry.CreatedAt, Kind: "user", Stage: stageOfTask(m.task), Title: title, Summary: summary, Severity: "info"})
+			m.events = append(m.events, timelineEvent{At: entry.CreatedAt, Kind: "user", Stage: stageOfTask(m.task), Title: "you", Summary: safe(content), Severity: "info"})
 		case app.RoleAssistant:
 			m.events = append(m.events, timelineEvent{At: entry.CreatedAt, Kind: "assistant", Stage: stageOfTask(m.task), Title: "assistant answer", Summary: summarizeAnswer(content), Severity: "info"})
 		}
@@ -1808,12 +1812,7 @@ func (m *Model) appendEvent(kind string, stage app.TaskStage, title, summary, se
 
 func (m *Model) appendUserEvent(text string) {
 	clean := safe(text)
-	title := "you: " + truncate(clean, 96)
-	summary := ""
-	if len([]rune(clean)) > 96 {
-		summary = clean
-	}
-	m.appendEvent("user", stageOfTask(m.task), title, summary, "info")
+	m.appendEvent("user", stageOfTask(m.task), "you", clean, "info")
 }
 
 func (m *Model) appendAuditEvent(event process.ProcessAuditEvent) {
@@ -1897,6 +1896,9 @@ func (m Model) renderTimelineLinesWithStarts(events []timelineEvent) ([]string, 
 	lines := []string{}
 	starts := make([]int, 0, len(events))
 	for _, ev := range events {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
 		starts = append(starts, len(lines))
 		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
 		if ev.Summary != "" {
@@ -1905,7 +1907,34 @@ func (m Model) renderTimelineLinesWithStarts(events []timelineEvent) ([]string, 
 			}
 		}
 	}
+	if m.busy {
+		ev := m.busyTimelineEvent()
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
+		if ev.Summary != "" {
+			for _, summaryLine := range wrap(safe(ev.Summary), max(20, m.timeline.Width-2)) {
+				lines = append(lines, eventSummaryStyle(ev).Render(summaryLine))
+			}
+		}
+	}
 	return lines, starts
+}
+
+func (m Model) busyTimelineEvent() timelineEvent {
+	label := strings.TrimSpace(m.busyLabel)
+	if label == "" {
+		label = "работаю"
+	}
+	return timelineEvent{
+		At:       time.Now().UTC(),
+		Kind:     "progress",
+		Stage:    stageOfTask(m.task),
+		Title:    m.spinner.View() + " " + label,
+		Summary:  "ожидаю ответ; можно смотреть progress прямо здесь",
+		Severity: "info",
+	}
 }
 
 func auditSeverity(event process.ProcessAuditEvent) string {
@@ -1944,6 +1973,8 @@ func eventKindStyle(kind string) lipgloss.Style {
 		return style.Foreground(lipgloss.Color("244"))
 	case "mcp":
 		return style.Foreground(lipgloss.Color("110"))
+	case "progress":
+		return style.Foreground(lipgloss.Color("120"))
 	case "warning":
 		return style.Foreground(lipgloss.Color("214"))
 	case "error":
@@ -1977,6 +2008,12 @@ func eventTitleStyle(ev timelineEvent) lipgloss.Style {
 	case "warning":
 		return style.Foreground(lipgloss.Color("214"))
 	}
+	if ev.Kind == "assistant" {
+		return style.Bold(true).Foreground(lipgloss.Color("255"))
+	}
+	if ev.Kind == "progress" {
+		return style.Bold(true).Foreground(lipgloss.Color("120"))
+	}
 	return eventDecisionStyle(ev.Decision)
 }
 
@@ -2002,8 +2039,18 @@ func eventSummaryStyle(ev timelineEvent) lipgloss.Style {
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("209"))
 	case "warning":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	}
+	switch ev.Kind {
+	case "assistant":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	case "user":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	case "progress":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
+	case "audit", "mcp":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
 	default:
-		return styleHint()
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 	}
 }
 
@@ -2024,6 +2071,7 @@ func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
 				return m, nil
 			}
 			m.busy = true
+			m.busyLabel = "создаю профиль"
 			return m, m.createProfile(id)
 		case "backspace":
 			if p.profileID != "" {
@@ -2051,17 +2099,20 @@ func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
 		cmd := m.contextPickerEnter()
 		if cmd != nil {
 			m.busy = true
+			m.busyLabel = "открываю выбранный контекст"
 		}
 		return m, cmd
 	case "c":
 		if p.payload.Kind == "tasks" {
 			m.busy = true
+			m.busyLabel = "очищаю task focus"
 			return m, m.clearTask()
 		}
 	case "a":
 		if p.payload.Kind == "tasks" {
 			if task, ok := p.currentTask(); ok && !task.Archived {
 				m.busy = true
+				m.busyLabel = "архивирую task"
 				return m, m.archiveTask(task.ID)
 			}
 		}
@@ -2073,6 +2124,7 @@ func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
 					return m, nil
 				}
 				m.busy = true
+				m.busyLabel = "восстанавливаю task"
 				return m, m.restoreTask(task.ID)
 			}
 		}
@@ -2327,6 +2379,7 @@ func (m Model) updateModelPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "enter":
 		if item, ok := m.modelPicker.current(); ok {
 			m.busy = true
+			m.busyLabel = "переключаю модель"
 			return m, m.selectModel(item.ID)
 		}
 	case "backspace":
@@ -2786,10 +2839,11 @@ func firstNonEmpty(values ...string) string {
 
 func truncate(text string, limit int) string {
 	text = strings.TrimSpace(text)
-	if len(text) <= limit {
+	runes := []rune(text)
+	if len(runes) <= limit {
 		return text
 	}
-	return text[:limit-1] + "…"
+	return string(runes[:limit-1]) + "…"
 }
 
 func appendUnique(values []string, more ...string) []string {

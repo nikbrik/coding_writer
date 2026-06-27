@@ -94,4 +94,10 @@
 **Reason**: Captured MCP stdio demo ownership, multi-repo commit boundaries, and local review cache hygiene.
 
 ---
+## 2026-06-27 | Day 19 TUI repair follow-up
+**Applied**: VALIDATOR-001, ERROR-001, LEARNING-001
+**Files**: scripts/validate-kilo-harness.mjs, .agents/learnings/ERRORS.md, .agents/learnings/LEARNINGS.md
+**Reason**: Captured unsafe OpenRouter placeholder export docs, stale MCP test-helper config failure, and reinforced LLM-only semantic validation decisions.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

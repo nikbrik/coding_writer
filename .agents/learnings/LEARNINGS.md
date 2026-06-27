@@ -30,7 +30,7 @@ Live пользовательские demo/scenario прогоны Day 15 дол
 **Тип**: correction
 **Модуль**: process validation
 **Приоритет**: HIGH
-**Recurrence-Count**: 2
+**Recurrence-Count**: 3
 
 ### Суть
 В real/OpenRouter mode semantic decisions должны идти через LLM structured validator; keyword/regex heuristics допустимы только для hard safety или prefilter, не как fallback decision по смыслу.
@@ -43,6 +43,7 @@ Live пользовательские demo/scenario прогоны Day 15 дол
 
 ### Evidence
 - 2026-06-19 пользователь указал, что `autoVerificationIntent` с `containsAnyText` нарушает запрет keyword-based semantic validation; auto verification intent должен идти через semantic referee.
+- 2026-06-27 Day 19 self-review found a local `containsAny` suppressor for a stack invariant false positive; fix removed the suppressor and kept the semantic distinction in LLM validator prompt/output validation.
 
 ---
 

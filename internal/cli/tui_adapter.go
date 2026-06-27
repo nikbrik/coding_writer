@@ -173,12 +173,12 @@ func (b *ChatBackend) CreateProfile(ctx context.Context, profileID, currentSessi
 
 func (b *ChatBackend) Exchange(ctx context.Context, req tui.ChatRequest) (tui.ChatResponse, error) {
 	if strings.TrimSpace(req.Input) != "" && !req.RenderOnly {
-		if err := b.rt.preflightProcess(ctx, process.ExchangeInput{SessionID: req.SessionID, Input: req.Input}); err != nil {
+		if err := b.rt.preflightProcess(ctx, process.ExchangeInput{SessionID: req.SessionID, Input: req.Input, IgnoreCurrentTask: req.IgnoreCurrentTask}); err != nil {
 			return tui.ChatResponse{OK: false, SessionID: req.SessionID, Model: b.rt.Config.ActiveModel}, err
 		}
 		b.rt.ensureProvider()
 	}
-	result, err := runChatExchange(ctx, b.rt, req.SessionID, req.Input, req.RenderOnly, req.RequireMemoryProposal, req.VerifyCommand)
+	result, err := runChatExchange(ctx, b.rt, req.SessionID, req.Input, req.RenderOnly, req.RequireMemoryProposal, req.VerifyCommand, req.IgnoreCurrentTask)
 	return tui.ChatResponse{
 		OK:               result.OK,
 		SessionID:        result.SessionID,

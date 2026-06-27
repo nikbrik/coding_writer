@@ -52,6 +52,7 @@ type ExchangeInput struct {
 	SkipSemanticIntent    bool
 	SkipPromptImprovement bool
 	SkipInputInvariants   bool
+	IgnoreCurrentTask     bool
 }
 
 // RunExchange executes the gated process loop.
@@ -470,6 +471,19 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 			CreatedAt: time.Now().UTC(),
 		})
 	}
+	if auditContext := c.sessionMCPAuditContext(sessionID); auditContext != "" {
+		auditMessage := app.ChatMessage{
+			ID:        app.NewID("msg"),
+			Role:      app.RoleSystem,
+			Content:   auditContext,
+			CreatedAt: time.Now().UTC(),
+		}
+		if len(messages) > 0 && messages[len(messages)-1].Role == app.RoleUser {
+			messages = append(messages[:len(messages)-1], append([]app.ChatMessage{auditMessage}, messages[len(messages)-1])...)
+		} else {
+			messages = append(messages, auditMessage)
+		}
+	}
 
 	rendered := renderMessages(messages)
 	result := &ExchangeResult{
@@ -514,6 +528,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		}
 		res := completion.Response
 		trustedEvidence := append([]string(nil), input.TrustedEvidence...)
+		trustedEvidence = append(trustedEvidence, c.sessionMCPAuditEvidence(sessionID)...)
 		trustedEvidence = append(trustedEvidence, completion.TrustedEvidence...)
 		lastRaw = res.Message.Content
 		result.Model = res.Model
@@ -984,15 +999,17 @@ type resolvedProcessState struct {
 }
 
 func (c *ProcessController) resolveProcessState(input ExchangeInput) (resolvedProcessState, error) {
-	taskState, taskErr := c.Tasks.Current()
 	var taskPtr *app.TaskState
-	if taskErr != nil {
-		appErr := app.AsError(taskErr)
-		if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
-			return resolvedProcessState{}, taskErr
+	if !input.IgnoreCurrentTask {
+		taskState, taskErr := c.Tasks.Current()
+		if taskErr != nil {
+			appErr := app.AsError(taskErr)
+			if appErr.Category != app.CategoryValidation || appErr.Code != "missing_current_task" {
+				return resolvedProcessState{}, taskErr
+			}
+		} else if taskState.ID != "" {
+			taskPtr = &taskState
 		}
-	} else if taskState.ID != "" {
-		taskPtr = &taskState
 	}
 
 	stage := app.TaskStage("")
@@ -1591,6 +1608,37 @@ func mcpToolTrustedEvidence(toolName, result string) string {
 	return fmt.Sprintf("app-issued MCP tool evidence: tool=%s result=%s", toolName, result)
 }
 
+func (c *ProcessController) sessionMCPAuditEvidence(sessionID string) []string {
+	if c == nil || c.AuditStore == nil || strings.TrimSpace(sessionID) == "" {
+		return nil
+	}
+	events, err := c.AuditStore.Latest(80)
+	if err != nil {
+		return nil
+	}
+	out := []string{}
+	for _, event := range events {
+		if event.SessionID != sessionID || event.Reason == "" {
+			continue
+		}
+		switch event.Decision {
+		case "mcp_tool_call":
+			out = append(out, fmt.Sprintf("app-issued process audit evidence: MCP tool call observed in this session: tool=%s at=%s", event.Reason, event.CreatedAt.UTC().Format(time.RFC3339)))
+		case "mcp_tool_result":
+			out = append(out, fmt.Sprintf("app-issued process audit evidence: MCP tool result observed in this session: tool=%s at=%s", event.Reason, event.CreatedAt.UTC().Format(time.RFC3339)))
+		}
+	}
+	return out
+}
+
+func (c *ProcessController) sessionMCPAuditContext(sessionID string) string {
+	evidence := c.sessionMCPAuditEvidence(sessionID)
+	if len(evidence) == 0 {
+		return ""
+	}
+	return "Trusted same-session MCP audit evidence. Use this when the user asks what MCP tools were used in this conversation. If the listed allowlisted MCP tools were all observed with results, answer that they were used; do not speculate about unrelated tools outside this server.\n- " + strings.Join(evidence, "\n- ")
+}
+
 func currentPlanItem(task *app.TaskState) string {
 	if task == nil {
 		return ""
@@ -1682,6 +1730,13 @@ func shouldRetryValidatorErrors(errs []string) bool {
 func (c *ProcessController) bestEffortState(input ExchangeInput) (*app.TaskState, app.TaskStage, ActionKind) {
 	if c == nil || c.Tasks == nil {
 		return nil, "", ActionAnswerQuestion
+	}
+	if input.IgnoreCurrentTask {
+		action := input.ActionKind
+		if action == "" || !action.Valid() {
+			action = ActionAnswerQuestion
+		}
+		return nil, "", action
 	}
 	state, err := c.Tasks.Current()
 	if err != nil || state.ID == "" {

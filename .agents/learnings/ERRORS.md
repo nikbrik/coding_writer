@@ -62,4 +62,16 @@
 - 2026-06-26 Day 18 `cw mcp watch` test initially reused `internal/mcp` helper from `internal/cli`; adding local `TestMCPWatchHelperProcess` fixed JSON-RPC reads.
 
 ---
+## 2026-06-27 | stale-mcp-test-helper-config
+**Pattern-Key**: stale-mcp-test-helper-config
+**Команда**: Real TUI MCP tool discovery with persisted app config.
+**Симптом**: TUI audit shows `mcp_tools_unavailable` / `mcp_start_failed` with a missing temporary `cli.test` path.
+**Причина**: Persisted MCP config can keep a stale Go test-helper binary path under `/var/.../cli.test`; that temp binary disappears after the test run.
+**Fix**: Remove the stale MCP server from app config; product MCP runner should skip one broken configured server when another allowlisted server works.
+**Статус**: workaround
+
+### Evidence
+- 2026-06-27 Day 19 real TUI initially failed MCP tool discovery because `github-api` pointed to an old Go test helper; removing the stale server and making tool discovery tolerate one broken server restored the Day 19 MCP pipeline.
+
+---
 <!-- ERRORS:END -->

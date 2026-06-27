@@ -31,7 +31,6 @@ cw --help
 Live mode через OpenRouter:
 
 ```bash
-export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
 export ASSISTANT_MODEL="google/gemini-3.1-flash-lite"
 unset ASSISTANT_PROVIDER
 unset ASSISTANT_LLM_VALIDATION
@@ -480,7 +479,7 @@ assistant task status
 Live demo через OpenRouter:
 
 ```bash
-export OPENROUTER_API_KEY="ваш_ключ_OpenRouter"
+test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 unset ASSISTANT_MODEL
 unset ASSISTANT_PROVIDER
 unset ASSISTANT_LLM_VALIDATION

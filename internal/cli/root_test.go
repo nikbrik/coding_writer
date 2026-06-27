@@ -374,6 +374,34 @@ func TestMCPWatchCommandCallsToolRepeatedly(t *testing.T) {
 	}
 }
 
+func TestAppMCPToolRunnerSkipsBrokenServerWhenAnotherServerWorks(t *testing.T) {
+	t.Setenv("GO_WANT_MCP_WATCH_HELPER", "1")
+	runner := newAppMCPToolRunner([]app.MCPServerConfig{
+		{
+			Name:    "stale-test-helper",
+			Command: filepath.Join(t.TempDir(), "missing-cli-test"),
+			Enabled: true,
+			Tools:   []app.MCPToolConfig{{Name: "github_repo_info", AutoApprove: true, ReadOnly: true}},
+		},
+		{
+			Name:    "github-api",
+			Command: os.Args[0],
+			Args:    []string{"-test.run=^TestMCPWatchHelperProcess$"},
+			EnvKeys: []string{"GO_WANT_MCP_WATCH_HELPER"},
+			Enabled: true,
+			Tools:   []app.MCPToolConfig{{Name: "github_repo_info", AutoApprove: true, ReadOnly: true}},
+		},
+	})
+
+	tools, err := runner.Tools(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tools) != 1 || tools[0].Function.Name != "github_api__github_repo_info" {
+		t.Fatalf("expected working server tool despite stale server, got %+v", tools)
+	}
+}
+
 func TestParseMCPToolArgsParsesJSONValues(t *testing.T) {
 	args, err := parseMCPToolArgs([]string{
 		"limit=2",
@@ -468,6 +496,21 @@ func TestMCPWatchHelperProcess(t *testing.T) {
 				"protocolVersion": mcp.DefaultProtocolVersion,
 				"serverInfo":      map[string]any{"name": "test-github-api", "version": "0.1.0"},
 				"capabilities":    map[string]any{"tools": map[string]any{}},
+			}})
+		case "tools/list":
+			writeMCPWatchHelperRPC(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{
+				"tools": []map[string]any{
+					{
+						"name":        "github_repo_info",
+						"description": "Fetch summary information for a public GitHub repository.",
+						"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+					},
+					{
+						"name":        "github_watch_summary",
+						"description": "Read scheduled monitor summary.",
+						"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+					},
+				},
 			}})
 		case "tools/call":
 			writeMCPWatchHelperToolResult(id, map[string]any{"full_name": "nikbrik/coding_writer", "default_branch": "main", "language": "Go"}, false)
@@ -1856,6 +1899,39 @@ func TestClassifierFailureFailsClosed(t *testing.T) {
 	result, err := runChatExchange(context.Background(), rt, "session_classifier_fail", "hello", false, true, "")
 	if err == nil || app.AsError(err).Category != app.CategoryClassifier {
 		t.Fatalf("want classifier error, got err=%v result=%+v", err, result)
+	}
+}
+
+func TestRunChatExchangeIgnoreCurrentTaskDoesNotReturnOldTask(t *testing.T) {
+	t.Setenv("ASSISTANT_PROVIDER", "fake")
+	t.Setenv("ASSISTANT_LLM_VALIDATION", "off")
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := providers.NewFakeProvider()
+	fake.ClassifierResponse = `{"action_kind":"answer_question","transition_signal":"none","confidence":0.93,"reason":"fresh chat asks for an informational MCP pipeline"}`
+	fake.ChatResponse = "report saved"
+	rt.Provider = fake
+	rt.Classifier = memory.NewClassifier(fake)
+	if _, err := rt.Tasks.Start("Contains Duplicate"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Tasks.MoveWithPlanningOutput("solve task", []string{"criteria"}, []string{"step"}, nil, app.StageExecution); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := runChatExchange(context.Background(), rt, "fresh_session", "Найди GitHub репозитории про mcp server python и сохрани отчет", false, false, "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Task != nil {
+		t.Fatalf("fresh chat result should not reattach old task: %+v", result.Task)
+	}
+	for _, event := range result.AuditEvents {
+		if event.SessionID == "fresh_session" && event.TaskID != "" {
+			t.Fatalf("fresh chat audit should not show old task context: %+v", event)
+		}
 	}
 }
 

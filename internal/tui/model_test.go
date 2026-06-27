@@ -26,6 +26,7 @@ type fakeBackend struct {
 	audit      []process.ProcessAuditEvent
 	auditCalls int
 	responses  []ChatResponse
+	requests   []ChatRequest
 	applied    []MemoryApplyRequest
 	models     []string
 	badModels  map[string]bool
@@ -114,6 +115,7 @@ func (f *fakeBackend) CreateProfile(ctx context.Context, profileID, currentSessi
 	return SlashResponse{ActiveProfile: &profile, ActiveConfig: &f.config, Output: "created and active profile: " + profileID}, nil
 }
 func (f *fakeBackend) Exchange(ctx context.Context, req ChatRequest) (ChatResponse, error) {
+	f.requests = append(f.requests, req)
 	if len(f.responses) == 0 {
 		return ChatResponse{}, errors.New("missing fake response")
 	}
@@ -207,6 +209,33 @@ func TestSubmitClearsInputImmediately(t *testing.T) {
 	}
 }
 
+func TestSubmitShowsInlineProgressInTimeline(t *testing.T) {
+	fake := &fakeBackend{
+		config:    app.AppConfig{ActiveModel: "fake/model", ActiveProfileID: "student"},
+		responses: []ChatResponse{{OK: true, Answer: "ok"}},
+	}
+	m := NewModel(context.Background(), fake)
+	m.width = 100
+	m.height = 20
+	m.resize()
+	m.input.SetValue("сделай summary")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("submit should start exchange")
+	}
+	view := m.View()
+	for _, want := range []string{"progress", "LLM отвечает", "ожидаю ответ"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("busy timeline missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "model call") {
+		t.Fatalf("busy state should not be hidden in header as model call:\n%s", view)
+	}
+}
+
 func TestSubmitLongTaskAnchorsTimelineAtMessageBeginning(t *testing.T) {
 	fake := &fakeBackend{
 		responses: []ChatResponse{{OK: true, Answer: "ok"}},
@@ -238,6 +267,28 @@ func TestSubmitLongTaskAnchorsTimelineAtMessageBeginning(t *testing.T) {
 	for _, blocked := range []string{"END_NEW_TASK", "old event"} {
 		if strings.Contains(view, blocked) {
 			t.Fatalf("new chat viewport leaked %q instead of submitted task beginning:\n%s", blocked, view)
+		}
+	}
+}
+
+func TestLongUserMessageWrapsWithoutTitleTruncation(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 100
+	m.height = 20
+	m.resize()
+	message := "Найди GitHub репозитории про mcp server python, сделай короткий отчет и сохрани его в файл."
+	m.appendUserEvent(message)
+
+	rendered := strings.Join(m.renderTimelineLines(m.events), "\n")
+	if !strings.Contains(rendered, "user you") {
+		t.Fatalf("user event should use a stable short title:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "user you:") || strings.Contains(rendered, "коротки…") || strings.Contains(rendered, "�") {
+		t.Fatalf("user event should not truncate or corrupt text in title:\n%s", rendered)
+	}
+	for _, want := range []string{"Найди GitHub репозитории", "сделай короткий отчет", "сохрани его в файл"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("wrapped user message missing %q:\n%s", want, rendered)
 		}
 	}
 }
@@ -1142,6 +1193,25 @@ func TestTimelineShortContentDoesNotAddLeadingPadding(t *testing.T) {
 	}
 }
 
+func TestTimelineSeparatesEventsWithBlankLine(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 100
+	m.height = 20
+	m.resize()
+	m.appendEvent("user", app.StagePlanning, "you: first", "first detail", "info")
+	m.appendEvent("assistant", app.StagePlanning, "assistant answer", "assistant detail", "info")
+	lines := m.renderTimelineLines(m.events)
+	if len(lines) < 4 {
+		t.Fatalf("expected multi-line timeline, got %#v", lines)
+	}
+	if strings.TrimSpace(lines[2]) != "" {
+		t.Fatalf("expected blank separator between events, got %#v", lines)
+	}
+	if !strings.Contains(lines[3], "assistant answer") {
+		t.Fatalf("assistant event should start after separator, got %#v", lines)
+	}
+}
+
 func TestTimelineBlankViewportFallsBackToNextAction(t *testing.T) {
 	task := app.TaskState{
 		ID:             "task_exec",
@@ -1475,6 +1545,56 @@ func TestFreshStartupDoesNotAttachOldCurrentTask(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Fatalf("fresh startup missing %q:\n%s", want, view)
 		}
+	}
+}
+
+func TestFreshStartupExchangeIgnoresOldCurrentTask(t *testing.T) {
+	task := &app.TaskState{
+		ID:             "task_current",
+		Title:          "Contains Duplicate",
+		Stage:          app.StageExecution,
+		Status:         app.TaskStatusActive,
+		ExpectedAction: app.ExpectedLLMResponse,
+	}
+	fake := &fakeBackend{task: task, responses: []ChatResponse{{OK: true, Answer: "ok"}}}
+	m := NewModel(context.Background(), fake)
+	m.width = 120
+	m.height = 30
+	m.resize()
+	next, _ := m.Update(m.loadInitial()().(initialLoadedMsg))
+	m = next.(Model)
+	if m.task != nil {
+		t.Fatalf("fresh startup should not attach task: %+v", m.task)
+	}
+	m.input.SetValue("Найди GitHub репозитории про mcp server python")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("submit should start exchange")
+	}
+	_ = cmd()
+	if len(fake.requests) != 1 || !fake.requests[0].IgnoreCurrentTask {
+		t.Fatalf("fresh TUI exchange should ignore hidden old current task: %+v", fake.requests)
+	}
+}
+
+func TestSelectedTaskExchangeKeepsCurrentTask(t *testing.T) {
+	fake := &fakeBackend{responses: []ChatResponse{{OK: true, Answer: "ok"}}}
+	m := NewModel(context.Background(), fake)
+	m.width = 120
+	m.height = 30
+	m.resize()
+	task := app.TaskState{ID: "task_selected", Stage: app.StagePlanning, Status: app.TaskStatusActive}
+	m.task = &task
+	m.input.SetValue("продолжай")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd == nil {
+		t.Fatal("submit should start exchange")
+	}
+	_ = cmd()
+	if len(fake.requests) != 1 || fake.requests[0].IgnoreCurrentTask {
+		t.Fatalf("selected task exchange should keep task context: %+v", fake.requests)
 	}
 }
 

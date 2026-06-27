@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ func newAppMCPToolRunner(servers []app.MCPServerConfig) process.ToolRunner {
 func (r *appMCPToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinition, error) {
 	defs := []providers.ToolDefinition{}
 	bindings := map[string]mcpToolBinding{}
+	var errs []error
 	for _, server := range r.servers {
 		if !server.Enabled {
 			continue
@@ -42,16 +44,19 @@ func (r *appMCPToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinitio
 		}
 		client, err := startConfiguredMCP(ctx, server)
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		if _, err := client.Initialize(ctx); err != nil {
 			_ = client.Close()
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		tools, err := client.ListTools(ctx)
 		_ = client.Close()
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+			continue
 		}
 		for _, tool := range tools {
 			cfg, ok := allowed[tool.Name]
@@ -73,6 +78,9 @@ func (r *appMCPToolRunner) Tools(ctx context.Context) ([]providers.ToolDefinitio
 	r.mu.Lock()
 	r.bindings = bindings
 	r.mu.Unlock()
+	if len(defs) == 0 && len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
 	return defs, nil
 }
 

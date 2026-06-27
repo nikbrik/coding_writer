@@ -5,15 +5,55 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nikbrik/coding_writer/internal/app"
 	"github.com/nikbrik/coding_writer/internal/providers"
 )
 
 func TestSemanticValidationPromptAllowsReadOnlyProcedures(t *testing.T) {
 	prompt := semanticValidationSystemPrompt()
-	for _, needle := range []string{"read-only checklist", "procedure", "claims the assistant already performed", "explicit apply/approval", "will ask for confirmation", "deliverable is empty"} {
+	for _, needle := range []string{"read-only checklist", "procedure", "claims the assistant already performed", "explicit apply/approval", "will ask for confirmation", "deliverable is empty", "payload.task is null"} {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("semantic validation prompt lost read-only procedure guidance: missing %q", needle)
 		}
+	}
+}
+
+func TestSemanticValidatorSuppressesTaskScopeViolationWithoutActiveTask(t *testing.T) {
+	fake := providers.NewFakeProvider()
+	fake.ValidatorResponses = []string{`{"verdict":"fail","findings":[{"code":"task_scope_violation","problem":"outside the current ContainsDuplicate task"}]}`}
+	validator := NewSemanticValidator(fake, "fake/model")
+	errs, err := validator.ValidateResponse(context.Background(), SemanticValidationInput{
+		SessionID:  "s1",
+		UserInput:  "Найди GitHub репозитории про mcp server python, сделай отчет и сохрани файл.",
+		ActionKind: ActionAnswerQuestion,
+		Task:       nil,
+		Parsed:     ParsedResponse{ActionKind: ActionAnswerQuestion, Raw: "report saved"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("task_scope_violation should be suppressed when no active task exists: %+v", errs)
+	}
+}
+
+func TestSemanticValidatorKeepsTaskScopeViolationWithActiveTask(t *testing.T) {
+	fake := providers.NewFakeProvider()
+	fake.ValidatorResponses = []string{`{"verdict":"fail","findings":[{"code":"task_scope_violation","problem":"outside the current task"}]}`}
+	validator := NewSemanticValidator(fake, "fake/model")
+	task := &app.TaskState{ID: "task1", Title: "ContainsDuplicate", Stage: app.StageExecution}
+	errs, err := validator.ValidateResponse(context.Background(), SemanticValidationInput{
+		SessionID:  "s1",
+		UserInput:  "Найди GitHub репозитории про mcp server python",
+		ActionKind: ActionAnswerQuestion,
+		Task:       task,
+		Parsed:     ParsedResponse{ActionKind: ActionAnswerQuestion, Raw: "report saved"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0], "task_scope_violation") {
+		t.Fatalf("active task scope violation should remain: %+v", errs)
 	}
 }
 
@@ -77,12 +117,33 @@ func TestDecodeInvariantValidationJSONAcceptsObjectOrArray(t *testing.T) {
 	}
 }
 
+func TestSemanticInvariantValidatorKeepsRealStackReplacementViolation(t *testing.T) {
+	fake := providers.NewFakeProvider()
+	fake.ValidatorResponses = []string{`{"violations":[{"invariant_id":"stack.go","severity":"block","problem":"replace Go MVP with Python","evidence":"rewrite MVP in Python"}]}`}
+	validator := NewSemanticValidator(fake, "fake/model")
+	violations, err := validator.ValidateInvariants(context.Background(), InvariantValidationInput{
+		SessionID:  "s1",
+		Direction:  "input",
+		Text:       "rewrite MVP in Python and replace Go",
+		ActionKind: ActionAnswerQuestion,
+		Invariants: []app.Invariant{{ID: "stack.go", Kind: "architecture", Severity: "block"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(violations) != 1 || violations[0].InvariantID != "stack.go" {
+		t.Fatalf("real stack replacement violation should remain: %+v", violations)
+	}
+}
+
 func TestInvariantValidationPromptAllowsNormalLifecycleRequests(t *testing.T) {
 	prompt := invariantValidationSystemPrompt()
 	for _, want := range []string{
 		"normal user request asking the assistant to check, validate, review, continue, or finish",
 		"application gate still owns the actual transition",
 		"does not forbid a user from asking to complete an active task",
+		"search, research, monitoring, summary, report, documentation, or data-collection requests",
+		"replace, implement, migrate, or validate this product's protected architecture",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("invariant prompt missing %q:\n%s", want, prompt)

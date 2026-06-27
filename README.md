@@ -303,7 +303,7 @@ cw --version
 Инициализация:
 
 ```bash
-export OPENROUTER_API_KEY="..."
+test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 cw init --model "google/gemini-3.1-flash-lite"
 cw
 ```
@@ -311,7 +311,7 @@ cw
 Live-сценарий Day 15:
 
 ```bash
-export OPENROUTER_API_KEY="..."
+test -n "$OPENROUTER_API_KEY" && echo "OPENROUTER_API_KEY set"
 scripts/day15-demo.sh
 ```
 

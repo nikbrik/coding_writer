@@ -233,6 +233,48 @@ function validateMarkersIfExists(relativePath, markers) {
   }
 }
 
+function walkFiles(relativePath, predicate, out = []) {
+  const absolutePath = relPath(relativePath);
+  if (!fs.existsSync(absolutePath)) return out;
+  const stat = fs.statSync(absolutePath);
+  if (stat.isFile()) {
+    if (predicate(relativePath)) out.push(relativePath);
+    return out;
+  }
+  if (!stat.isDirectory()) return out;
+  for (const entry of fs.readdirSync(absolutePath, { withFileTypes: true })) {
+    const child = path.join(relativePath, entry.name);
+    if (entry.isDirectory()) {
+      walkFiles(child, predicate, out);
+    } else if (entry.isFile() && predicate(child)) {
+      out.push(child);
+    }
+  }
+  return out;
+}
+
+function validateNoOpenRouterPlaceholderExports() {
+  const candidateFiles = [
+    ...walkFiles("docs", (file) => file.endsWith(".md")),
+    ...walkFiles("README.md", (file) => file.endsWith(".md")),
+    ...walkFiles("scripts", (file) => file.endsWith(".sh")),
+  ];
+  const forbidden = [
+    /export\s+OPENROUTER_API_KEY=(["'])\.\.\.\1/,
+    /export\s+OPENROUTER_API_KEY=(["'])ваш[_ ]?ключ[^"']*\1/i,
+    /export\s+OPENROUTER_API_KEY=(["'])your[_ ]?key[^"']*\1/i,
+  ];
+  for (const file of candidateFiles) {
+    const text = readText(file);
+    const lines = text.split("\n");
+    lines.forEach((line, index) => {
+      if (forbidden.some((pattern) => pattern.test(line))) {
+        fail(`${file}:${index + 1}: do not document placeholder OPENROUTER_API_KEY exports; require an already-set key and use test -n "$OPENROUTER_API_KEY" instead`);
+      }
+    });
+  }
+}
+
 function validateSharedLayer() {
   validateContains("AGENTS.md", [".agents/rules/always.md"]);
   validateContains(".agents/rules/always.md", [
@@ -280,6 +322,7 @@ function validateSharedLayer() {
 
 validateConfig();
 validateSkills();
+validateNoOpenRouterPlaceholderExports();
 validateSharedLayer();
 validateMarkers(".agents/learnings/LEARNINGS.md", [
   "<!-- LEARNINGS:START -->",

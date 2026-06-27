@@ -38,7 +38,7 @@ func NewOpenRouterProvider(baseURL string) *OpenRouterProvider {
 func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]string, error) {
 	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
-		return nil, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "export OPENROUTER_API_KEY=...", nil)
+		return nil, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "Set OPENROUTER_API_KEY in your shell before starting cw.", nil)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.BaseURL+"/models", nil)
 	if err != nil {
@@ -75,7 +75,7 @@ func (p *OpenRouterProvider) ListModels(ctx context.Context) ([]string, error) {
 func (p *OpenRouterProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
 	key := os.Getenv("OPENROUTER_API_KEY")
 	if key == "" {
-		return CompletionResponse{}, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "export OPENROUTER_API_KEY=...", nil)
+		return CompletionResponse{}, app.ErrorWithHint(app.CategoryProvider, "missing_api_key", "OPENROUTER_API_KEY is required", "Set OPENROUTER_API_KEY in your shell before starting cw.", nil)
 	}
 	if req.Model == "" {
 		return CompletionResponse{}, app.NewError(app.CategoryProvider, "missing_model", "active model is required", nil)
