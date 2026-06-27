@@ -1,0 +1,976 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - link "Homepage" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+        - generic [ref=e13]:
+          - navigation "Global" [ref=e16]:
+            - list [ref=e17]:
+              - listitem [ref=e18]:
+                - button "Platform" [ref=e20] [cursor=pointer]:
+                  - text: Platform
+                  - img [ref=e21]
+              - listitem [ref=e23]:
+                - button "Solutions" [ref=e25] [cursor=pointer]:
+                  - text: Solutions
+                  - img [ref=e26]
+              - listitem [ref=e28]:
+                - button "Resources" [ref=e30] [cursor=pointer]:
+                  - text: Resources
+                  - img [ref=e31]
+              - listitem [ref=e33]:
+                - button "Open Source" [ref=e35] [cursor=pointer]:
+                  - text: Open Source
+                  - img [ref=e36]
+              - listitem [ref=e38]:
+                - button "Enterprise" [ref=e40] [cursor=pointer]:
+                  - text: Enterprise
+                  - img [ref=e41]
+              - listitem [ref=e43]:
+                - link "Pricing" [ref=e44] [cursor=pointer]:
+                  - /url: https://github.com/pricing
+                  - generic [ref=e45]: Pricing
+          - generic [ref=e46]:
+            - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+            - link "Sign in" [ref=e54] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fmodelcontextprotocol%2Fservers
+            - link "Sign up" [ref=e55] [cursor=pointer]:
+              - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=modelcontextprotocol%2Fservers
+            - button "Appearance settings" [ref=e58] [cursor=pointer]:
+              - img
+  - main [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e66]:
+          - img [ref=e67]
+          - link "modelcontextprotocol" [ref=e70] [cursor=pointer]:
+            - /url: /modelcontextprotocol
+          - generic [ref=e71]: /
+          - strong [ref=e72]:
+            - link "servers" [ref=e73] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers
+          - generic [ref=e74]: Public
+        - generic [ref=e75]:
+          - list:
+            - listitem [ref=e76]:
+              - link "You must be signed in to change notification settings" [ref=e77] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmodelcontextprotocol%2Fservers
+                - img [ref=e78]
+                - text: Notifications
+            - listitem [ref=e80]:
+              - link "Fork 11.1k" [ref=e81] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmodelcontextprotocol%2Fservers
+                - img [ref=e82]
+                - text: Fork
+                - generic "11,085" [ref=e84]: 11.1k
+            - listitem [ref=e85]:
+              - link "You must be signed in to star a repository" [ref=e87] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmodelcontextprotocol%2Fservers
+                - img [ref=e88]
+                - text: Star
+                - generic "87751 users starred this repository" [ref=e90]: 87.8k
+      - navigation "Repository" [ref=e91]:
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Code" [ref=e94] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers
+              - img [ref=e95]
+              - generic [ref=e97]: Code
+          - listitem [ref=e98]:
+            - link "Issues 348" [ref=e99] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/issues
+              - img [ref=e100]
+              - generic [ref=e103]: Issues
+              - generic "348" [ref=e104]
+          - listitem [ref=e105]:
+            - link "Pull requests 259" [ref=e106] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/pulls
+              - img [ref=e107]
+              - generic [ref=e109]: Pull requests
+              - generic "259" [ref=e110]
+          - listitem [ref=e111]:
+            - link "Actions" [ref=e112] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/actions
+              - img [ref=e113]
+              - generic [ref=e115]: Actions
+          - listitem [ref=e116]:
+            - link "Models" [ref=e117] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/models
+              - img [ref=e118]
+              - generic [ref=e120]: Models
+          - listitem [ref=e121]:
+            - link "Security and quality 6" [ref=e122] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/security
+              - img [ref=e123]
+              - generic [ref=e125]: Security and quality
+              - generic "6" [ref=e126]
+          - listitem [ref=e127]:
+            - link "Insights" [ref=e128] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/pulse
+              - img [ref=e129]
+              - generic [ref=e131]: Insights
+    - generic [ref=e144]:
+      - heading "modelcontextprotocol/servers" [level=1] [ref=e146]
+      - generic [ref=e147]:
+        - generic [ref=e150]:
+          - generic [ref=e151]:
+            - generic [ref=e152]:
+              - button "main branch" [ref=e154] [cursor=pointer]:
+                - generic [ref=e155]:
+                  - generic [ref=e157]:
+                    - img [ref=e159]
+                    - generic [ref=e162]: main
+                  - generic:
+                    - img
+              - generic [ref=e163]:
+                - link "52 Branches" [ref=e164] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/branches
+                  - generic [ref=e165]:
+                    - generic:
+                      - img
+                    - generic [ref=e167]:
+                      - strong [ref=e168]: "52"
+                      - text: Branches
+                - link "42 Tags" [ref=e169] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/tags
+                  - generic [ref=e170]:
+                    - generic:
+                      - img
+                    - generic [ref=e172]:
+                      - strong [ref=e173]: "42"
+                      - text: Tags
+            - generic [ref=e174]:
+              - generic [ref=e178]:
+                - img [ref=e180]
+                - combobox "Go to file" [ref=e182]
+              - button "Code" [ref=e183] [cursor=pointer]:
+                - generic [ref=e184]:
+                  - generic:
+                    - img
+                  - generic [ref=e185]: Code
+                  - generic:
+                    - img
+          - generic [ref=e186]:
+            - generic [ref=e187]:
+              - heading "Folders and files" [level=2] [ref=e188]
+              - table "Folders and files" [ref=e189]:
+                - rowgroup:
+                  - row "Name Last commit message Last commit date":
+                    - columnheader "Name"
+                    - columnheader "Last commit message":
+                      - generic "Last commit message"
+                    - columnheader "Last commit date":
+                      - generic "Last commit date"
+                - rowgroup [ref=e190]:
+                  - row "Latest commit History 4,115 Commits" [ref=e191]:
+                    - cell "Latest commit History 4,115 Commits" [ref=e192]:
+                      - generic [ref=e193]:
+                        - heading "Latest commit" [level=2] [ref=e194]
+                        - generic [ref=e197]:
+                          - heading "History" [level=2] [ref=e198]
+                          - link "4,115 Commits" [ref=e199] [cursor=pointer]:
+                            - /url: /modelcontextprotocol/servers/commits/main/
+                            - generic [ref=e200]:
+                              - generic:
+                                - img
+                              - generic [ref=e201]: 4,115 Commits
+                  - row ".github, (Directory)" [ref=e202]:
+                    - cell ".github, (Directory)" [ref=e203]:
+                      - generic [ref=e204]:
+                        - img [ref=e205]
+                        - link ".github, (Directory)" [ref=e210] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/tree/main/.github
+                          - text: .github
+                    - cell [ref=e211]
+                    - cell [ref=e213]
+                  - row "scripts, (Directory)" [ref=e216]:
+                    - cell "scripts, (Directory)" [ref=e217]:
+                      - generic [ref=e218]:
+                        - img [ref=e219]
+                        - link "scripts, (Directory)" [ref=e224] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/tree/main/scripts
+                          - text: scripts
+                    - cell [ref=e225]
+                    - cell [ref=e227]
+                  - row "src, (Directory)" [ref=e230]:
+                    - cell "src, (Directory)" [ref=e231]:
+                      - generic [ref=e232]:
+                        - img [ref=e233]
+                        - link "src, (Directory)" [ref=e238] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/tree/main/src
+                          - text: src
+                    - cell [ref=e239]
+                    - cell [ref=e241]
+                  - row ".gitattributes, (File)" [ref=e244]:
+                    - cell ".gitattributes, (File)" [ref=e245]:
+                      - generic [ref=e246]:
+                        - img [ref=e247]
+                        - link ".gitattributes, (File)" [ref=e252] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/.gitattributes
+                          - text: .gitattributes
+                    - cell [ref=e253]
+                    - cell [ref=e255]
+                  - row ".gitignore, (File)" [ref=e258]:
+                    - cell ".gitignore, (File)" [ref=e259]:
+                      - generic [ref=e260]:
+                        - img [ref=e261]
+                        - link ".gitignore, (File)" [ref=e266] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/.gitignore
+                          - text: .gitignore
+                    - cell [ref=e267]
+                    - cell [ref=e269]
+                  - row ".mcp.json, (File)" [ref=e272]:
+                    - cell ".mcp.json, (File)" [ref=e273]:
+                      - generic [ref=e274]:
+                        - img [ref=e275]
+                        - link ".mcp.json, (File)" [ref=e280] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/.mcp.json
+                          - text: .mcp.json
+                    - cell [ref=e281]
+                    - cell [ref=e283]
+                  - row ".npmrc, (File)" [ref=e286]:
+                    - cell ".npmrc, (File)" [ref=e287]:
+                      - generic [ref=e288]:
+                        - img [ref=e289]
+                        - link ".npmrc, (File)" [ref=e294] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/.npmrc
+                          - text: .npmrc
+                    - cell [ref=e295]
+                    - cell [ref=e297]
+                  - row "ADDITIONAL.md, (File)" [ref=e300]:
+                    - cell "ADDITIONAL.md, (File)" [ref=e301]:
+                      - generic [ref=e302]:
+                        - img [ref=e303]
+                        - link "ADDITIONAL.md, (File)" [ref=e308] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/ADDITIONAL.md
+                          - text: ADDITIONAL.md
+                    - cell [ref=e309]
+                    - cell [ref=e311]
+                  - row "CLAUDE.md, (File)" [ref=e314]:
+                    - cell "CLAUDE.md, (File)" [ref=e315]:
+                      - generic [ref=e316]:
+                        - img [ref=e317]
+                        - link "CLAUDE.md, (File)" [ref=e322] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/CLAUDE.md
+                          - text: CLAUDE.md
+                    - cell [ref=e323]
+                    - cell [ref=e325]
+                  - row "CODE_OF_CONDUCT.md, (File)" [ref=e328]:
+                    - cell "CODE_OF_CONDUCT.md, (File)" [ref=e329]:
+                      - generic [ref=e330]:
+                        - img [ref=e331]
+                        - link "CODE_OF_CONDUCT.md, (File)" [ref=e336] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/CODE_OF_CONDUCT.md
+                          - text: CODE_OF_CONDUCT.md
+                    - cell [ref=e337]
+                    - cell [ref=e339]
+                  - row "CONTRIBUTING.md, (File)" [ref=e342]:
+                    - cell "CONTRIBUTING.md, (File)" [ref=e343]:
+                      - generic [ref=e344]:
+                        - img [ref=e345]
+                        - link "CONTRIBUTING.md, (File)" [ref=e350] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/CONTRIBUTING.md
+                          - text: CONTRIBUTING.md
+                    - cell [ref=e351]
+                    - cell [ref=e353]
+                  - row "LICENSE, (File)" [ref=e356]:
+                    - cell "LICENSE, (File)" [ref=e357]:
+                      - generic [ref=e358]:
+                        - img [ref=e359]
+                        - link "LICENSE, (File)" [ref=e364] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/LICENSE
+                          - text: LICENSE
+                    - cell [ref=e365]
+                    - cell [ref=e367]
+                  - row "README.md, (File)" [ref=e370]:
+                    - cell "README.md, (File)" [ref=e371]:
+                      - generic [ref=e372]:
+                        - img [ref=e373]
+                        - link "README.md, (File)" [ref=e378] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/README.md
+                          - text: README.md
+                    - cell [ref=e379]
+                    - cell [ref=e381]
+                  - row "SECURITY.md, (File)" [ref=e384]:
+                    - cell "SECURITY.md, (File)" [ref=e385]:
+                      - generic [ref=e386]:
+                        - img [ref=e387]
+                        - link "SECURITY.md, (File)" [ref=e392] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/SECURITY.md
+                          - text: SECURITY.md
+                    - cell [ref=e393]
+                    - cell [ref=e395]
+                  - row "package-lock.json, (File)" [ref=e398]:
+                    - cell "package-lock.json, (File)" [ref=e399]:
+                      - generic [ref=e400]:
+                        - img [ref=e401]
+                        - link "package-lock.json, (File)" [ref=e406] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/package-lock.json
+                          - text: package-lock.json
+                    - cell [ref=e407]
+                    - cell [ref=e409]
+                  - row "package.json, (File)" [ref=e412]:
+                    - cell "package.json, (File)" [ref=e413]:
+                      - generic [ref=e414]:
+                        - img [ref=e415]
+                        - link "package.json, (File)" [ref=e420] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/package.json
+                          - text: package.json
+                    - cell [ref=e421]
+                    - cell [ref=e423]
+                  - row "tsconfig.json, (File)" [ref=e426]:
+                    - cell "tsconfig.json, (File)" [ref=e427]:
+                      - generic [ref=e428]:
+                        - img [ref=e429]
+                        - link "tsconfig.json, (File)" [ref=e434] [cursor=pointer]:
+                          - /url: /modelcontextprotocol/servers/blob/main/tsconfig.json
+                          - text: tsconfig.json
+                    - cell [ref=e435]
+                    - cell [ref=e437]
+            - generic [ref=e441]:
+              - generic [ref=e442]:
+                - heading "Repository files navigation" [level=2] [ref=e443]
+                - navigation "Repository files" [ref=e444]:
+                  - list [ref=e445]:
+                    - listitem [ref=e446]:
+                      - link "README" [ref=e447] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e449]
+                        - generic [ref=e451]: README
+                    - listitem [ref=e452]:
+                      - link "Code of conduct" [ref=e453] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e455]
+                        - generic [ref=e457]: Code of conduct
+                    - listitem [ref=e458]:
+                      - link "Contributing" [ref=e459] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e461]
+                        - generic [ref=e463]: Contributing
+                    - listitem [ref=e464]:
+                      - link "License" [ref=e465] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e467]
+                        - generic [ref=e469]: License
+                    - listitem [ref=e470]:
+                      - link "Security" [ref=e471] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e473]
+                        - generic [ref=e475]: Security
+                - button "Outline" [ref=e476] [cursor=pointer]:
+                  - img [ref=e477]
+              - article [ref=e480]:
+                - generic [ref=e481]:
+                  - heading "Model Context Protocol servers" [level=1] [ref=e482]
+                  - 'link "Permalink: Model Context Protocol servers" [ref=e483] [cursor=pointer]':
+                    - /url: "#model-context-protocol-servers"
+                    - img [ref=e484]
+                - paragraph [ref=e486]:
+                  - text: This repository is a collection of
+                  - emphasis [ref=e487]: reference implementations
+                  - text: for the
+                  - link "Model Context Protocol" [ref=e488] [cursor=pointer]:
+                    - /url: https://modelcontextprotocol.io/
+                  - text: (MCP), as well as references to community-built servers and additional resources.
+                - generic [ref=e489]:
+                  - paragraph [ref=e490]:
+                    - img [ref=e491]
+                    - text: Important
+                  - paragraph [ref=e493]:
+                    - text: If you are looking for a list of MCP servers, you can browse published servers on
+                    - link "the MCP Registry" [ref=e494] [cursor=pointer]:
+                      - /url: https://registry.modelcontextprotocol.io/
+                    - text: . The repository served by this README is dedicated to housing just the small number of reference servers maintained by the MCP steering group.
+                - generic [ref=e495]:
+                  - paragraph [ref=e496]:
+                    - img [ref=e497]
+                    - text: Warning
+                  - paragraph [ref=e499]:
+                    - text: The servers in this repository are intended as
+                    - strong [ref=e500]: reference implementations
+                    - text: to demonstrate MCP features and SDK usage. They are meant to serve as educational examples for developers building their own MCP servers, not as production-ready solutions. Developers should evaluate their own security requirements and implement appropriate safeguards based on their specific threat model and use case.
+                - paragraph [ref=e501]: "The servers in this repository showcase the versatility and extensibility of MCP, demonstrating how it can be used to give Large Language Models (LLMs) secure, controlled access to tools and data sources. Typically, each MCP server is implemented with an MCP SDK:"
+                - list [ref=e502]:
+                  - listitem [ref=e503]:
+                    - link "C# MCP SDK" [ref=e504] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/csharp-sdk
+                  - listitem [ref=e505]:
+                    - link "Go MCP SDK" [ref=e506] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/go-sdk
+                  - listitem [ref=e507]:
+                    - link "Java MCP SDK" [ref=e508] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/java-sdk
+                  - listitem [ref=e509]:
+                    - link "Kotlin MCP SDK" [ref=e510] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/kotlin-sdk
+                  - listitem [ref=e511]:
+                    - link "PHP MCP SDK" [ref=e512] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/php-sdk
+                  - listitem [ref=e513]:
+                    - link "Python MCP SDK" [ref=e514] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/python-sdk
+                  - listitem [ref=e515]:
+                    - link "Ruby MCP SDK" [ref=e516] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/ruby-sdk
+                  - listitem [ref=e517]:
+                    - link "Rust MCP SDK" [ref=e518] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/rust-sdk
+                  - listitem [ref=e519]:
+                    - link "Swift MCP SDK" [ref=e520] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/swift-sdk
+                  - listitem [ref=e521]:
+                    - link "TypeScript MCP SDK" [ref=e522] [cursor=pointer]:
+                      - /url: https://github.com/modelcontextprotocol/typescript-sdk
+                - generic [ref=e523]:
+                  - heading "🌟 Reference Servers" [level=2] [ref=e524]
+                  - 'link "Permalink: 🌟 Reference Servers" [ref=e525] [cursor=pointer]':
+                    - /url: "#-reference-servers"
+                    - img [ref=e526]
+                - paragraph [ref=e528]: These servers aim to demonstrate MCP features and the official SDKs.
+                - list [ref=e529]:
+                  - listitem [ref=e530]:
+                    - strong [ref=e531]:
+                      - link "Everything" [ref=e532] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/everything
+                    - text: "- Reference / test server with prompts, resources, and tools."
+                  - listitem [ref=e533]:
+                    - strong [ref=e534]:
+                      - link "Fetch" [ref=e535] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/fetch
+                    - text: "- Web content fetching and conversion for efficient LLM usage."
+                  - listitem [ref=e536]:
+                    - strong [ref=e537]:
+                      - link "Filesystem" [ref=e538] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/filesystem
+                    - text: "- Secure file operations with configurable access controls."
+                  - listitem [ref=e539]:
+                    - strong [ref=e540]:
+                      - link "Git" [ref=e541] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/git
+                    - text: "- Tools to read, search, and manipulate Git repositories."
+                  - listitem [ref=e542]:
+                    - strong [ref=e543]:
+                      - link "Memory" [ref=e544] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/memory
+                    - text: "- Knowledge graph-based persistent memory system."
+                  - listitem [ref=e545]:
+                    - strong [ref=e546]:
+                      - link "Sequential Thinking" [ref=e547] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/sequentialthinking
+                    - text: "- Dynamic and reflective problem-solving through thought sequences."
+                  - listitem [ref=e548]:
+                    - strong [ref=e549]:
+                      - link "Time" [ref=e550] [cursor=pointer]:
+                        - /url: /modelcontextprotocol/servers/blob/main/src/time
+                    - text: "- Time and timezone conversion capabilities."
+                - generic [ref=e551]:
+                  - heading "Archived" [level=3] [ref=e552]
+                  - 'link "Permalink: Archived" [ref=e553] [cursor=pointer]':
+                    - /url: "#archived"
+                    - img [ref=e554]
+                - paragraph [ref=e556]:
+                  - text: The following reference servers are now archived and can be found at
+                  - link "servers-archived" [ref=e557] [cursor=pointer]:
+                    - /url: https://github.com/modelcontextprotocol/servers-archived
+                  - text: .
+                - list [ref=e558]:
+                  - listitem [ref=e559]:
+                    - strong [ref=e560]:
+                      - link "AWS KB Retrieval" [ref=e561] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/aws-kb-retrieval-server
+                    - text: "- Retrieval from AWS Knowledge Base using Bedrock Agent Runtime."
+                  - listitem [ref=e562]:
+                    - strong [ref=e563]:
+                      - link "Brave Search" [ref=e564] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/brave-search
+                    - text: "- Web and local search using Brave's Search API. Has been replaced by the"
+                    - link "official server" [ref=e565] [cursor=pointer]:
+                      - /url: https://github.com/brave/brave-search-mcp-server
+                    - text: .
+                  - listitem [ref=e566]:
+                    - strong [ref=e567]:
+                      - link "EverArt" [ref=e568] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/everart
+                    - text: "- AI image generation using various models."
+                  - listitem [ref=e569]:
+                    - strong [ref=e570]:
+                      - link "GitHub" [ref=e571] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/github
+                    - text: "- Repository management, file operations, and GitHub API integration."
+                  - listitem [ref=e572]:
+                    - strong [ref=e573]:
+                      - link "GitLab" [ref=e574] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gitlab
+                    - text: "- GitLab API, enabling project management."
+                  - listitem [ref=e575]:
+                    - strong [ref=e576]:
+                      - link "Google Drive" [ref=e577] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/gdrive
+                    - text: "- File access and search capabilities for Google Drive."
+                  - listitem [ref=e578]:
+                    - strong [ref=e579]:
+                      - link "Google Maps" [ref=e580] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/google-maps
+                    - text: "- Location services, directions, and place details."
+                  - listitem [ref=e581]:
+                    - strong [ref=e582]:
+                      - link "PostgreSQL" [ref=e583] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/postgres
+                    - text: "- Read-only database access with schema inspection."
+                  - listitem [ref=e584]:
+                    - strong [ref=e585]:
+                      - link "Puppeteer" [ref=e586] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/puppeteer
+                    - text: "- Browser automation and web scraping."
+                  - listitem [ref=e587]:
+                    - strong [ref=e588]:
+                      - link "Redis" [ref=e589] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/redis
+                    - text: "- Interact with Redis key-value stores."
+                  - listitem [ref=e590]:
+                    - strong [ref=e591]:
+                      - link "Sentry" [ref=e592] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sentry
+                    - text: "- Retrieving and analyzing issues from Sentry.io."
+                  - listitem [ref=e593]:
+                    - strong [ref=e594]:
+                      - link "Slack" [ref=e595] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/slack
+                    - text: "- Channel management and messaging capabilities. Now maintained by"
+                    - link "Zencoder" [ref=e596] [cursor=pointer]:
+                      - /url: https://github.com/zencoderai/slack-mcp-server
+                  - listitem [ref=e597]:
+                    - strong [ref=e598]:
+                      - link "SQLite" [ref=e599] [cursor=pointer]:
+                        - /url: https://github.com/modelcontextprotocol/servers-archived/tree/main/src/sqlite
+                    - text: "- Database interaction and business intelligence capabilities."
+                - generic [ref=e600]:
+                  - heading "🚀 Getting Started" [level=2] [ref=e601]
+                  - 'link "Permalink: 🚀 Getting Started" [ref=e602] [cursor=pointer]':
+                    - /url: "#-getting-started"
+                    - img [ref=e603]
+                - generic [ref=e605]:
+                  - heading "Using MCP Servers in this Repository" [level=3] [ref=e606]
+                  - 'link "Permalink: Using MCP Servers in this Repository" [ref=e607] [cursor=pointer]':
+                    - /url: "#using-mcp-servers-in-this-repository"
+                    - img [ref=e608]
+                - paragraph [ref=e610]:
+                  - text: TypeScript-based servers in this repository can be used directly with
+                  - code [ref=e611]: npx
+                  - text: .
+                - paragraph [ref=e612]:
+                  - text: For example, this will start the
+                  - link "Memory" [ref=e613] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/src/memory
+                  - text: "server:"
+                - generic [ref=e614]:
+                  - generic [ref=e615]: npx -y @modelcontextprotocol/server-memory
+                  - button "Copy code to clipboard" [ref=e617] [cursor=pointer]:
+                    - img [ref=e618]
+                - paragraph [ref=e621]:
+                  - text: Python-based servers in this repository can be used directly with
+                  - link "uvx" [ref=e622] [cursor=pointer]:
+                    - /url: https://docs.astral.sh/uv/concepts/tools/
+                    - code [ref=e623]: uvx
+                  - text: or
+                  - link "pip" [ref=e624] [cursor=pointer]:
+                    - /url: https://pypi.org/project/pip/
+                    - code [ref=e625]: pip
+                  - text: .
+                  - code [ref=e626]: uvx
+                  - text: is recommended for ease of use and setup.
+                - paragraph [ref=e627]:
+                  - text: For example, this will start the
+                  - link "Git" [ref=e628] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/src/git
+                  - text: "server:"
+                - generic [ref=e629]:
+                  - generic [ref=e630]:
+                    - generic [ref=e631]: "# With uvx"
+                    - text: uvx mcp-server-git
+                    - generic [ref=e632]: "# With pip"
+                    - text: pip install mcp-server-git python -m mcp_server_git
+                  - button "Copy code to clipboard" [ref=e634] [cursor=pointer]:
+                    - img [ref=e635]
+                - paragraph [ref=e638]:
+                  - text: Follow
+                  - link "these" [ref=e639] [cursor=pointer]:
+                    - /url: https://docs.astral.sh/uv/getting-started/installation/
+                  - text: instructions to install
+                  - code [ref=e640]: uv
+                  - text: /
+                  - code [ref=e641]: uvx
+                  - text: and
+                  - link "these" [ref=e642] [cursor=pointer]:
+                    - /url: https://pip.pypa.io/en/stable/installation/
+                  - text: to install
+                  - code [ref=e643]: pip
+                  - text: .
+                - generic [ref=e644]:
+                  - heading "Using an MCP Client" [level=3] [ref=e645]
+                  - 'link "Permalink: Using an MCP Client" [ref=e646] [cursor=pointer]':
+                    - /url: "#using-an-mcp-client"
+                    - img [ref=e647]
+                - paragraph [ref=e649]: "However, running a server on its own isn't very useful, and should instead be configured into an MCP client. For example, here's the Claude Desktop configuration to use the above server:"
+                - generic [ref=e650]:
+                  - generic [ref=e651]:
+                    - text: "{ \"mcpServers\": { \"memory\": { \"command\":"
+                    - generic [ref=e652]: "\"npx\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e653]: "\"-y\""
+                    - text: ","
+                    - generic [ref=e654]: "\"@modelcontextprotocol/server-memory\""
+                    - text: "] } } }"
+                  - button "Copy code to clipboard" [ref=e656] [cursor=pointer]:
+                    - img [ref=e657]
+                - paragraph [ref=e660]:
+                  - text: On Windows, wrap
+                  - code [ref=e661]: npx
+                  - text: with
+                  - code [ref=e662]: cmd /c
+                  - text: ":"
+                - generic [ref=e663]:
+                  - generic [ref=e664]:
+                    - text: "{ \"mcpServers\": { \"memory\": { \"command\":"
+                    - generic [ref=e665]: "\"cmd\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e666]: "\"/c\""
+                    - text: ","
+                    - generic [ref=e667]: "\"npx\""
+                    - text: ","
+                    - generic [ref=e668]: "\"-y\""
+                    - text: ","
+                    - generic [ref=e669]: "\"@modelcontextprotocol/server-memory\""
+                    - text: "] } } }"
+                  - button "Copy code to clipboard" [ref=e671] [cursor=pointer]:
+                    - img [ref=e672]
+                - paragraph [ref=e675]: "Additional examples of using the Claude Desktop as an MCP client might look like:"
+                - generic [ref=e676]:
+                  - generic [ref=e677]:
+                    - text: "{ \"mcpServers\": { \"filesystem\": { \"command\":"
+                    - generic [ref=e678]: "\"npx\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e679]: "\"-y\""
+                    - text: ","
+                    - generic [ref=e680]: "\"@modelcontextprotocol/server-filesystem\""
+                    - text: ","
+                    - generic [ref=e681]: "\"/path/to/allowed/files\""
+                    - text: "] }, \"git\": { \"command\":"
+                    - generic [ref=e682]: "\"uvx\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e683]: "\"mcp-server-git\""
+                    - text: ","
+                    - generic [ref=e684]: "\"--repository\""
+                    - text: ","
+                    - generic [ref=e685]: "\"path/to/git/repo\""
+                    - text: "] }, \"github\": { \"command\":"
+                    - generic [ref=e686]: "\"npx\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e687]: "\"-y\""
+                    - text: ","
+                    - generic [ref=e688]: "\"@modelcontextprotocol/server-github\""
+                    - text: "], \"env\": { \"GITHUB_PERSONAL_ACCESS_TOKEN\":"
+                    - generic [ref=e689]: "\"<YOUR_TOKEN>\""
+                    - text: "} }, \"postgres\": { \"command\":"
+                    - generic [ref=e690]: "\"npx\""
+                    - text: ", \"args\": ["
+                    - generic [ref=e691]: "\"-y\""
+                    - text: ","
+                    - generic [ref=e692]: "\"@modelcontextprotocol/server-postgres\""
+                    - text: ","
+                    - generic [ref=e693]: "\"postgresql://localhost/mydb\""
+                    - text: "] } } }"
+                  - button "Copy code to clipboard" [ref=e695] [cursor=pointer]:
+                    - img [ref=e696]
+                - paragraph [ref=e699]:
+                  - text: On Windows, apply the same wrapper to each
+                  - code [ref=e700]: npx
+                  - text: "-based entry above by changing"
+                  - code [ref=e701]: "\"command\""
+                  - text: to
+                  - code [ref=e702]: "\"cmd\""
+                  - text: and prepending
+                  - code [ref=e703]: "\"/c\", \"npx\""
+                  - text: to the existing
+                  - code [ref=e704]: args
+                  - text: . Leave
+                  - code [ref=e705]: uvx
+                  - text: entries unchanged.
+                - generic [ref=e706]:
+                  - heading "🛠️ Creating Your Own Server" [level=2] [ref=e707]
+                  - 'link "Permalink: 🛠️ Creating Your Own Server" [ref=e708] [cursor=pointer]':
+                    - /url: "#️-creating-your-own-server"
+                    - img [ref=e709]
+                - paragraph [ref=e711]:
+                  - text: Interested in creating your own MCP server? Visit the official documentation at
+                  - link "modelcontextprotocol.io" [ref=e712] [cursor=pointer]:
+                    - /url: https://modelcontextprotocol.io/introduction
+                  - text: for comprehensive guides, best practices, and technical details on implementing MCP servers.
+                - generic [ref=e713]:
+                  - heading "📚 Learn More" [level=2] [ref=e714]
+                  - 'link "Permalink: 📚 Learn More" [ref=e715] [cursor=pointer]':
+                    - /url: "#-learn-more"
+                    - img [ref=e716]
+                - paragraph [ref=e718]:
+                  - text: See
+                  - link "ADDITIONAL.md" [ref=e719] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/ADDITIONAL.md
+                  - text: for a curated list of frameworks and resources that simplify building MCP servers and clients.
+                - generic [ref=e720]:
+                  - heading "🤝 Contributing" [level=2] [ref=e721]
+                  - 'link "Permalink: 🤝 Contributing" [ref=e722] [cursor=pointer]':
+                    - /url: "#-contributing"
+                    - img [ref=e723]
+                - paragraph [ref=e725]:
+                  - text: See
+                  - link "CONTRIBUTING.md" [ref=e726] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/CONTRIBUTING.md
+                  - text: for information about contributing to this repository.
+                - generic [ref=e727]:
+                  - heading "🔒 Security" [level=2] [ref=e728]
+                  - 'link "Permalink: 🔒 Security" [ref=e729] [cursor=pointer]':
+                    - /url: "#-security"
+                    - img [ref=e730]
+                - paragraph [ref=e732]:
+                  - text: See
+                  - link "SECURITY.md" [ref=e733] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/SECURITY.md
+                  - text: for reporting security vulnerabilities.
+                - generic [ref=e734]:
+                  - heading "📜 License" [level=2] [ref=e735]
+                  - 'link "Permalink: 📜 License" [ref=e736] [cursor=pointer]':
+                    - /url: "#-license"
+                    - img [ref=e737]
+                - paragraph [ref=e739]:
+                  - text: This project is licensed under the Apache License, Version 2.0 for new contributions, with existing code under MIT - see the
+                  - link "LICENSE" [ref=e740] [cursor=pointer]:
+                    - /url: /modelcontextprotocol/servers/blob/main/LICENSE
+                  - text: file for details.
+                - generic [ref=e741]:
+                  - heading "💬 Community" [level=2] [ref=e742]
+                  - 'link "Permalink: 💬 Community" [ref=e743] [cursor=pointer]':
+                    - /url: "#-community"
+                    - img [ref=e744]
+                - list [ref=e746]:
+                  - listitem [ref=e747]:
+                    - link "GitHub Discussions" [ref=e748] [cursor=pointer]:
+                      - /url: https://github.com/orgs/modelcontextprotocol/discussions
+                - generic [ref=e749]:
+                  - heading "⭐ Support" [level=2] [ref=e750]
+                  - 'link "Permalink: ⭐ Support" [ref=e751] [cursor=pointer]':
+                    - /url: "#-support"
+                    - img [ref=e752]
+                - paragraph [ref=e754]: If you find MCP servers useful, please consider starring the repository and contributing new servers or improvements!
+                - separator [ref=e755]
+                - paragraph [ref=e756]: Managed by Anthropic, but built together with the community. The Model Context Protocol is open source and we encourage everyone to contribute their own servers and improvements!
+        - generic [ref=e760]:
+          - generic [ref=e763]:
+            - heading "About" [level=2] [ref=e764]
+            - paragraph [ref=e765]: Model Context Protocol Servers
+            - generic [ref=e766]:
+              - img [ref=e767]
+              - link "modelcontextprotocol.io" [ref=e770] [cursor=pointer]:
+                - /url: https://modelcontextprotocol.io
+            - heading "Resources" [level=3] [ref=e771]
+            - link "Readme" [ref=e773] [cursor=pointer]:
+              - /url: "#readme-ov-file"
+              - img [ref=e774]
+              - text: Readme
+            - heading "License" [level=3] [ref=e776]
+            - link "View license" [ref=e778] [cursor=pointer]:
+              - /url: "#License-1-ov-file"
+              - img [ref=e779]
+              - text: View license
+            - heading "Code of conduct" [level=3] [ref=e781]
+            - link "Code of conduct" [ref=e783] [cursor=pointer]:
+              - /url: "#coc-ov-file"
+              - img [ref=e784]
+              - text: Code of conduct
+            - heading "Contributing" [level=3] [ref=e786]
+            - link "Contributing" [ref=e788] [cursor=pointer]:
+              - /url: "#contributing-ov-file"
+              - img [ref=e789]
+              - text: Contributing
+            - heading "Security policy" [level=3] [ref=e791]
+            - link "Security policy" [ref=e793] [cursor=pointer]:
+              - /url: "#security-ov-file"
+              - img [ref=e794]
+              - text: Security policy
+            - link "Activity" [ref=e797] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/activity
+              - img [ref=e798]
+              - text: Activity
+            - link "Custom properties" [ref=e801] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/custom-properties
+              - img [ref=e802]
+              - text: Custom properties
+            - heading "Stars" [level=3] [ref=e804]
+            - link "87.8k stars" [ref=e806] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/stargazers
+              - img [ref=e807]
+              - strong [ref=e809]: 87.8k
+              - text: stars
+            - heading "Watchers" [level=3] [ref=e810]
+            - link "625 watching" [ref=e812] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/watchers
+              - img [ref=e813]
+              - strong [ref=e815]: "625"
+              - text: watching
+            - heading "Forks" [level=3] [ref=e816]
+            - link "11.1k forks" [ref=e818] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/forks
+              - img [ref=e819]
+              - strong [ref=e821]: 11.1k
+              - text: forks
+            - link "Report repository" [ref=e823] [cursor=pointer]:
+              - /url: /contact/report-content?content_url=https%3A%2F%2Fgithub.com%2Fmodelcontextprotocol%2Fservers&report=modelcontextprotocol+%28user%29
+          - generic [ref=e825]:
+            - heading "Releases 24" [level=2] [ref=e826]:
+              - link "Releases 24" [ref=e827] [cursor=pointer]:
+                - /url: /modelcontextprotocol/servers/releases
+                - text: Releases
+                - generic "24" [ref=e828]
+            - link "Release 2026.1.26 Latest Jan 27, 2026on Jan 27" [ref=e829] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/releases/tag/2026.1.26
+              - img [ref=e830]
+              - generic [ref=e832]:
+                - generic [ref=e833]:
+                  - generic [ref=e834]: Release 2026.1.26
+                  - 'generic "Label: Latest" [ref=e835]': Latest
+                - generic [ref=e836]: Jan 27, 2026on Jan 27
+            - link "+ 23 releases" [ref=e838] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/releases
+          - generic [ref=e840]:
+            - heading "Contributors 907" [level=2] [ref=e841]:
+              - link "Contributors 907" [ref=e842] [cursor=pointer]:
+                - /url: /modelcontextprotocol/servers/graphs/contributors
+                - text: Contributors
+                - generic "907" [ref=e843]
+            - list [ref=e844]:
+              - listitem [ref=e845]:
+                - link "@olaservo" [ref=e846] [cursor=pointer]:
+                  - /url: https://github.com/olaservo
+                  - img "@olaservo" [ref=e847]
+              - listitem [ref=e848]:
+                - link "@tadasant" [ref=e849] [cursor=pointer]:
+                  - /url: https://github.com/tadasant
+                  - img "@tadasant" [ref=e850]
+              - listitem [ref=e851]:
+                - link "@dsp-ant" [ref=e852] [cursor=pointer]:
+                  - /url: https://github.com/dsp-ant
+                  - img "@dsp-ant" [ref=e853]
+              - listitem [ref=e854]:
+                - link "@jspahrsummers" [ref=e855] [cursor=pointer]:
+                  - /url: https://github.com/jspahrsummers
+                  - img "@jspahrsummers" [ref=e856]
+              - listitem [ref=e857]:
+                - link "@cliffhall" [ref=e858] [cursor=pointer]:
+                  - /url: https://github.com/cliffhall
+                  - img "@cliffhall" [ref=e859]
+              - listitem [ref=e860]:
+                - link "@jerome3o-anthropic" [ref=e861] [cursor=pointer]:
+                  - /url: https://github.com/jerome3o-anthropic
+                  - img "@jerome3o-anthropic" [ref=e862]
+              - listitem [ref=e863]:
+                - link "@domdomegg" [ref=e864] [cursor=pointer]:
+                  - /url: https://github.com/domdomegg
+                  - img "@domdomegg" [ref=e865]
+              - listitem [ref=e866]:
+                - link "@maheshmurag" [ref=e867] [cursor=pointer]:
+                  - /url: https://github.com/maheshmurag
+                  - img "@maheshmurag" [ref=e868]
+              - listitem [ref=e869]:
+                - link "@evalstate" [ref=e870] [cursor=pointer]:
+                  - /url: https://github.com/evalstate
+                  - img "@evalstate" [ref=e871]
+              - listitem [ref=e872]:
+                - link "@claude" [ref=e873] [cursor=pointer]:
+                  - /url: https://github.com/claude
+                  - img "@claude" [ref=e874]
+              - listitem [ref=e875]:
+                - link "@baryhuang" [ref=e876] [cursor=pointer]:
+                  - /url: https://github.com/baryhuang
+                  - img "@baryhuang" [ref=e877]
+              - listitem [ref=e878]:
+                - link "@marcelo-ochoa" [ref=e879] [cursor=pointer]:
+                  - /url: https://github.com/marcelo-ochoa
+                  - img "@marcelo-ochoa" [ref=e880]
+              - listitem [ref=e881]:
+                - link "@txbm" [ref=e882] [cursor=pointer]:
+                  - /url: https://github.com/txbm
+                  - img "@txbm" [ref=e883]
+              - listitem [ref=e884]:
+                - link "@mamertofabian" [ref=e885] [cursor=pointer]:
+                  - /url: https://github.com/mamertofabian
+                  - img "@mamertofabian" [ref=e886]
+            - link "+ 893 contributors" [ref=e888] [cursor=pointer]:
+              - /url: /modelcontextprotocol/servers/graphs/contributors
+          - generic [ref=e890]:
+            - heading "Languages" [level=2] [ref=e891]
+            - list [ref=e898]:
+              - listitem [ref=e899]:
+                - link "TypeScript 70.4%" [ref=e900] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/search?l=typescript
+                  - img [ref=e901]
+                  - generic [ref=e903]: TypeScript
+                  - generic [ref=e904]: 70.4%
+              - listitem [ref=e905]:
+                - link "Python 18.3%" [ref=e906] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/search?l=python
+                  - img [ref=e907]
+                  - generic [ref=e909]: Python
+                  - generic [ref=e910]: 18.3%
+              - listitem [ref=e911]:
+                - link "JavaScript 10.2%" [ref=e912] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/search?l=javascript
+                  - img [ref=e913]
+                  - generic [ref=e915]: JavaScript
+                  - generic [ref=e916]: 10.2%
+              - listitem [ref=e917]:
+                - link "Dockerfile 1.1%" [ref=e918] [cursor=pointer]:
+                  - /url: /modelcontextprotocol/servers/search?l=dockerfile
+                  - img [ref=e919]
+                  - generic [ref=e921]: Dockerfile
+                  - generic [ref=e922]: 1.1%
+  - contentinfo [ref=e924]:
+    - heading "Footer" [level=2] [ref=e925]
+    - generic [ref=e926]:
+      - generic [ref=e927]:
+        - link "GitHub Homepage" [ref=e928] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e929]
+        - generic [ref=e931]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e932]:
+        - heading "Footer navigation" [level=3] [ref=e933]
+        - list "Footer navigation" [ref=e934]:
+          - listitem [ref=e935]:
+            - link "Terms" [ref=e936] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e937]:
+            - link "Privacy" [ref=e938] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e939]:
+            - link "Security" [ref=e940] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e941]:
+            - link "Status" [ref=e942] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e943]:
+            - link "Community" [ref=e944] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e945]:
+            - link "Docs" [ref=e946] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e947]:
+            - link "Contact" [ref=e948] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e949]:
+            - button "Manage cookies" [ref=e951] [cursor=pointer]
+          - listitem [ref=e952]:
+            - button "Do not share my personal information" [ref=e954] [cursor=pointer]

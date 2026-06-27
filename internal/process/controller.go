@@ -2,6 +2,7 @@ package process
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -1565,6 +1566,7 @@ func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID s
 	parallel := false
 	working := append([]app.ChatMessage(nil), messages...)
 	trustedEvidence := []string{}
+	toolOrdinal := 0
 	for i := 0; i < maxPrimaryToolCalls; i++ {
 		res, err := c.Provider.Complete(ctx, providers.CompletionRequest{
 			Purpose:           providers.PurposeChat,
@@ -1585,14 +1587,15 @@ func (c *ProcessController) completePrimaryChat(ctx context.Context, sessionID s
 		assistant.ToolCalls = append([]app.ChatToolCall(nil), res.ToolCalls...)
 		working = append(working, assistant)
 		for _, call := range res.ToolCalls {
-			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_call", nil, "", "", res.Model, auditReason(call.Function.Name))
+			toolOrdinal++
+			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_call", nil, "", "", res.Model, auditReason(mcpToolCallAuditReason(toolOrdinal, call.Function.Name)))
 			toolMsg, err := c.ToolRunner.Run(ctx, call)
 			if err != nil {
 				return primaryCompletion{}, err
 			}
 			working = append(working, toolMsg)
 			trustedEvidence = append(trustedEvidence, mcpToolTrustedEvidence(call.Function.Name, toolMsg.Content))
-			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_result", nil, "", "", res.Model, auditReason(call.Function.Name))
+			_ = c.saveAudit(sessionID, task, stage, action, "mcp_tool_result", nil, "", "", res.Model, auditReason(mcpToolResultAuditReason(toolOrdinal, call.Function.Name, toolMsg.Content)))
 		}
 		continue
 	}
@@ -1606,6 +1609,61 @@ func mcpToolTrustedEvidence(toolName, result string) string {
 		result = result[:maxResult] + "...(truncated)"
 	}
 	return fmt.Sprintf("app-issued MCP tool evidence: tool=%s result=%s", toolName, result)
+}
+
+func mcpToolCallAuditReason(ordinal int, toolName string) string {
+	server, tool := splitMCPProviderToolName(toolName)
+	return fmt.Sprintf("ordinal=%d server=%s tool=%s name=%s status=requested", ordinal, server, tool, toolName)
+}
+
+func mcpToolResultAuditReason(ordinal int, toolName, result string) string {
+	server, tool := splitMCPProviderToolName(toolName)
+	status := "ok"
+	summary := ""
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(result), &payload); err == nil {
+		if isErr, _ := payload["isError"].(bool); isErr {
+			status = "error"
+		}
+		if payloadServer, _ := payload["server"].(string); payloadServer != "" {
+			server = payloadServer
+		}
+		if payloadTool, _ := payload["tool"].(string); payloadTool != "" {
+			tool = payloadTool
+		}
+		if code, _ := payload["code"].(string); code != "" {
+			summary = "code=" + code
+		} else if parsed, _ := payload["parsed"].(map[string]any); len(parsed) > 0 {
+			summary = mcpParsedSummary(parsed)
+		}
+	}
+	if summary == "" {
+		summary = "result=available"
+	}
+	return fmt.Sprintf("ordinal=%d server=%s tool=%s name=%s status=%s %s", ordinal, server, tool, toolName, status, summary)
+}
+
+func splitMCPProviderToolName(name string) (string, string) {
+	left, right, ok := strings.Cut(name, "__")
+	if !ok {
+		return "-", name
+	}
+	return left, right
+}
+
+func mcpParsedSummary(parsed map[string]any) string {
+	for _, key := range []string{"path", "full_name", "query", "context7CompatibleLibraryID", "url", "title", "search_id", "report_id"} {
+		value, ok := parsed[key]
+		if !ok || value == nil {
+			continue
+		}
+		text := fmt.Sprint(value)
+		if len(text) > 120 {
+			text = text[:120] + "..."
+		}
+		return key + "=" + text
+	}
+	return "parsed_keys=" + intString(len(parsed))
 }
 
 func (c *ProcessController) sessionMCPAuditEvidence(sessionID string) []string {

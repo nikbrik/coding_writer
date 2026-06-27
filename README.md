@@ -285,6 +285,82 @@ tail -f /Users/nikita/Documents/mcp-server/.data/day19/pipeline_runs.jsonl
   `/Users/nikita/Documents/mcp-server/.data/day19/output/report_<id>.md`.
 - файл существует и не пустой.
 
+Day 20: orchestration across several existing MCP servers in one ordinary TUI
+chat. The detailed plan, policies, and evidence checklist are in
+[`docs/day20-multi-mcp-orchestration-plan.md`](docs/day20-multi-mcp-orchestration-plan.md).
+
+Demo setup uses popular existing servers:
+
+- GitHub MCP for public repo metadata.
+- Context7 MCP for current library docs.
+- Playwright MCP for browser/page inspection.
+- filesystem MCP for saving the final report.
+
+```bash
+cd /Users/nikita/code/coding_writer
+export ASSISTANT_STORAGE_DIR=/Users/nikita/code/coding_writer/.assistant/day20-manual
+export ASSISTANT_MODEL=google/gemini-3.1-flash-lite
+export GITHUB_PERSONAL_ACCESS_TOKEN=...
+mkdir -p .data/day20/playwright
+cw init --model "$ASSISTANT_MODEL"
+cw
+```
+
+Install the official GitHub MCP server once if the repo-local binary is missing:
+
+```bash
+mkdir -p .codingwriter/mcp-bin
+GOBIN=/Users/nikita/code/coding_writer/.codingwriter/mcp-bin \
+  go install github.com/github/github-mcp-server/cmd/github-mcp-server@latest
+```
+
+Connect MCP servers inside the same TUI session using the generic shorthand:
+
+```text
+/mcp connect github bin:.codingwriter/mcp-bin/github-mcp-server --env GITHUB_PERSONAL_ACCESS_TOKEN --allow search_repositories -- stdio --read-only --toolsets repos
+/mcp connect context7 npm:@upstash/context7-mcp --allow resolve-library-id,get-library-docs
+/mcp connect playwright npm:@playwright/mcp --allow browser_navigate:browser,browser_snapshot:browser -- --headless --isolated --output-dir .data/day20/playwright
+/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/day20 -- .data/day20
+/mcp
+```
+
+`/mcp connect` is generic: `npm:` expands to `npx -y`, `bin:` runs a local
+binary, and `cmd:` runs a command from `PATH`. Server-specific args go after
+`--`. Compact `--allow` specs use
+`tool[:permission[:approval[:path-prefix]]]`.
+
+If a new MCP server's tools are unknown, connect it first without `--allow`,
+inspect tools, then allow only the tools the agent may use:
+
+```text
+/mcp connect docs npm:@vendor/example-mcp
+/mcp tools docs
+/mcp allow docs search --permission read --approval auto
+```
+
+For the ready-made Day 20 setup, `/mcp preset day20` remains available as a
+shortcut. Raw `/mcp add` remains available as a low-level escape hatch.
+
+Then send a normal chat message, not a pipeline command:
+
+```text
+Собери Day 20 отчет о популярных MCP-серверах для coding agent.
+
+Нужны 4 типа evidence: репозитории, документация, браузерная проверка страницы проекта и сохраненный markdown-файл .data/day20/multi-mcp-report.md.
+
+В конце покажи путь к файлу и фактический порядок вызванных инструментов.
+```
+
+Проверяем подтверждение:
+
+- `process_audit.jsonl` содержит ordered MCP trace с `ordinal`, `server`,
+  `tool`, `status` и summary результата.
+- TUI показывает MCP tool call/result события в порядке:
+  GitHub -> Context7 -> Playwright -> filesystem.
+- `.data/day20/multi-mcp-report.md` существует и создан через filesystem MCP.
+- write tool явно разрешен через `/mcp allow`; запись вне `.data/day20`
+  блокируется policy gate.
+
 ## Запуск
 
 Сборка локального бинарника:

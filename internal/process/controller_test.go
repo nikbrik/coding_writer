@@ -798,6 +798,99 @@ func TestProcessControllerRunsDay19ToolChain(t *testing.T) {
 	}
 }
 
+func TestProcessControllerRunsDay20MultiServerToolChain(t *testing.T) {
+	ctx := context.Background()
+	ctrl, fake, _ := newTestController(t)
+	ctrl.SemanticValidator = NewSemanticValidator(fake, "fake/model")
+	runner := &day19ToolRunner{tools: []providers.ToolDefinition{
+		{Type: "function", Function: providers.ToolFunction{Name: "github__search_repositories", Description: "Search repositories [MCP server=github permission=read approval=auto]", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: providers.ToolFunction{Name: "context7__resolve-library-id", Description: "Resolve library [MCP server=context7 permission=read approval=auto]", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: providers.ToolFunction{Name: "context7__get-library-docs", Description: "Fetch docs [MCP server=context7 permission=read approval=auto]", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: providers.ToolFunction{Name: "playwright__browser_navigate", Description: "Navigate browser [MCP server=playwright permission=browser approval=auto]", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: providers.ToolFunction{Name: "playwright__browser_snapshot", Description: "Snapshot page [MCP server=playwright permission=browser approval=auto]", Parameters: map[string]any{"type": "object"}}},
+		{Type: "function", Function: providers.ToolFunction{Name: "filesystem__write_file", Description: "Write report [MCP server=filesystem permission=write approval=auto] allowed_paths=.data/day20", Parameters: map[string]any{"type": "object"}}},
+	}, byName: map[string]string{
+		"github__search_repositories":  `{"server":"github","tool":"search_repositories","permission":"read","approval":"auto","isError":false,"parsed":{"query":"mcp coding agent","total_count":3}}`,
+		"context7__resolve-library-id": `{"server":"context7","tool":"resolve-library-id","permission":"read","approval":"auto","isError":false,"parsed":{"context7CompatibleLibraryID":"/microsoft/playwright"}}`,
+		"context7__get-library-docs":   `{"server":"context7","tool":"get-library-docs","permission":"read","approval":"auto","isError":false,"parsed":{"topic":"mcp","tokens":1200}}`,
+		"playwright__browser_navigate": `{"server":"playwright","tool":"browser_navigate","permission":"browser","approval":"auto","isError":false,"parsed":{"url":"https://github.com/microsoft/playwright-mcp"}}`,
+		"playwright__browser_snapshot": `{"server":"playwright","tool":"browser_snapshot","permission":"browser","approval":"auto","isError":false,"parsed":{"title":"microsoft/playwright-mcp"}}`,
+		"filesystem__write_file":       `{"server":"filesystem","tool":"write_file","permission":"write","approval":"auto","isError":false,"parsed":{"path":".data/day20/multi-mcp-report.md"}}`,
+	}}
+	ctrl.ToolRunner = runner
+	fake.ChatResponses = []string{"", "", "", "", "", "", "Day 20 report saved to .data/day20/multi-mcp-report.md after GitHub, Context7, Playwright, and filesystem MCP calls."}
+	fake.ValidatorResponses = []string{
+		`{"action_kind":"answer_question","transition_signal":"none","confidence":0.9,"reason":"user asks for multi-server MCP orchestration"}`,
+		`{"verdict":"pass","findings":[]}`,
+	}
+	fake.ChatToolCalls = [][]app.ChatToolCall{
+		{{ID: "call_1", Type: "function", Function: app.ChatToolCallFunction{Name: "github__search_repositories", Arguments: `{"query":"mcp coding agent","perPage":3}`}}},
+		{{ID: "call_2", Type: "function", Function: app.ChatToolCallFunction{Name: "context7__resolve-library-id", Arguments: `{"libraryName":"Playwright MCP"}`}}},
+		{{ID: "call_3", Type: "function", Function: app.ChatToolCallFunction{Name: "context7__get-library-docs", Arguments: `{"context7CompatibleLibraryID":"/microsoft/playwright","topic":"mcp"}`}}},
+		{{ID: "call_4", Type: "function", Function: app.ChatToolCallFunction{Name: "playwright__browser_navigate", Arguments: `{"url":"https://github.com/microsoft/playwright-mcp"}`}}},
+		{{ID: "call_5", Type: "function", Function: app.ChatToolCallFunction{Name: "playwright__browser_snapshot", Arguments: `{}`}}},
+		{{ID: "call_6", Type: "function", Function: app.ChatToolCallFunction{Name: "filesystem__write_file", Arguments: `{"path":".data/day20/multi-mcp-report.md","content":"# Day 20"}`}}},
+	}
+	res, err := ctrl.RunExchange(ctx, ExchangeInput{SessionID: "s_day20", Input: "Собери отчет через GitHub, Context7, Playwright и filesystem MCP, сохрани в .data/day20/multi-mcp-report.md."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Answer, ".data/day20/multi-mcp-report.md") {
+		t.Fatalf("final answer does not include report path: %q", res.Answer)
+	}
+	wantOrder := []string{
+		"github__search_repositories",
+		"context7__resolve-library-id",
+		"context7__get-library-docs",
+		"playwright__browser_navigate",
+		"playwright__browser_snapshot",
+		"filesystem__write_file",
+	}
+	if len(runner.calls) != len(wantOrder) {
+		t.Fatalf("expected %d tool calls, got %d", len(wantOrder), len(runner.calls))
+	}
+	for i, want := range wantOrder {
+		if runner.calls[i].Function.Name != want {
+			t.Fatalf("tool call %d = %s, want %s", i+1, runner.calls[i].Function.Name, want)
+		}
+	}
+	if chatCalls(fake.SnapshotCalls()) != 7 {
+		t.Fatalf("expected 7 chat calls in tool loop, got %d", chatCalls(fake.SnapshotCalls()))
+	}
+	events, err := ctrl.AuditStore.Latest(30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := []ProcessAuditEvent{}
+	for _, event := range events {
+		if event.Decision == "mcp_tool_result" {
+			results = append(results, event)
+		}
+	}
+	if len(results) != len(wantOrder) {
+		t.Fatalf("expected %d MCP result audit events, got %d", len(wantOrder), len(results))
+	}
+	for i, event := range results {
+		for _, want := range []string{"ordinal=" + intString(i+1), "name=" + wantOrder[i], "status=ok"} {
+			if !strings.Contains(event.Reason, want) {
+				t.Fatalf("audit event %d missing %q: %+v", i+1, want, event)
+			}
+		}
+	}
+	for _, want := range []string{"server=github", "server=context7", "server=playwright", "server=filesystem"} {
+		found := false
+		for _, event := range results {
+			if strings.Contains(event.Reason, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("ordered audit trace missing %s: %+v", want, results)
+		}
+	}
+}
+
 func TestProcessControllerPlanningDraftSurvivesMisclassifiedTransitionIntent(t *testing.T) {
 	ctx := context.Background()
 	ctrl, fake, _ := newTestController(t)

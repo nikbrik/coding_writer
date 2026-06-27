@@ -44,4 +44,5 @@ manual_scratch/
 
 # Compiled binaries
 .codingwriter/bin/*
+.codingwriter/mcp-bin/*
 cw

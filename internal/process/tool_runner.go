@@ -8,7 +8,7 @@ import (
 	"github.com/nikbrik/coding_writer/internal/providers"
 )
 
-const maxPrimaryToolCalls = 4
+const maxPrimaryToolCalls = 10
 
 type ToolRunner interface {
 	Tools(ctx context.Context) ([]providers.ToolDefinition, error)

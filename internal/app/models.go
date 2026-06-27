@@ -230,19 +230,25 @@ type AppConfig struct {
 
 type MCPServerConfig struct {
 	Name            string          `json:"name"`
+	Transport       string          `json:"transport,omitempty"`
 	Command         string          `json:"command"`
 	Args            []string        `json:"args,omitempty"`
+	URL             string          `json:"url,omitempty"`
 	EnvKeys         []string        `json:"env_keys,omitempty"`
+	HeaderEnvKeys   []string        `json:"header_env_keys,omitempty"`
 	ProtocolVersion string          `json:"protocol_version,omitempty"`
 	Enabled         bool            `json:"enabled"`
 	Tools           []MCPToolConfig `json:"tools,omitempty"`
 }
 
 type MCPToolConfig struct {
-	Name        string `json:"name"`
-	AutoApprove bool   `json:"auto_approve,omitempty"`
-	ReadOnly    bool   `json:"read_only,omitempty"`
-	Description string `json:"description,omitempty"`
+	Name         string   `json:"name"`
+	AutoApprove  bool     `json:"auto_approve,omitempty"`
+	ReadOnly     bool     `json:"read_only,omitempty"`
+	Permission   string   `json:"permission,omitempty"`
+	Approval     string   `json:"approval,omitempty"`
+	PathPrefixes []string `json:"path_prefixes,omitempty"`
+	Description  string   `json:"description,omitempty"`
 }
 
 type MemoryBundle struct {

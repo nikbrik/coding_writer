@@ -271,6 +271,199 @@ func TestMCPSlashAddListAndRemoveServer(t *testing.T) {
 	}
 }
 
+func TestMCPSlashAllowPersistsToolPolicy(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp add filesystem --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg .data/day20"); err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp allow filesystem write_file --permission write --approval auto --path-prefix .data/day20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(allowed.Output, "permission=write approval=auto") {
+		t.Fatalf("unexpected allow output: %q", allowed.Output)
+	}
+	if len(rt.Config.MCPServers) != 1 || len(rt.Config.MCPServers[0].Tools) != 1 {
+		t.Fatalf("tool policy not persisted: %+v", rt.Config.MCPServers)
+	}
+	tool := rt.Config.MCPServers[0].Tools[0]
+	if tool.Name != "write_file" || tool.Permission != "write" || tool.Approval != "auto" || len(tool.PathPrefixes) != 1 || tool.PathPrefixes[0] != ".data/day20" {
+		t.Fatalf("bad tool policy: %+v", tool)
+	}
+	listed, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"filesystem", "enabled", "stdio", "write_file", "paths=.data/day20"} {
+		if !strings.Contains(listed.Output, want) {
+			t.Fatalf("list output missing %q:\n%s", want, listed.Output)
+		}
+	}
+	if strings.Contains(listed.Output, "usage: /mcp connect <name>") {
+		t.Fatalf("list output should not include the long usage line:\n%s", listed.Output)
+	}
+}
+
+func TestMCPSlashPresetDay20RegistersMultiServerPolicy(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp preset day20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"mcp preset registered: day20", "github", "context7", "playwright", "filesystem"} {
+		if !strings.Contains(res.Output, want) {
+			t.Fatalf("preset output missing %q:\n%s", want, res.Output)
+		}
+	}
+	if len(rt.Config.MCPServers) != 4 {
+		t.Fatalf("expected 4 preset servers, got %+v", rt.Config.MCPServers)
+	}
+	byName := map[string]app.MCPServerConfig{}
+	for _, server := range rt.Config.MCPServers {
+		byName[server.Name] = server
+	}
+	if got := byName["github"].EnvKeys; len(got) != 1 || got[0] != "GITHUB_PERSONAL_ACCESS_TOKEN" {
+		t.Fatalf("github token must be env passthrough only, got %+v", got)
+	}
+	if !strings.HasSuffix(byName["github"].Command, filepath.Join(".codingwriter", "mcp-bin", "github-mcp-server")) {
+		t.Fatalf("github command should use repo-local binary path, got %q", byName["github"].Command)
+	}
+	filesystemTools := byName["filesystem"].Tools
+	if len(filesystemTools) != 1 || filesystemTools[0].Permission != "write" || filesystemTools[0].Approval != "auto" || len(filesystemTools[0].PathPrefixes) != 1 || filesystemTools[0].PathPrefixes[0] != ".data/day20" {
+		t.Fatalf("bad filesystem write policy: %+v", filesystemTools)
+	}
+}
+
+func TestMCPSlashConnectRegistersGenericNPMServer(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp connect context7 npm:@upstash/context7-mcp --allow resolve-library-id,get-library-docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Output, "mcp server connected: context7") {
+		t.Fatalf("unexpected connect output: %s", res.Output)
+	}
+	if len(rt.Config.MCPServers) != 1 {
+		t.Fatalf("expected 1 server, got %+v", rt.Config.MCPServers)
+	}
+	server := rt.Config.MCPServers[0]
+	if server.Command != "npx" || len(server.Args) != 2 || server.Args[0] != "-y" || server.Args[1] != "@upstash/context7-mcp" {
+		t.Fatalf("bad npm source expansion: %+v", server)
+	}
+	if len(server.Tools) != 2 || server.Tools[0].Approval != "auto" || server.Tools[1].Permission != "read" {
+		t.Fatalf("bad compact allow tools: %+v", server.Tools)
+	}
+}
+
+func TestMCPSlashConnectRegistersWriteToolWithServerArgs(t *testing.T) {
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: t.TempDir(), Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = handleSlashResult(context.Background(), io.Discard, rt, "session_mcp", "/mcp connect filesystem npm:@modelcontextprotocol/server-filesystem --allow write_file:write:auto:.data/day20 -- .data/day20")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := rt.Config.MCPServers[0]
+	if got := strings.Join(server.Args, " "); got != "-y @modelcontextprotocol/server-filesystem .data/day20" {
+		t.Fatalf("bad server args: %q", got)
+	}
+	if len(server.Tools) != 1 || server.Tools[0].Permission != "write" || server.Tools[0].Approval != "auto" || len(server.Tools[0].PathPrefixes) != 1 || server.Tools[0].PathPrefixes[0] != ".data/day20" {
+		t.Fatalf("bad write policy: %+v", server.Tools)
+	}
+}
+
+func TestMCPPresetCommandRegistersDay20(t *testing.T) {
+	storageDir := t.TempDir()
+	cmd := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"mcp", "preset", "day20"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"mcp preset registered: day20", "github", "context7", "playwright", "filesystem"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("preset command output missing %q:\n%s", want, text)
+		}
+	}
+
+	list := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var listOut bytes.Buffer
+	list.SetOut(&listOut)
+	list.SetErr(io.Discard)
+	list.SetArgs([]string{"mcp", "preset", "unknown"})
+	if err := list.Execute(); app.AsError(err).Code != "unknown_mcp_preset" {
+		t.Fatalf("expected unknown_mcp_preset, got %v", err)
+	}
+}
+
+func TestMCPConnectCommandRegistersGenericBinaryServer(t *testing.T) {
+	storageDir := t.TempDir()
+	cmd := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"mcp", "connect", "github", "bin:.codingwriter/mcp-bin/github-mcp-server", "--env", "GITHUB_PERSONAL_ACCESS_TOKEN", "--allow", "search_repositories", "--", "stdio", "--read-only", "--toolsets", "repos"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{"mcp server connected: github", "cmd=github-mcp-server", "search_repositories"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("connect output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestAppMCPToolRunnerBlocksWriteOutsideAllowedPrefix(t *testing.T) {
+	allowedDir := filepath.Join(t.TempDir(), ".data", "day20")
+	runner := newAppMCPToolRunner([]app.MCPServerConfig{{
+		Name:    "filesystem",
+		Enabled: true,
+		Tools: []app.MCPToolConfig{{
+			Name:         "write_file",
+			Permission:   "write",
+			Approval:     "auto",
+			PathPrefixes: []string{allowedDir},
+		}},
+	}})
+	// Seed the binding directly so this test isolates the policy gate from server discovery.
+	appRunner := runner.(*appMCPToolRunner)
+	appRunner.bindings = map[string]mcpToolBinding{
+		"filesystem__write_file": {
+			Server: app.MCPServerConfig{Name: "filesystem"},
+			Config: app.MCPToolConfig{Name: "write_file", Permission: "write", Approval: "auto", PathPrefixes: []string{allowedDir}},
+			Tool:   mcp.Tool{Name: "write_file"},
+		},
+	}
+	msg, err := appRunner.Run(context.Background(), app.ChatToolCall{
+		ID:   "call_1",
+		Type: "function",
+		Function: app.ChatToolCallFunction{
+			Name:      "filesystem__write_file",
+			Arguments: `{"path":"../outside.md","content":"no"}`,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(msg.Content, "mcp_write_path_denied") {
+		t.Fatalf("expected path denial, got %s", msg.Content)
+	}
+}
+
 func TestMCPRemoveCommandRemovesConfiguredServer(t *testing.T) {
 	storageDir := t.TempDir()
 	add := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
@@ -326,6 +519,44 @@ func TestMCPCallTextPrintsRepositoryFields(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("mcp call text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestMCPCallCommandAcceptsPositionalToolArgs(t *testing.T) {
+	t.Setenv("GO_WANT_MCP_WATCH_HELPER", "1")
+	storageDir := t.TempDir()
+	add := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	add.SetOut(io.Discard)
+	add.SetErr(io.Discard)
+	add.SetArgs([]string{
+		"mcp", "add", "github-api",
+		"--command", os.Args[0],
+		"--arg=-test.run=^TestMCPWatchHelperProcess$",
+		"--env-key=GO_WANT_MCP_WATCH_HELPER",
+		"--allow-tool", "github_repo_info",
+		"--auto-approve",
+	})
+	if err := add.Execute(); err != nil {
+		t.Fatal(err)
+	}
+
+	call := newRootCommandForInvocation(&globalOptions{StorageDir: storageDir, Model: "fake/model"}, "cw")
+	var out bytes.Buffer
+	call.SetOut(&out)
+	call.SetErr(io.Discard)
+	call.SetArgs([]string{"mcp", "call", "github-api", "github_repo_info", "owner=nikbrik", "repo=coding_writer"})
+	if err := call.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"mcp call: github-api github_repo_info",
+		"status: ok",
+		"full_name: nikbrik/coding_writer",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("mcp call output missing %q:\n%s", want, text)
 		}
 	}
 }

@@ -1,0 +1,829 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - link "Homepage" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+        - generic [ref=e13]:
+          - navigation "Global" [ref=e16]:
+            - list [ref=e17]:
+              - listitem [ref=e18]:
+                - button "Platform" [ref=e20] [cursor=pointer]:
+                  - text: Platform
+                  - img [ref=e21]
+              - listitem [ref=e23]:
+                - button "Solutions" [ref=e25] [cursor=pointer]:
+                  - text: Solutions
+                  - img [ref=e26]
+              - listitem [ref=e28]:
+                - button "Resources" [ref=e30] [cursor=pointer]:
+                  - text: Resources
+                  - img [ref=e31]
+              - listitem [ref=e33]:
+                - button "Open Source" [ref=e35] [cursor=pointer]:
+                  - text: Open Source
+                  - img [ref=e36]
+              - listitem [ref=e38]:
+                - button "Enterprise" [ref=e40] [cursor=pointer]:
+                  - text: Enterprise
+                  - img [ref=e41]
+              - listitem [ref=e43]:
+                - link "Pricing" [ref=e44] [cursor=pointer]:
+                  - /url: https://github.com/pricing
+                  - generic [ref=e45]: Pricing
+          - generic [ref=e46]:
+            - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+            - link "Sign in" [ref=e54] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fref-tools%2Fref-tools-mcp
+            - link "Sign up" [ref=e55] [cursor=pointer]:
+              - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=ref-tools%2Fref-tools-mcp
+            - button "Appearance settings" [ref=e58] [cursor=pointer]:
+              - img
+  - main [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e66]:
+          - img [ref=e67]
+          - link "ref-tools" [ref=e70] [cursor=pointer]:
+            - /url: /ref-tools
+          - generic [ref=e71]: /
+          - strong [ref=e72]:
+            - link "ref-tools-mcp" [ref=e73] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp
+          - generic [ref=e74]: Public
+        - generic [ref=e75]:
+          - list:
+            - listitem [ref=e76]:
+              - link "You must be signed in to change notification settings" [ref=e77] [cursor=pointer]:
+                - /url: /login?return_to=%2Fref-tools%2Fref-tools-mcp
+                - img [ref=e78]
+                - text: Notifications
+            - listitem [ref=e80]:
+              - link "Fork 66" [ref=e81] [cursor=pointer]:
+                - /url: /login?return_to=%2Fref-tools%2Fref-tools-mcp
+                - img [ref=e82]
+                - text: Fork
+                - generic "66" [ref=e84]
+            - listitem [ref=e85]:
+              - link "You must be signed in to star a repository" [ref=e87] [cursor=pointer]:
+                - /url: /login?return_to=%2Fref-tools%2Fref-tools-mcp
+                - img [ref=e88]
+                - text: Star
+                - generic "1134 users starred this repository" [ref=e90]: 1.1k
+      - navigation "Repository" [ref=e91]:
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Code" [ref=e94] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp
+              - img [ref=e95]
+              - generic [ref=e97]: Code
+          - listitem [ref=e98]:
+            - link "Issues 3" [ref=e99] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/issues
+              - img [ref=e100]
+              - generic [ref=e103]: Issues
+              - generic "3" [ref=e104]
+          - listitem [ref=e105]:
+            - link "Pull requests 2" [ref=e106] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/pulls
+              - img [ref=e107]
+              - generic [ref=e109]: Pull requests
+              - generic "2" [ref=e110]
+          - listitem [ref=e111]:
+            - link "Actions" [ref=e112] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/actions
+              - img [ref=e113]
+              - generic [ref=e115]: Actions
+          - listitem [ref=e116]:
+            - link "Projects" [ref=e117] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/projects
+              - img [ref=e118]
+              - generic [ref=e120]: Projects
+          - listitem [ref=e121]:
+            - link "Security and quality" [ref=e122] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/security
+              - img [ref=e123]
+              - generic [ref=e125]: Security and quality
+          - listitem [ref=e126]:
+            - link "Insights" [ref=e127] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/pulse
+              - img [ref=e128]
+              - generic [ref=e130]: Insights
+    - generic [ref=e143]:
+      - heading "ref-tools/ref-tools-mcp" [level=1] [ref=e145]
+      - generic [ref=e146]:
+        - generic [ref=e149]:
+          - generic [ref=e150]:
+            - generic [ref=e151]:
+              - button "main branch" [ref=e153] [cursor=pointer]:
+                - generic [ref=e154]:
+                  - generic [ref=e156]:
+                    - img [ref=e158]
+                    - generic [ref=e161]: main
+                  - generic:
+                    - img
+              - generic [ref=e162]:
+                - link "10 Branches" [ref=e163] [cursor=pointer]:
+                  - /url: /ref-tools/ref-tools-mcp/branches
+                  - generic [ref=e164]:
+                    - generic:
+                      - img
+                    - generic [ref=e166]:
+                      - strong [ref=e167]: "10"
+                      - text: Branches
+                - link "0 Tags" [ref=e168] [cursor=pointer]:
+                  - /url: /ref-tools/ref-tools-mcp/tags
+                  - generic [ref=e169]:
+                    - generic:
+                      - img
+                    - generic [ref=e171]:
+                      - strong [ref=e172]: "0"
+                      - text: Tags
+            - generic [ref=e173]:
+              - generic [ref=e177]:
+                - img [ref=e179]
+                - combobox "Go to file" [ref=e181]
+              - button "Code" [ref=e182] [cursor=pointer]:
+                - generic [ref=e183]:
+                  - generic:
+                    - img
+                  - generic [ref=e184]: Code
+                  - generic:
+                    - img
+          - generic [ref=e185]:
+            - generic [ref=e186]:
+              - heading "Folders and files" [level=2] [ref=e187]
+              - table "Folders and files" [ref=e188]:
+                - rowgroup:
+                  - row "Name Last commit message Last commit date":
+                    - columnheader "Name"
+                    - columnheader "Last commit message":
+                      - generic "Last commit message"
+                    - columnheader "Last commit date":
+                      - generic "Last commit date"
+                - rowgroup [ref=e189]:
+                  - 'row "Latest commit MatthewDailey commits by MatthewDailey Merge pull request #48 from MatthewJamisonJS/fix/dockerfile-copy-mult… Open commit details success Commit 83970a3 · May 6, 2026last month History 64 Commits" [ref=e190]':
+                    - 'cell "Latest commit MatthewDailey commits by MatthewDailey Merge pull request #48 from MatthewJamisonJS/fix/dockerfile-copy-mult… Open commit details success Commit 83970a3 · May 6, 2026last month History 64 Commits" [ref=e191]':
+                      - generic [ref=e192]:
+                        - heading "Latest commit" [level=2] [ref=e193]
+                        - generic [ref=e194]:
+                          - generic [ref=e196]:
+                            - link "MatthewDailey" [ref=e197] [cursor=pointer]:
+                              - /url: /MatthewDailey
+                              - img "MatthewDailey" [ref=e198]
+                            - link "commits by MatthewDailey" [ref=e199] [cursor=pointer]:
+                              - /url: /ref-tools/ref-tools-mcp/commits?author=MatthewDailey
+                              - text: MatthewDailey
+                          - generic [ref=e200]:
+                            - generic [ref=e202]:
+                              - link "Merge pull request" [ref=e203] [cursor=pointer]:
+                                - /url: /ref-tools/ref-tools-mcp/commit/83970a35627785a0589ae2dbe5510b4a3dd04146
+                              - link "#48" [ref=e204] [cursor=pointer]:
+                                - /url: https://github.com/ref-tools/ref-tools-mcp/pull/48
+                              - link "from MatthewJamisonJS/fix/dockerfile-copy-mult…" [ref=e205] [cursor=pointer]:
+                                - /url: /ref-tools/ref-tools-mcp/commit/83970a35627785a0589ae2dbe5510b4a3dd04146
+                            - button "Open commit details" [ref=e206] [cursor=pointer]:
+                              - img [ref=e207]
+                            - button "success" [ref=e209] [cursor=pointer]:
+                              - img [ref=e210]
+                        - generic [ref=e212]:
+                          - generic [ref=e214]:
+                            - link "Commit 83970a3" [ref=e215] [cursor=pointer]:
+                              - /url: /ref-tools/ref-tools-mcp/commit/83970a35627785a0589ae2dbe5510b4a3dd04146
+                              - text: 83970a3
+                            - text: ·
+                            - generic "May 6, 2026, 18:57 GMT+3" [ref=e216]: May 6, 2026last month
+                          - generic [ref=e217]:
+                            - heading "History" [level=2] [ref=e218]
+                            - link "64 Commits" [ref=e219] [cursor=pointer]:
+                              - /url: /ref-tools/ref-tools-mcp/commits/main/
+                              - generic [ref=e220]:
+                                - generic:
+                                  - img
+                                - generic [ref=e221]: 64 Commits
+                  - row ".github/workflows, (Directory) Add workflow_dispatch for manual bundle testing Jan 5, 20265 months ago" [ref=e222]:
+                    - cell ".github/workflows, (Directory)" [ref=e223]:
+                      - generic [ref=e224]:
+                        - img [ref=e225]
+                        - link ".github/workflows, (Directory)" [ref=e230] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/tree/main/.github/workflows
+                          - text: .github/workflows
+                    - cell "Add workflow_dispatch for manual bundle testing" [ref=e231]:
+                      - link "Add workflow_dispatch for manual bundle testing" [ref=e234] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/f011d018cbd1f29e60ed52099e86c8fd643d4dbe
+                    - cell "Jan 5, 20265 months ago" [ref=e235]:
+                      - generic [ref=e236]: Jan 5, 20265 months ago
+                  - 'row ".gitignore, (File) Revert PRs #42 and #43 — wrong repository (#46) Apr 18, 20262 months ago" [ref=e237]':
+                    - cell ".gitignore, (File)" [ref=e238]:
+                      - generic [ref=e239]:
+                        - img [ref=e240]
+                        - link ".gitignore, (File)" [ref=e245] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/.gitignore
+                          - text: .gitignore
+                    - 'cell "Revert PRs #42 and #43 — wrong repository (#46)" [ref=e246]':
+                      - generic [ref=e248]:
+                        - link "Revert PRs" [ref=e249] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#42" [ref=e250] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/42
+                        - link "and" [ref=e251] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#43" [ref=e252] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/43
+                        - link "— wrong repository (" [ref=e253] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#46" [ref=e254] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/46
+                        - link ")" [ref=e255] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                    - cell "Apr 18, 20262 months ago" [ref=e256]:
+                      - generic [ref=e257]: Apr 18, 20262 months ago
+                  - row ".mcpbignore, (File) Add MCPB bundle support for portable deployment Dec 24, 20256 months ago" [ref=e258]:
+                    - cell ".mcpbignore, (File)" [ref=e259]:
+                      - generic [ref=e260]:
+                        - img [ref=e261]
+                        - link ".mcpbignore, (File)" [ref=e266] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/.mcpbignore
+                          - text: .mcpbignore
+                    - cell "Add MCPB bundle support for portable deployment" [ref=e267]:
+                      - link "Add MCPB bundle support for portable deployment" [ref=e270] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/12c8086b5becffeb9e4f843dc79de23f46ba3609
+                    - cell "Dec 24, 20256 months ago" [ref=e271]:
+                      - generic [ref=e272]: Dec 24, 20256 months ago
+                  - row ".prettierrc, (File) add prettierrc Apr 24, 2025last year" [ref=e273]:
+                    - cell ".prettierrc, (File)" [ref=e274]:
+                      - generic [ref=e275]:
+                        - img [ref=e276]
+                        - link ".prettierrc, (File)" [ref=e281] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/.prettierrc
+                          - text: .prettierrc
+                    - cell "add prettierrc" [ref=e282]:
+                      - link "add prettierrc" [ref=e285] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/ac502232c79340b1c49261e02a0331a2e51f7fba
+                    - cell "Apr 24, 2025last year" [ref=e286]:
+                      - generic [ref=e287]: Apr 24, 2025last year
+                  - 'row "Dockerfile, (File) Merge pull request #48 from MatthewJamisonJS/fix/dockerfile-copy-mult… May 6, 2026last month" [ref=e288]':
+                    - cell "Dockerfile, (File)" [ref=e289]:
+                      - generic [ref=e290]:
+                        - img [ref=e291]
+                        - link "Dockerfile, (File)" [ref=e296] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/Dockerfile
+                          - text: Dockerfile
+                    - 'cell "Merge pull request #48 from MatthewJamisonJS/fix/dockerfile-copy-mult…" [ref=e297]':
+                      - generic [ref=e299]:
+                        - link "Merge pull request" [ref=e300] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/83970a35627785a0589ae2dbe5510b4a3dd04146
+                        - link "#48" [ref=e301] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/48
+                        - link "from MatthewJamisonJS/fix/dockerfile-copy-mult…" [ref=e302] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/83970a35627785a0589ae2dbe5510b4a3dd04146
+                    - cell "May 6, 2026last month" [ref=e303]:
+                      - generic [ref=e304]: May 6, 2026last month
+                  - row "LICENSE, (File) Create LICENSE Jul 5, 2025last year" [ref=e305]:
+                    - cell "LICENSE, (File)" [ref=e306]:
+                      - generic [ref=e307]:
+                        - img [ref=e308]
+                        - link "LICENSE, (File)" [ref=e313] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/LICENSE
+                          - text: LICENSE
+                    - cell "Create LICENSE" [ref=e314]:
+                      - link "Create LICENSE" [ref=e317] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/0319d837068f754101672320eff310926abb7f58
+                    - cell "Jul 5, 2025last year" [ref=e318]:
+                      - generic [ref=e319]: Jul 5, 2025last year
+                  - 'row "README.md, (File) fix: small grammatical error in README.md Apr 11, 20262 months ago" [ref=e320]':
+                    - cell "README.md, (File)" [ref=e321]:
+                      - generic [ref=e322]:
+                        - img [ref=e323]
+                        - link "README.md, (File)" [ref=e328] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/README.md
+                          - text: README.md
+                    - 'cell "fix: small grammatical error in README.md" [ref=e329]':
+                      - 'link "fix: small grammatical error in README.md" [ref=e332] [cursor=pointer]':
+                        - /url: /ref-tools/ref-tools-mcp/commit/e76b7090c1277dc4b39ad0dea3baedef1aac16ed
+                    - cell "Apr 11, 20262 months ago" [ref=e333]:
+                      - generic [ref=e334]: Apr 11, 20262 months ago
+                  - row "header.png, (File) update header image Jul 23, 202511 months ago" [ref=e335]:
+                    - cell "header.png, (File)" [ref=e336]:
+                      - generic [ref=e337]:
+                        - img [ref=e338]
+                        - link "header.png, (File)" [ref=e343] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/header.png
+                          - text: header.png
+                    - cell "update header image" [ref=e344]:
+                      - link "update header image" [ref=e347] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/2386ee66e04d94998fbe720354f80072b71f148f
+                    - cell "Jul 23, 202511 months ago" [ref=e348]:
+                      - generic [ref=e349]: Jul 23, 202511 months ago
+                  - row "index.ts, (File) bump version number 3.0.3 Nov 4, 20257 months ago" [ref=e350]:
+                    - cell "index.ts, (File)" [ref=e351]:
+                      - generic [ref=e352]:
+                        - img [ref=e353]
+                        - link "index.ts, (File)" [ref=e358] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/index.ts
+                          - text: index.ts
+                    - cell "bump version number 3.0.3" [ref=e359]:
+                      - link "bump version number 3.0.3" [ref=e362] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/09f86e87926bd08fba44c6ea89480f3f73a7c841
+                    - cell "Nov 4, 20257 months ago" [ref=e363]:
+                      - generic [ref=e364]: Nov 4, 20257 months ago
+                  - 'row "manifest.json, (File) fix: use npm-style scoped package name for mpak compatibility Jan 9, 20265 months ago" [ref=e365]':
+                    - cell "manifest.json, (File)" [ref=e366]:
+                      - generic [ref=e367]:
+                        - img [ref=e368]
+                        - link "manifest.json, (File)" [ref=e373] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/manifest.json
+                          - text: manifest.json
+                    - 'cell "fix: use npm-style scoped package name for mpak compatibility" [ref=e374]':
+                      - 'link "fix: use npm-style scoped package name for mpak compatibility" [ref=e377] [cursor=pointer]':
+                        - /url: /ref-tools/ref-tools-mcp/commit/b8691cb88e837b2a15a886423244347869a53503
+                    - cell "Jan 9, 20265 months ago" [ref=e378]:
+                      - generic [ref=e379]: Jan 9, 20265 months ago
+                  - 'row "package-lock.json, (File) Revert PRs #42 and #43 — wrong repository (#46) Apr 18, 20262 months ago" [ref=e380]':
+                    - cell "package-lock.json, (File)" [ref=e381]:
+                      - generic [ref=e382]:
+                        - img [ref=e383]
+                        - link "package-lock.json, (File)" [ref=e388] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/package-lock.json
+                          - text: package-lock.json
+                    - 'cell "Revert PRs #42 and #43 — wrong repository (#46)" [ref=e389]':
+                      - generic [ref=e391]:
+                        - link "Revert PRs" [ref=e392] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#42" [ref=e393] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/42
+                        - link "and" [ref=e394] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#43" [ref=e395] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/43
+                        - link "— wrong repository (" [ref=e396] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#46" [ref=e397] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/46
+                        - link ")" [ref=e398] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                    - cell "Apr 18, 20262 months ago" [ref=e399]:
+                      - generic [ref=e400]: Apr 18, 20262 months ago
+                  - 'row "package.json, (File) Revert PRs #42 and #43 — wrong repository (#46) Apr 18, 20262 months ago" [ref=e401]':
+                    - cell "package.json, (File)" [ref=e402]:
+                      - generic [ref=e403]:
+                        - img [ref=e404]
+                        - link "package.json, (File)" [ref=e409] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/package.json
+                          - text: package.json
+                    - 'cell "Revert PRs #42 and #43 — wrong repository (#46)" [ref=e410]':
+                      - generic [ref=e412]:
+                        - link "Revert PRs" [ref=e413] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#42" [ref=e414] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/42
+                        - link "and" [ref=e415] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#43" [ref=e416] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/43
+                        - link "— wrong repository (" [ref=e417] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                        - link "#46" [ref=e418] [cursor=pointer]:
+                          - /url: https://github.com/ref-tools/ref-tools-mcp/pull/46
+                        - link ")" [ref=e419] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/commit/9219438b0b9177d7b49176d0f11d30d7d6702d27
+                    - cell "Apr 18, 20262 months ago" [ref=e420]:
+                      - generic [ref=e421]: Apr 18, 20262 months ago
+                  - row "ref.png, (File) update docs Apr 23, 2025last year" [ref=e422]:
+                    - cell "ref.png, (File)" [ref=e423]:
+                      - generic [ref=e424]:
+                        - img [ref=e425]
+                        - link "ref.png, (File)" [ref=e430] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/ref.png
+                          - text: ref.png
+                    - cell "update docs" [ref=e431]:
+                      - link "update docs" [ref=e434] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/739794a1659b0c373f6feca1eb4471f545da8cf3
+                    - cell "Apr 23, 2025last year" [ref=e435]:
+                      - generic [ref=e436]: Apr 23, 2025last year
+                  - row "server.json, (File) update registry to publish the remote server Oct 28, 20258 months ago" [ref=e437]:
+                    - cell "server.json, (File)" [ref=e438]:
+                      - generic [ref=e439]:
+                        - img [ref=e440]
+                        - link "server.json, (File)" [ref=e445] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/server.json
+                          - text: server.json
+                    - cell "update registry to publish the remote server" [ref=e446]:
+                      - link "update registry to publish the remote server" [ref=e449] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/ead8aa898957be338908e9d80064b035530ee674
+                    - cell "Oct 28, 20258 months ago" [ref=e450]:
+                      - generic [ref=e451]: Oct 28, 20258 months ago
+                  - 'row "smithery.yaml, (File) fix: declare TRANSPORT=http for Smithery via smithery.yaml env May 6, 2026last month" [ref=e452]':
+                    - cell "smithery.yaml, (File)" [ref=e453]:
+                      - generic [ref=e454]:
+                        - img [ref=e455]
+                        - link "smithery.yaml, (File)" [ref=e460] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/smithery.yaml
+                          - text: smithery.yaml
+                    - 'cell "fix: declare TRANSPORT=http for Smithery via smithery.yaml env" [ref=e461]':
+                      - 'link "fix: declare TRANSPORT=http for Smithery via smithery.yaml env" [ref=e464] [cursor=pointer]':
+                        - /url: /ref-tools/ref-tools-mcp/commit/a87623d1359e3c233669d29db1ad2586bae359b1
+                    - cell "May 6, 2026last month" [ref=e465]:
+                      - generic [ref=e466]: May 6, 2026last month
+                  - row "tsconfig.json, (File) copy from mono-repo Apr 23, 2025last year" [ref=e467]:
+                    - cell "tsconfig.json, (File)" [ref=e468]:
+                      - generic [ref=e469]:
+                        - img [ref=e470]
+                        - link "tsconfig.json, (File)" [ref=e475] [cursor=pointer]:
+                          - /url: /ref-tools/ref-tools-mcp/blob/main/tsconfig.json
+                          - text: tsconfig.json
+                    - cell "copy from mono-repo" [ref=e476]:
+                      - link "copy from mono-repo" [ref=e479] [cursor=pointer]:
+                        - /url: /ref-tools/ref-tools-mcp/commit/641ad549155aa2d3200b77da5a8ab7151cbf1a02
+                    - cell "Apr 23, 2025last year" [ref=e480]:
+                      - generic [ref=e481]: Apr 23, 2025last year
+            - generic [ref=e483]:
+              - generic [ref=e484]:
+                - heading "Repository files navigation" [level=2] [ref=e485]
+                - navigation "Repository files" [ref=e486]:
+                  - list [ref=e487]:
+                    - listitem [ref=e488]:
+                      - link "README" [ref=e489] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e491]
+                        - generic [ref=e493]: README
+                    - listitem [ref=e494]:
+                      - link "MIT license" [ref=e495] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e497]
+                        - generic [ref=e499]: MIT license
+                - button "Outline" [ref=e500] [cursor=pointer]:
+                  - img [ref=e501]
+              - article [ref=e504]:
+                - paragraph [ref=e505]:
+                  - link "Documentation for your agent" [ref=e506] [cursor=pointer]:
+                    - /url: https://ref.tools
+                    - img "Documentation for your agent" [ref=e507]
+                  - link "smithery badge" [ref=e508] [cursor=pointer]:
+                    - /url: https://smithery.ai/server/@ref-tools/ref-tools-mcp
+                    - img "smithery badge" [ref=e509]
+                  - link "Website" [ref=e510] [cursor=pointer]:
+                    - /url: https://ref.tools
+                    - img "Website" [ref=e511]
+                  - link "License" [ref=e512] [cursor=pointer]:
+                    - /url: /ref-tools/ref-tools-mcp/blob/main/LICENSE
+                    - img "License" [ref=e513]
+                  - link "npm version" [ref=e514] [cursor=pointer]:
+                    - /url: https://www.npmjs.com/package/ref-tools-mcp
+                    - img "npm version" [ref=e515]
+                - generic [ref=e516]:
+                  - heading "Ref MCP" [level=1] [ref=e517]
+                  - 'link "Permalink: Ref MCP" [ref=e518] [cursor=pointer]':
+                    - /url: "#ref-mcp"
+                    - img [ref=e519]
+                - paragraph [ref=e521]:
+                  - text: A
+                  - link "ModelContextProtocol" [ref=e522] [cursor=pointer]:
+                    - /url: https://modelcontextprotocol.io
+                  - text: server that gives your AI coding tool or agent access to documentation for APIs, services, libraries etc. It's your one-stop-shop to keep your agent up-to-date on documentation in a fast and token-efficient way.
+                - paragraph [ref=e523]:
+                  - text: For more see info
+                  - link "ref.tools" [ref=e524] [cursor=pointer]:
+                    - /url: https://ref.tools
+                - generic [ref=e525]:
+                  - heading "Agentic search for exactly the right context" [level=2] [ref=e526]
+                  - 'link "Permalink: Agentic search for exactly the right context" [ref=e527] [cursor=pointer]':
+                    - /url: "#agentic-search-for-exactly-the-right-context"
+                    - img [ref=e528]
+                - paragraph [ref=e530]:
+                  - text: Ref's tools are designed to match how models search while using as little context as possible to reduce
+                  - link "context rot" [ref=e531] [cursor=pointer]:
+                    - /url: https://research.trychroma.com/context-rot
+                  - text: . The goal is to find exactly the context your coding agent needs to be successful while using minimum tokens.
+                - paragraph [ref=e532]: Depending on the complexity of the prompt, LLM coding agents like Claude Code will typically do one or more searches and then choose a few resources to read in more depth.
+                - paragraph [ref=e533]: "For a simple query about Figma's Comment REST API it will make a couple calls to get exactly what it needs:"
+                - generic [ref=e534]:
+                  - code [ref=e536]: SEARCH 'Figma API post comment endpoint documentation' (54 tokens) READ https://www.figma.com/developers/api#post-comments-endpoint (385 tokens)
+                  - button "Copy code to clipboard" [ref=e538] [cursor=pointer]:
+                    - img [ref=e539]
+                - paragraph [ref=e542]: "For more complex situations, the LLM will try to refine it's prompt as it reads results. For example:"
+                - generic [ref=e543]:
+                  - code [ref=e545]: SEARCH 'n8n merge node vs Code node multiple inputs best practices' (126) READ https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.merge/#merge (4961) READ https://docs.n8n.io/flow-logic/merging/#merge-data-from-multiple-node-executions (138) SEARCH 'n8n Code node multiple inputs best practices when to use' (107) READ https://docs.n8n.io/code/code-node/#usage (80) SEARCH 'n8n Code node access multiple inputs from different nodes' (370) SEARCH 'n8n Code node $input access multiple node inputs' (372) READ https://docs.n8n.io/code/builtin/output-other-nodes/#output-of-other-nodes (2310)
+                  - button "Copy code to clipboard" [ref=e547] [cursor=pointer]:
+                    - img [ref=e548]
+                - paragraph [ref=e551]: Ref takes advantage of MCP sessions to track search trajectory and minimize context usage. There's a lot more ideas cooking but here's what we've implemented so far.
+                - generic [ref=e552]:
+                  - heading "1. Filtering search results" [level=3] [ref=e553]
+                  - 'link "Permalink: 1. Filtering search results" [ref=e554] [cursor=pointer]':
+                    - /url: "#1-filtering-search-results"
+                    - img [ref=e555]
+                - paragraph [ref=e557]: For repeated similar searches in a session, Ref will never return repeated results. Traditionally, you dig farther in to search results by paging to the next result but this approach allows the agent to page AND adjust the prompt at the same time.
+                - generic [ref=e558]:
+                  - heading "2. Fetching the part of the page that matters" [level=3] [ref=e559]
+                  - 'link "Permalink: 2. Fetching the part of the page that matters" [ref=e560] [cursor=pointer]':
+                    - /url: "#2-fetching-the-part-of-the-page-that-matters"
+                    - img [ref=e561]
+                - paragraph [ref=e563]:
+                  - text: When reading a page of documentation, Ref will use the agent's session search history to dropout less relevant sections and return the most relevant 5k tokens. This helps Ref avoid a big problem with standard
+                  - code [ref=e564]: fetch()
+                  - text: web scraping which is when it hits a large documentation page you can easily end up pull in 20k+ tokens into context, most of which are irrelevant.
+                - generic [ref=e565]:
+                  - heading "Why does minimizing tokens from documentation context matter?" [level=2] [ref=e566]
+                  - 'link "Permalink: Why does minimizing tokens from documentation context matter?" [ref=e567] [cursor=pointer]':
+                    - /url: "#why-does-minimizing-tokens-from-documentation-context-matter"
+                    - img [ref=e568]
+                - generic [ref=e570]:
+                  - heading "1. More context makes models dumber" [level=3] [ref=e571]
+                  - 'link "Permalink: 1. More context makes models dumber" [ref=e572] [cursor=pointer]':
+                    - /url: "#1-more-context-makes-models-dumber"
+                    - img [ref=e573]
+                - paragraph [ref=e575]:
+                  - text: It's well documented that as of July 2025 that models get dumber as you put in more tokens. You might have heard about how models are great with long context now and that's kind of true but not the whole picture. For a quick primer on some research,
+                  - link "checkout this video from the team at Chroma" [ref=e576] [cursor=pointer]:
+                    - /url: https://www.youtube.com/watch?v=TUjQuC4ugak
+                  - text: .
+                - generic [ref=e577]:
+                  - heading "2. Tokens cost $$$" [level=3] [ref=e578]
+                  - 'link "Permalink: 2. Tokens cost $$$" [ref=e579] [cursor=pointer]':
+                    - /url: "#2-tokens-cost-"
+                    - img [ref=e580]
+                - paragraph [ref=e582]: Imagine you are using Claude Opus as a background agent and you start by having the agent pull in documentation context and suppose it pulls in 10000 tokens of context with 4000 being relevant and 6000 being extra noise. At API pricing, that 6k tokens cost about $0.09 PER STEP. If one prompt ends up taking 11 steps with Opus, you've spent $1 for no reason.
+                - generic [ref=e583]:
+                  - heading "Setup" [level=2] [ref=e584]
+                  - 'link "Permalink: Setup" [ref=e585] [cursor=pointer]':
+                    - /url: "#setup"
+                    - img [ref=e586]
+                - paragraph [ref=e588]: There are two options for setting up Ref as an MCP server, either via the streamable-http server (recommended) or local stdio server (legacy).
+                - paragraph [ref=e589]: This repo contains the legacy stdio server.
+                - generic [ref=e590]:
+                  - heading "Streamable HTTP (recommended)" [level=3] [ref=e591]
+                  - 'link "Permalink: Streamable HTTP (recommended)" [ref=e592] [cursor=pointer]':
+                    - /url: "#streamable-http-recommended"
+                    - img [ref=e593]
+                - paragraph [ref=e595]:
+                  - link "Install Ref MCP in Cursor" [ref=e596] [cursor=pointer]:
+                    - /url: https://cursor.com/install-mcp?name=Ref&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIm1jcC1yZW1vdGVAMC4xLjAtMCIsImh0dHBzOi8vYXBpLnJlZi50b29scy9tY3AiLCItLWhlYWRlcj14LXJlZi1hcGkta2V5OjxzaWduIHVwIHRvIGdldCBhbiBhcGkga2V5PiJdfQ==
+                    - img "Install Ref MCP in Cursor" [ref=e597]
+                - generic [ref=e598]:
+                  - code [ref=e600]: "\"Ref\": { \"type\": \"http\", \"url\": \"https://api.ref.tools/mcp?apiKey=YOUR_API_KEY\" }"
+                  - button "Copy code to clipboard" [ref=e602] [cursor=pointer]:
+                    - img [ref=e603]
+                - generic [ref=e606]:
+                  - heading "stdio" [level=3] [ref=e607]
+                  - 'link "Permalink: stdio" [ref=e608] [cursor=pointer]':
+                    - /url: "#stdio"
+                    - img [ref=e609]
+                - paragraph [ref=e611]:
+                  - link "Install Ref MCP in Cursor (stdio)" [ref=e612] [cursor=pointer]:
+                    - /url: https://cursor.com/install-mcp?name=Ref&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyJyZWYtdG9vbHMtbWNwIl0sImVudiI6eyJSRUZfQVBJX0tFWSI6IjxzaWduIHVwIHRvIGdldCBhbiBhcGkga2V5PiJ9fQ==
+                    - img "Install Ref MCP in Cursor (stdio)" [ref=e613]
+                - generic [ref=e614]:
+                  - code [ref=e616]: "\"Ref\": { \"command\": \"npx\", \"args\": [\"ref-tools-mcp@latest\"], \"env\": { \"REF_API_KEY\": <sign up to get an api key> } }"
+                  - button "Copy code to clipboard" [ref=e618] [cursor=pointer]:
+                    - img [ref=e619]
+                - generic [ref=e622]:
+                  - heading "Tools" [level=2] [ref=e623]
+                  - 'link "Permalink: Tools" [ref=e624] [cursor=pointer]':
+                    - /url: "#tools"
+                    - img [ref=e625]
+                - paragraph [ref=e627]: Ref MCP server provides all the documentation related tools for your agent needs.
+                - generic [ref=e628]:
+                  - heading "ref_search_documentation" [level=3] [ref=e629]
+                  - 'link "Permalink: ref_search_documentation" [ref=e630] [cursor=pointer]':
+                    - /url: "#ref_search_documentation"
+                    - img [ref=e631]
+                - paragraph [ref=e633]: A powerful search tool to check technical documentation. Great for finding facts or code snippets. Can be used to search for public documentation on the web or github as well from private resources like repos and pdfs.
+                - paragraph [ref=e634]:
+                  - strong [ref=e635]: "Parameters:"
+                - list [ref=e636]:
+                  - listitem [ref=e637]:
+                    - code [ref=e638]: query
+                    - text: "(required): Query to search for relevant documentation. This should be a full sentence or question."
+                - generic [ref=e639]:
+                  - heading "ref_read_url" [level=3] [ref=e640]
+                  - 'link "Permalink: ref_read_url" [ref=e641] [cursor=pointer]':
+                    - /url: "#ref_read_url"
+                    - img [ref=e642]
+                - paragraph [ref=e644]: A tool that fetches content from a URL and converts it to markdown for easy reading with Ref. This is powerful when used in conjunction with the ref_search_documentation tool that returns urls of relevant content.
+                - paragraph [ref=e645]:
+                  - strong [ref=e646]: "Parameters:"
+                - list [ref=e647]:
+                  - listitem [ref=e648]:
+                    - code [ref=e649]: url
+                    - text: "(required): The URL of the webpage to read."
+                - generic [ref=e650]:
+                  - heading "OpenAI deep research support" [level=2] [ref=e651]
+                  - 'link "Permalink: OpenAI deep research support" [ref=e652] [cursor=pointer]':
+                    - /url: "#openai-deep-research-support"
+                    - img [ref=e653]
+                - paragraph [ref=e655]: Ref can be used as a source for deep research. OpenAI requires specific tool definitions so when used with an OpenAI client, Ref will provide the same tools with slightly different naming.
+                - generic [ref=e656]:
+                  - code [ref=e658]: ref_search_documentation(query) -> search(query) ref_read_url(url) -> fetch(id)
+                  - button "Copy code to clipboard" [ref=e660] [cursor=pointer]:
+                    - img [ref=e661]
+                - generic [ref=e664]:
+                  - heading "Development" [level=2] [ref=e665]
+                  - 'link "Permalink: Development" [ref=e666] [cursor=pointer]':
+                    - /url: "#development"
+                    - img [ref=e667]
+                - generic [ref=e669]:
+                  - code [ref=e671]: npm install npm run dev
+                  - button "Copy code to clipboard" [ref=e673] [cursor=pointer]:
+                    - img [ref=e674]
+                - generic [ref=e677]:
+                  - heading "Running with Inspector" [level=3] [ref=e678]
+                  - 'link "Permalink: Running with Inspector" [ref=e679] [cursor=pointer]':
+                    - /url: "#running-with-inspector"
+                    - img [ref=e680]
+                - paragraph [ref=e682]: For development and debugging purposes, you can use the MCP Inspector tool. The Inspector provides a visual interface for testing and monitoring MCP server interactions.
+                - paragraph [ref=e683]:
+                  - text: Visit the
+                  - link "Inspector documentation" [ref=e684] [cursor=pointer]:
+                    - /url: https://modelcontextprotocol.io/docs/tools/inspector
+                  - text: for detailed setup instructions.
+                - paragraph [ref=e685]: "To test locally with Inspector:"
+                - generic [ref=e686]:
+                  - code [ref=e688]: npm run inspect
+                  - button "Copy code to clipboard" [ref=e690] [cursor=pointer]:
+                    - img [ref=e691]
+                - paragraph [ref=e694]: "Or run both the watcher and inspector:"
+                - generic [ref=e695]:
+                  - code [ref=e697]: npm run dev
+                  - button "Copy code to clipboard" [ref=e699] [cursor=pointer]:
+                    - img [ref=e700]
+                - generic [ref=e703]:
+                  - heading "Local Development" [level=3] [ref=e704]
+                  - 'link "Permalink: Local Development" [ref=e705] [cursor=pointer]':
+                    - /url: "#local-development"
+                    - img [ref=e706]
+                - list [ref=e708]:
+                  - listitem [ref=e709]: Clone the repository
+                  - listitem [ref=e710]: "Install dependencies:"
+                - generic [ref=e711]:
+                  - generic [ref=e712]: npm install
+                  - button "Copy code to clipboard" [ref=e714] [cursor=pointer]:
+                    - img [ref=e715]
+                - list [ref=e718]:
+                  - listitem [ref=e719]: "Build the project:"
+                - generic [ref=e720]:
+                  - generic [ref=e721]: npm run build
+                  - button "Copy code to clipboard" [ref=e723] [cursor=pointer]:
+                    - img [ref=e724]
+                - list [ref=e727]:
+                  - listitem [ref=e728]: "For development with auto-rebuilding:"
+                - generic [ref=e729]:
+                  - generic [ref=e730]: npm run watch
+                  - button "Copy code to clipboard" [ref=e732] [cursor=pointer]:
+                    - img [ref=e733]
+                - generic [ref=e736]:
+                  - heading "License" [level=2] [ref=e737]
+                  - 'link "Permalink: License" [ref=e738] [cursor=pointer]':
+                    - /url: "#license"
+                    - img [ref=e739]
+                - paragraph [ref=e741]: MIT
+        - generic [ref=e745]:
+          - generic [ref=e748]:
+            - heading "About" [level=2] [ref=e749]
+            - paragraph [ref=e750]: Helping coding agents never make mistakes working with public or private libraries without wasting the context window.
+            - generic [ref=e751]:
+              - img [ref=e752]
+              - link "ref.tools" [ref=e755] [cursor=pointer]:
+                - /url: http://ref.tools
+            - heading "Topics" [level=3] [ref=e756]
+            - generic [ref=e758]:
+              - link "mcp" [ref=e759] [cursor=pointer]:
+                - /url: /topics/mcp
+              - link "documentation-tool" [ref=e760] [cursor=pointer]:
+                - /url: /topics/documentation-tool
+              - link "mcp-server" [ref=e761] [cursor=pointer]:
+                - /url: /topics/mcp-server
+              - link "coding-agent" [ref=e762] [cursor=pointer]:
+                - /url: /topics/coding-agent
+            - heading "Resources" [level=3] [ref=e763]
+            - link "Readme" [ref=e765] [cursor=pointer]:
+              - /url: "#readme-ov-file"
+              - img [ref=e766]
+              - text: Readme
+            - heading "License" [level=3] [ref=e768]
+            - link "MIT license" [ref=e770] [cursor=pointer]:
+              - /url: "#MIT-1-ov-file"
+              - img [ref=e771]
+              - text: MIT license
+            - link "Activity" [ref=e774] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/activity
+              - img [ref=e775]
+              - text: Activity
+            - link "Custom properties" [ref=e778] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/custom-properties
+              - img [ref=e779]
+              - text: Custom properties
+            - heading "Stars" [level=3] [ref=e781]
+            - link "1.1k stars" [ref=e783] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/stargazers
+              - img [ref=e784]
+              - strong [ref=e786]: 1.1k
+              - text: stars
+            - heading "Watchers" [level=3] [ref=e787]
+            - link "13 watching" [ref=e789] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/watchers
+              - img [ref=e790]
+              - strong [ref=e792]: "13"
+              - text: watching
+            - heading "Forks" [level=3] [ref=e793]
+            - link "66 forks" [ref=e795] [cursor=pointer]:
+              - /url: /ref-tools/ref-tools-mcp/forks
+              - img [ref=e796]
+              - strong [ref=e798]: "66"
+              - text: forks
+            - link "Report repository" [ref=e800] [cursor=pointer]:
+              - /url: /contact/report-content?content_url=https%3A%2F%2Fgithub.com%2Fref-tools%2Fref-tools-mcp&report=ref-tools+%28user%29
+          - generic [ref=e802]:
+            - heading "Contributors 8" [level=2] [ref=e803]:
+              - link "Contributors 8" [ref=e804] [cursor=pointer]:
+                - /url: /ref-tools/ref-tools-mcp/graphs/contributors
+                - text: Contributors
+                - generic "8" [ref=e805]
+            - list [ref=e806]:
+              - listitem [ref=e807]:
+                - link "@MatthewDailey" [ref=e808] [cursor=pointer]:
+                  - /url: https://github.com/MatthewDailey
+                  - img "@MatthewDailey" [ref=e809]
+              - listitem [ref=e810]:
+                - link "@arjunkmrm" [ref=e811] [cursor=pointer]:
+                  - /url: https://github.com/arjunkmrm
+                  - img "@arjunkmrm" [ref=e812]
+              - listitem [ref=e813]:
+                - link "@mgoldsborough" [ref=e814] [cursor=pointer]:
+                  - /url: https://github.com/mgoldsborough
+                  - img "@mgoldsborough" [ref=e815]
+              - listitem [ref=e816]:
+                - link "@MatthewJamisonJS" [ref=e817] [cursor=pointer]:
+                  - /url: https://github.com/MatthewJamisonJS
+                  - img "@MatthewJamisonJS" [ref=e818]
+              - listitem [ref=e819]:
+                - link "@smithery[bot]" [ref=e820] [cursor=pointer]:
+                  - /url: https://github.com/apps/smithery
+                  - img "@smithery[bot]" [ref=e821]
+              - listitem [ref=e822]:
+                - link "@cursoragent" [ref=e823] [cursor=pointer]:
+                  - /url: https://github.com/cursoragent
+                  - img "@cursoragent" [ref=e824]
+              - listitem [ref=e825]:
+                - link "@patrickdevivo" [ref=e826] [cursor=pointer]:
+                  - /url: https://github.com/patrickdevivo
+                  - img "@patrickdevivo" [ref=e827]
+              - listitem [ref=e828]:
+                - link "@claude" [ref=e829] [cursor=pointer]:
+                  - /url: https://github.com/claude
+                  - img "@claude" [ref=e830]
+          - generic [ref=e832]:
+            - heading "Languages" [level=2] [ref=e833]
+            - list [ref=e838]:
+              - listitem [ref=e839]:
+                - link "TypeScript 96.4%" [ref=e840] [cursor=pointer]:
+                  - /url: /ref-tools/ref-tools-mcp/search?l=typescript
+                  - img [ref=e841]
+                  - generic [ref=e843]: TypeScript
+                  - generic [ref=e844]: 96.4%
+              - listitem [ref=e845]:
+                - link "Dockerfile 3.6%" [ref=e846] [cursor=pointer]:
+                  - /url: /ref-tools/ref-tools-mcp/search?l=dockerfile
+                  - img [ref=e847]
+                  - generic [ref=e849]: Dockerfile
+                  - generic [ref=e850]: 3.6%
+  - contentinfo [ref=e852]:
+    - heading "Footer" [level=2] [ref=e853]
+    - generic [ref=e854]:
+      - generic [ref=e855]:
+        - link "GitHub Homepage" [ref=e856] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e857]
+        - generic [ref=e859]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e860]:
+        - heading "Footer navigation" [level=3] [ref=e861]
+        - list "Footer navigation" [ref=e862]:
+          - listitem [ref=e863]:
+            - link "Terms" [ref=e864] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e865]:
+            - link "Privacy" [ref=e866] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e867]:
+            - link "Security" [ref=e868] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e869]:
+            - link "Status" [ref=e870] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e871]:
+            - link "Community" [ref=e872] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e873]:
+            - link "Docs" [ref=e874] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e875]:
+            - link "Contact" [ref=e876] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e877]:
+            - button "Manage cookies" [ref=e879] [cursor=pointer]
+          - listitem [ref=e880]:
+            - button "Do not share my personal information" [ref=e882] [cursor=pointer]

@@ -22,6 +22,8 @@ import (
 
 type Pane int
 
+const maxInputHeight = 14
+
 const (
 	PaneTimeline Pane = iota
 	PanePlan
@@ -199,7 +201,7 @@ func NewModel(ctx context.Context, backend Backend) Model {
 	ti.EndOfBufferCharacter = ' '
 	ti.Placeholder = "Type a task..."
 	ti.CharLimit = 4096
-	ti.MaxHeight = 6
+	ti.MaxHeight = maxInputHeight
 	ti.SetWidth(80)
 	ti.SetHeight(1)
 
@@ -648,7 +650,8 @@ func (m Model) inputHeight() int {
 		lineWidth := len([]rune(line))
 		height += max(1, (lineWidth+width-1)/width)
 	}
-	return min(max(1, height), 6)
+	available := max(1, m.height-7)
+	return min(max(1, height), min(maxInputHeight, available))
 }
 
 func (m Model) headerView() string {
@@ -707,10 +710,13 @@ func (m Model) bodyView() string {
 func (m Model) timelineFallbackView(width int) string {
 	title, detail := m.nextAction()
 	lines := []string{
-		fmt.Sprintf("%s %s", renderEventPrefix(timelineEvent{Kind: "next", Stage: stageOfTask(m.task)}), eventTitleStyle(timelineEvent{Kind: "next"}).Render(title)),
+		fmt.Sprintf("%s %s", renderEventPrefix(timelineEvent{Kind: "next", Stage: stageOfTask(m.task)}), renderEventTitle(timelineEvent{Kind: "next", Title: title})),
 	}
 	if detail != "" {
-		lines = append(lines, wrap(eventSummaryStyle(timelineEvent{Kind: "next"}).Render(detail), max(20, width-2))...)
+		ev := timelineEvent{Kind: "next"}
+		for _, line := range wrapBlock(detail, max(20, width-2)) {
+			lines = append(lines, renderEventSummaryLine(ev, line))
+		}
 	}
 	if m.task != nil && m.task.ID != "" {
 		lines = append(lines, fmt.Sprintf("task: %s | stage=%s | expected=%s | status=%s", shortID(m.task.ID), m.task.Stage, m.task.ExpectedAction, m.task.Status))
@@ -755,6 +761,14 @@ func (m Model) footerView() string {
 			line += " | esc hide"
 		}
 		line += " | type to write"
+		return styleHint().Render(trimWidth(line, m.width))
+	}
+	if m.busy {
+		label := strings.TrimSpace(m.busyLabel)
+		if label == "" {
+			label = "работаю"
+		}
+		line := fmt.Sprintf("progress %s %s | pgup/pgdown scroll timeline | ждём ответ", m.spinner.View(), label)
 		return styleHint().Render(trimWidth(line, m.width))
 	}
 	pane := []string{"timeline", "plan", "evidence", "memory", "files"}[m.active]
@@ -1900,10 +1914,10 @@ func (m Model) renderTimelineLinesWithStarts(events []timelineEvent) ([]string, 
 			lines = append(lines, "")
 		}
 		starts = append(starts, len(lines))
-		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
+		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), renderEventTitle(ev)))
 		if ev.Summary != "" {
-			for _, summaryLine := range wrap(safe(ev.Summary), max(20, m.timeline.Width-2)) {
-				lines = append(lines, eventSummaryStyle(ev).Render(summaryLine))
+			for _, summaryLine := range wrapBlock(ev.Summary, max(20, m.timeline.Width-2)) {
+				lines = append(lines, renderEventSummaryLine(ev, summaryLine))
 			}
 		}
 	}
@@ -1912,10 +1926,10 @@ func (m Model) renderTimelineLinesWithStarts(events []timelineEvent) ([]string, 
 		if len(lines) > 0 {
 			lines = append(lines, "")
 		}
-		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), eventTitleStyle(ev).Render(safe(ev.Title))))
+		lines = append(lines, fmt.Sprintf("%s %s", renderEventPrefix(ev), renderEventTitle(ev)))
 		if ev.Summary != "" {
-			for _, summaryLine := range wrap(safe(ev.Summary), max(20, m.timeline.Width-2)) {
-				lines = append(lines, eventSummaryStyle(ev).Render(summaryLine))
+			for _, summaryLine := range wrapBlock(ev.Summary, max(20, m.timeline.Width-2)) {
+				lines = append(lines, renderEventSummaryLine(ev, summaryLine))
 			}
 		}
 	}
@@ -1959,6 +1973,16 @@ func renderEventPrefix(ev timelineEvent) string {
 func eventKindStyle(kind string) lipgloss.Style {
 	style := lipgloss.NewStyle().Bold(true)
 	switch kind {
+	case "user":
+		return style.Foreground(lipgloss.Color("213"))
+	case "assistant":
+		return style.Foreground(lipgloss.Color("159"))
+	case "command":
+		return style.Foreground(lipgloss.Color("228"))
+	case "system":
+		return style.Foreground(lipgloss.Color("141"))
+	case "model":
+		return style.Foreground(lipgloss.Color("183"))
 	case "startup":
 		return style.Foreground(lipgloss.Color("117"))
 	case "task":
@@ -1970,13 +1994,15 @@ func eventKindStyle(kind string) lipgloss.Style {
 	case "files":
 		return style.Foreground(lipgloss.Color("110"))
 	case "audit":
-		return style.Foreground(lipgloss.Color("244"))
+		return style.Foreground(lipgloss.Color("153"))
 	case "mcp":
-		return style.Foreground(lipgloss.Color("110"))
+		return style.Foreground(lipgloss.Color("75"))
 	case "progress":
-		return style.Foreground(lipgloss.Color("120"))
+		return style.Foreground(lipgloss.Color("156"))
+	case "next":
+		return style.Foreground(lipgloss.Color("225"))
 	case "warning":
-		return style.Foreground(lipgloss.Color("214"))
+		return style.Foreground(lipgloss.Color("208"))
 	case "error":
 		return style.Foreground(lipgloss.Color("209"))
 	default:
@@ -2011,8 +2037,20 @@ func eventTitleStyle(ev timelineEvent) lipgloss.Style {
 	if ev.Kind == "assistant" {
 		return style.Bold(true).Foreground(lipgloss.Color("255"))
 	}
+	if ev.Kind == "user" {
+		return style.Bold(true).Foreground(lipgloss.Color("213"))
+	}
+	if ev.Kind == "command" {
+		return style.Bold(true).Foreground(lipgloss.Color("228"))
+	}
 	if ev.Kind == "progress" {
-		return style.Bold(true).Foreground(lipgloss.Color("120"))
+		return style.Bold(true).Foreground(lipgloss.Color("156"))
+	}
+	if ev.Kind == "mcp" {
+		return style.Bold(true).Foreground(lipgloss.Color("75"))
+	}
+	if ev.Kind == "next" {
+		return style.Bold(true).Foreground(lipgloss.Color("225"))
 	}
 	return eventDecisionStyle(ev.Decision)
 }
@@ -2044,14 +2082,294 @@ func eventSummaryStyle(ev timelineEvent) lipgloss.Style {
 	case "assistant":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	case "user":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("225"))
+	case "command":
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+	case "system":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
+	case "model":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("183"))
+	case "next":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("225"))
 	case "progress":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("120"))
-	case "audit", "mcp":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("156"))
+	case "audit":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("153"))
+	case "mcp":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("75"))
+	case "files":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("110"))
 	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
 	}
+}
+
+func renderEventTitle(ev timelineEvent) string {
+	return colorizeTimelineText(ev, safe(ev.Title), eventTitleStyle(ev))
+}
+
+func renderEventSummaryLine(ev timelineEvent, line string) string {
+	return colorizeTimelineText(ev, line, eventSummaryStyle(ev))
+}
+
+func colorizeTimelineText(ev timelineEvent, text string, base lipgloss.Style) string {
+	if text == "" {
+		return base.Render(text)
+	}
+	var b strings.Builder
+	tokenStart := -1
+	plainStart := 0
+	flushPlain := func(end int) {
+		if end > plainStart {
+			b.WriteString(base.Render(text[plainStart:end]))
+		}
+	}
+	flushToken := func(end int) {
+		if tokenStart < 0 {
+			return
+		}
+		token := text[tokenStart:end]
+		flushPlain(tokenStart)
+		if rendered, ok := renderTimelineToken(ev, token, base); ok {
+			b.WriteString(rendered)
+		} else {
+			b.WriteString(base.Render(token))
+		}
+		tokenStart = -1
+		plainStart = end
+	}
+	for i, r := range text {
+		if isTimelineTokenRune(r) {
+			if tokenStart < 0 {
+				tokenStart = i
+			}
+			continue
+		}
+		flushToken(i)
+	}
+	flushToken(len(text))
+	flushPlain(len(text))
+	return b.String()
+}
+
+func renderTimelineToken(ev timelineEvent, token string, base lipgloss.Style) (string, bool) {
+	if key, value, ok := strings.Cut(token, "="); ok && key != "" {
+		rendered := timelineKeyStyle().Render(key) + "="
+		if value == "" {
+			return rendered, true
+		}
+		return rendered + renderTimelineValue(ev, key, value, base), true
+	}
+	if style, ok := timelineValueStyle(ev, "", token); ok {
+		return style.Render(token), true
+	}
+	return "", false
+}
+
+func renderTimelineValue(ev timelineEvent, key, value string, base lipgloss.Style) string {
+	if style, ok := timelineValueStyle(ev, key, value); ok {
+		return style.Render(value)
+	}
+	return base.Render(value)
+}
+
+func timelineValueStyle(ev timelineEvent, key, value string) (lipgloss.Style, bool) {
+	lowerKey := strings.ToLower(key)
+	lowerValue := strings.ToLower(value)
+	switch lowerKey {
+	case "stage":
+		return eventStageStyle(app.TaskStage(lowerValue)), true
+	case "status":
+		return timelineStatusStyle(lowerValue), true
+	case "expected":
+		return timelineIdentifierStyle(value), true
+	case "permission":
+		return timelinePermissionStyle(lowerValue), true
+	case "approval":
+		return timelineApprovalStyle(lowerValue), true
+	case "path", "paths":
+		return timelinePathStyle(), true
+	case "cmd", "command":
+		return timelineCommandStyle(), true
+	case "url":
+		return timelineURLStyle(), true
+	case "args", "records":
+		return timelineNumberStyle(), true
+	}
+	switch lowerValue {
+	case "enabled", "disabled", "active", "paused", "done", "ok":
+		return timelineStatusStyle(lowerValue), true
+	case "read", "browser", "write":
+		return timelinePermissionStyle(lowerValue), true
+	case "auto", "ask", "deny":
+		return timelineApprovalStyle(lowerValue), true
+	case "planning", "execution", "validation":
+		return eventStageStyle(app.TaskStage(lowerValue)), true
+	case "accepted", "transitioned":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("120")), true
+	case "retried":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")), true
+	case "rejected", "failed", "error":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("209")), true
+	}
+	if isSlashCommandToken(value) {
+		return timelineCommandStyle(), true
+	}
+	if isTimelinePathToken(value) {
+		return timelinePathStyle(), true
+	}
+	if isTimelineIdentifierToken(ev, value) {
+		return timelineIdentifierStyle(value), true
+	}
+	return lipgloss.Style{}, false
+}
+
+func timelineKeyStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+}
+
+func timelineStatusStyle(value string) lipgloss.Style {
+	switch value {
+	case "enabled", "active", "done", "ok":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("120"))
+	case "disabled", "paused":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("208"))
+	default:
+		return timelineIdentifierStyle(value)
+	}
+}
+
+func timelinePermissionStyle(value string) lipgloss.Style {
+	switch value {
+	case "read":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	case "browser":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("177"))
+	case "write":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	default:
+		return timelineIdentifierStyle(value)
+	}
+}
+
+func timelineApprovalStyle(value string) lipgloss.Style {
+	switch value {
+	case "auto":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("120"))
+	case "ask":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	case "deny":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("209"))
+	default:
+		return timelineIdentifierStyle(value)
+	}
+}
+
+func timelinePathStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("110"))
+}
+
+func timelineCommandStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141"))
+}
+
+func timelineURLStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Underline(true).Foreground(lipgloss.Color("117"))
+}
+
+func timelineNumberStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+}
+
+func timelineIdentifierStyle(token string) lipgloss.Style {
+	return lipgloss.NewStyle().Bold(true).Foreground(timelineIdentifierColor(token))
+}
+
+func timelineIdentifierColor(token string) lipgloss.Color {
+	palette := []lipgloss.Color{"81", "117", "141", "177", "214", "219", "120", "110", "228", "183", "156", "208", "75", "105", "147", "192"}
+	hash := uint32(2166136261)
+	for _, b := range []byte(strings.ToLower(token)) {
+		hash ^= uint32(b)
+		hash *= 16777619
+	}
+	return palette[int(hash%uint32(len(palette)))]
+}
+
+func isTimelineTokenRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-/=@", r)
+}
+
+func isSlashCommandToken(token string) bool {
+	return strings.HasPrefix(token, "/") && !strings.Contains(token[1:], "/")
+}
+
+func isTimelinePathToken(token string) bool {
+	if isSlashCommandToken(token) {
+		return false
+	}
+	return strings.Contains(token, "/") || strings.HasPrefix(token, ".")
+}
+
+func isTimelineIdentifierToken(ev timelineEvent, token string) bool {
+	token = strings.TrimSpace(token)
+	if len(token) < 2 {
+		return false
+	}
+	lower := strings.ToLower(token)
+	if timelineCommonWord(lower) {
+		return false
+	}
+	if strings.ContainsAny(token, "_@") || hasASCIIAlnum(token) && strings.Contains(token, "-") || hasASCIIDigit(token) && hasASCIIAlpha(token) {
+		return true
+	}
+	switch ev.Kind {
+	case "command":
+		return isASCIIWord(token)
+	case "audit", "mcp", "files", "model", "task", "transition":
+		return hasASCIIDigit(token) || strings.ContainsAny(token, "_-")
+	default:
+		return false
+	}
+}
+
+func timelineCommonWord(word string) bool {
+	switch word {
+	case "mcp", "server", "servers", "connected", "registered", "removed", "tool", "tools", "help", "connect", "allow", "call", "remove", "preset", "none", "status", "expected", "task", "stage", "progress", "answer", "records":
+		return true
+	default:
+		return false
+	}
+}
+
+func isASCIIWord(token string) bool {
+	for _, r := range token {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return hasASCIIAlpha(token)
+}
+
+func hasASCIIAlpha(token string) bool {
+	for _, r := range token {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasASCIIDigit(token string) bool {
+	for _, r := range token {
+		if r >= '0' && r <= '9' {
+			return true
+		}
+	}
+	return false
+}
+
+func hasASCIIAlnum(token string) bool {
+	return hasASCIIAlpha(token) || hasASCIIDigit(token)
 }
 
 func (m Model) updateContextPicker(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -2788,6 +3106,24 @@ func wrap(text string, width int) []string {
 	}
 	if current != "" {
 		lines = append(lines, current)
+	}
+	return lines
+}
+
+func wrapBlock(text string, width int) []string {
+	text = strings.ReplaceAll(text, "\x1b", "")
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.Trim(text, "\n")
+	if text == "" {
+		return []string{""}
+	}
+	lines := []string{}
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, wrap(line, width)...)
 	}
 	return lines
 }

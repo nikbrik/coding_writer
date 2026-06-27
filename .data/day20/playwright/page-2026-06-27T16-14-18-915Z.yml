@@ -1,0 +1,1409 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - link "Skip to content" [ref=e4] [cursor=pointer]:
+      - /url: "#start-of-content"
+    - banner [ref=e6]:
+      - heading "Navigation Menu" [level=2] [ref=e7]
+      - generic [ref=e8]:
+        - link "Homepage" [ref=e10] [cursor=pointer]:
+          - /url: /
+          - img [ref=e11]
+        - generic [ref=e13]:
+          - navigation "Global" [ref=e16]:
+            - list [ref=e17]:
+              - listitem [ref=e18]:
+                - button "Platform" [ref=e20] [cursor=pointer]:
+                  - text: Platform
+                  - img [ref=e21]
+              - listitem [ref=e23]:
+                - button "Solutions" [ref=e25] [cursor=pointer]:
+                  - text: Solutions
+                  - img [ref=e26]
+              - listitem [ref=e28]:
+                - button "Resources" [ref=e30] [cursor=pointer]:
+                  - text: Resources
+                  - img [ref=e31]
+              - listitem [ref=e33]:
+                - button "Open Source" [ref=e35] [cursor=pointer]:
+                  - text: Open Source
+                  - img [ref=e36]
+              - listitem [ref=e38]:
+                - button "Enterprise" [ref=e40] [cursor=pointer]:
+                  - text: Enterprise
+                  - img [ref=e41]
+              - listitem [ref=e43]:
+                - link "Pricing" [ref=e44] [cursor=pointer]:
+                  - /url: https://github.com/pricing
+                  - generic [ref=e45]: Pricing
+          - generic [ref=e46]:
+            - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+              - img [ref=e51]
+            - link "Sign in" [ref=e54] [cursor=pointer]:
+              - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Fmicrosoft%2Fplaywright-mcp
+            - link "Sign up" [ref=e55] [cursor=pointer]:
+              - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=microsoft%2Fplaywright-mcp
+            - button "Appearance settings" [ref=e58] [cursor=pointer]:
+              - img
+  - main [ref=e62]:
+    - generic [ref=e63]:
+      - generic [ref=e64]:
+        - generic [ref=e66]:
+          - img [ref=e67]
+          - link "microsoft" [ref=e70] [cursor=pointer]:
+            - /url: /microsoft
+          - generic [ref=e71]: /
+          - strong [ref=e72]:
+            - link "playwright-mcp" [ref=e73] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp
+          - generic [ref=e74]: Public
+        - generic [ref=e75]:
+          - list:
+            - listitem [ref=e76]:
+              - link "You must be signed in to change notification settings" [ref=e77] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmicrosoft%2Fplaywright-mcp
+                - img [ref=e78]
+                - text: Notifications
+            - listitem [ref=e80]:
+              - link "Fork 2.9k" [ref=e81] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmicrosoft%2Fplaywright-mcp
+                - img [ref=e82]
+                - text: Fork
+                - generic "2,856" [ref=e84]: 2.9k
+            - listitem [ref=e85]:
+              - link "You must be signed in to star a repository" [ref=e87] [cursor=pointer]:
+                - /url: /login?return_to=%2Fmicrosoft%2Fplaywright-mcp
+                - img [ref=e88]
+                - text: Star
+                - generic "34422 users starred this repository" [ref=e90]: 34.4k
+      - navigation "Repository" [ref=e91]:
+        - list [ref=e92]:
+          - listitem [ref=e93]:
+            - link "Code" [ref=e94] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp
+              - img [ref=e95]
+              - generic [ref=e97]: Code
+          - listitem [ref=e98]:
+            - link "Issues" [ref=e99] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/issues
+              - img [ref=e100]
+              - generic [ref=e103]: Issues
+          - listitem [ref=e104]:
+            - link "Pull requests" [ref=e105] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/pulls
+              - img [ref=e106]
+              - generic [ref=e108]: Pull requests
+          - listitem [ref=e109]:
+            - link "Actions" [ref=e110] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/actions
+              - img [ref=e111]
+              - generic [ref=e113]: Actions
+          - listitem [ref=e114]:
+            - link "Models" [ref=e115] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/models
+              - img [ref=e116]
+              - generic [ref=e118]: Models
+          - listitem [ref=e119]:
+            - link "Security and quality" [ref=e120] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/security
+              - img [ref=e121]
+              - generic [ref=e123]: Security and quality
+          - listitem [ref=e124]:
+            - link "Insights" [ref=e125] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/pulse
+              - img [ref=e126]
+              - generic [ref=e128]: Insights
+    - generic [ref=e141]:
+      - heading "microsoft/playwright-mcp" [level=1] [ref=e143]
+      - generic [ref=e144]:
+        - generic [ref=e147]:
+          - generic [ref=e148]:
+            - generic [ref=e149]:
+              - button "main branch" [ref=e151] [cursor=pointer]:
+                - generic [ref=e152]:
+                  - generic [ref=e154]:
+                    - img [ref=e156]
+                    - generic [ref=e159]: main
+                  - generic:
+                    - img
+              - generic [ref=e160]:
+                - link "15 Branches" [ref=e161] [cursor=pointer]:
+                  - /url: /microsoft/playwright-mcp/branches
+                  - generic [ref=e162]:
+                    - generic:
+                      - img
+                    - generic [ref=e164]:
+                      - strong [ref=e165]: "15"
+                      - text: Branches
+                - link "69 Tags" [ref=e166] [cursor=pointer]:
+                  - /url: /microsoft/playwright-mcp/tags
+                  - generic [ref=e167]:
+                    - generic:
+                      - img
+                    - generic [ref=e169]:
+                      - strong [ref=e170]: "69"
+                      - text: Tags
+            - generic [ref=e171]:
+              - generic [ref=e175]:
+                - img [ref=e177]
+                - combobox "Go to file" [ref=e179]
+              - button "Code" [ref=e180] [cursor=pointer]:
+                - generic [ref=e181]:
+                  - generic:
+                    - img
+                  - generic [ref=e182]: Code
+                  - generic:
+                    - img
+          - generic [ref=e183]:
+            - generic [ref=e184]:
+              - heading "Folders and files" [level=2] [ref=e185]
+              - table "Folders and files" [ref=e186]:
+                - rowgroup:
+                  - row "Name Last commit message Last commit date":
+                    - columnheader "Name"
+                    - columnheader "Last commit message":
+                      - generic "Last commit message"
+                    - columnheader "Last commit date":
+                      - generic "Last commit date"
+                - rowgroup [ref=e187]:
+                  - 'row "Latest commit oleksii-tumanov commits by oleksii-tumanov docs: fix CDP header env name (#1661) failure Commit 2d446f9 · Jun 25, 20262 days ago History 558 Commits" [ref=e188]':
+                    - 'cell "Latest commit oleksii-tumanov commits by oleksii-tumanov docs: fix CDP header env name (#1661) failure Commit 2d446f9 · Jun 25, 20262 days ago History 558 Commits" [ref=e189]':
+                      - generic [ref=e190]:
+                        - heading "Latest commit" [level=2] [ref=e191]
+                        - generic [ref=e192]:
+                          - generic [ref=e194]:
+                            - link "oleksii-tumanov" [ref=e195] [cursor=pointer]:
+                              - /url: /oleksii-tumanov
+                              - img "oleksii-tumanov" [ref=e196]
+                            - link "commits by oleksii-tumanov" [ref=e197] [cursor=pointer]:
+                              - /url: /microsoft/playwright-mcp/commits?author=oleksii-tumanov
+                              - text: oleksii-tumanov
+                          - generic [ref=e198]:
+                            - generic [ref=e200]:
+                              - 'link "docs: fix CDP header env name (" [ref=e201] [cursor=pointer]':
+                                - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                              - link "#1661" [ref=e202] [cursor=pointer]:
+                                - /url: https://github.com/microsoft/playwright-mcp/pull/1661
+                              - link ")" [ref=e203] [cursor=pointer]:
+                                - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                            - button "failure" [ref=e204] [cursor=pointer]:
+                              - img [ref=e205]
+                        - generic [ref=e207]:
+                          - generic [ref=e209]:
+                            - link "Commit 2d446f9" [ref=e210] [cursor=pointer]:
+                              - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                              - text: 2d446f9
+                            - text: ·
+                            - generic "Jun 25, 2026, 18:19 GMT+3" [ref=e211]: Jun 25, 20262 days ago
+                          - generic [ref=e212]:
+                            - heading "History" [level=2] [ref=e213]
+                            - link "558 Commits" [ref=e214] [cursor=pointer]:
+                              - /url: /microsoft/playwright-mcp/commits/main/
+                              - generic [ref=e215]:
+                                - generic:
+                                  - img
+                                - generic [ref=e216]: 558 Commits
+                  - 'row ".claude/skills, (Directory) docs: update release-notes skill with full release workflow (#1606) May 7, 2026last month" [ref=e217]':
+                    - cell ".claude/skills, (Directory)" [ref=e218]:
+                      - generic [ref=e219]:
+                        - img [ref=e220]
+                        - link ".claude/skills, (Directory)" [ref=e225] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/tree/main/.claude/skills
+                          - text: .claude/skills
+                    - 'cell "docs: update release-notes skill with full release workflow (#1606)" [ref=e226]':
+                      - generic [ref=e228]:
+                        - 'link "docs: update release-notes skill with full release workflow (" [ref=e229] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/f22c92438be9b27eb8fc755b1d91678b43e42f85
+                        - link "#1606" [ref=e230] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1606
+                        - link ")" [ref=e231] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/f22c92438be9b27eb8fc755b1d91678b43e42f85
+                    - cell "May 7, 2026last month" [ref=e232]:
+                      - generic [ref=e233]: May 7, 2026last month
+                  - 'row ".devcontainer, (Directory) devops: add devcontainer.json (#1473) Mar 19, 20263 months ago" [ref=e234]':
+                    - cell ".devcontainer, (Directory)" [ref=e235]:
+                      - generic [ref=e236]:
+                        - img [ref=e237]
+                        - link ".devcontainer, (Directory)" [ref=e242] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/tree/main/.devcontainer
+                          - text: .devcontainer
+                    - 'cell "devops: add devcontainer.json (#1473)" [ref=e243]':
+                      - generic [ref=e245]:
+                        - 'link "devops: add devcontainer.json (" [ref=e246] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/b2df7771031cc5d40ab749f75ffb1821ca606a13
+                        - link "#1473" [ref=e247] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1473
+                        - link ")" [ref=e248] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/b2df7771031cc5d40ab749f75ffb1821ca606a13
+                    - cell "Mar 19, 20263 months ago" [ref=e249]:
+                      - generic [ref=e250]: Mar 19, 20263 months ago
+                  - 'row ".github/workflows, (Directory) chore(ci): bump actions to Node 24 versions (#1592) May 2, 20262 months ago" [ref=e251]':
+                    - cell ".github/workflows, (Directory)" [ref=e252]:
+                      - generic [ref=e253]:
+                        - img [ref=e254]
+                        - link ".github/workflows, (Directory)" [ref=e259] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/tree/main/.github/workflows
+                          - text: .github/workflows
+                    - 'cell "chore(ci): bump actions to Node 24 versions (#1592)" [ref=e260]':
+                      - generic [ref=e262]:
+                        - 'link "chore(ci): bump actions to Node 24 versions (" [ref=e263] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/d3c528d948386a111463aed4a28f3734cd1428fb
+                        - link "#1592" [ref=e264] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1592
+                        - link ")" [ref=e265] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/d3c528d948386a111463aed4a28f3734cd1428fb
+                    - cell "May 2, 20262 months ago" [ref=e266]:
+                      - generic [ref=e267]: May 2, 20262 months ago
+                  - 'row "src, (Directory) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e268]':
+                    - cell "src, (Directory)" [ref=e269]:
+                      - generic [ref=e270]:
+                        - img [ref=e271]
+                        - link "src, (Directory)" [ref=e276] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/tree/main/src
+                          - text: src
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e277]':
+                      - generic [ref=e279]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e280] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e281] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e282] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e283]:
+                      - generic [ref=e284]: Apr 23, 20262 months ago
+                  - 'row "tests, (Directory) chore: roll 1.60.0-alpha-1777566615000 (#1583) Apr 30, 20262 months ago" [ref=e285]':
+                    - cell "tests, (Directory)" [ref=e286]:
+                      - generic [ref=e287]:
+                        - img [ref=e288]
+                        - link "tests, (Directory)" [ref=e293] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/tree/main/tests
+                          - text: tests
+                    - 'cell "chore: roll 1.60.0-alpha-1777566615000 (#1583)" [ref=e294]':
+                      - generic [ref=e296]:
+                        - 'link "chore: roll 1.60.0-alpha-1777566615000 (" [ref=e297] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/1e6ad9b24bd1d0b5d0469f2e9807532b327a827d
+                        - link "#1583" [ref=e298] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1583
+                        - link ")" [ref=e299] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/1e6ad9b24bd1d0b5d0469f2e9807532b327a827d
+                    - cell "Apr 30, 20262 months ago" [ref=e300]:
+                      - generic [ref=e301]: Apr 30, 20262 months ago
+                  - 'row ".gitignore, (File) chore: monorepo (#1325) Jan 23, 20265 months ago" [ref=e302]':
+                    - cell ".gitignore, (File)" [ref=e303]:
+                      - generic [ref=e304]:
+                        - img [ref=e305]
+                        - link ".gitignore, (File)" [ref=e310] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/.gitignore
+                          - text: .gitignore
+                    - 'cell "chore: monorepo (#1325)" [ref=e311]':
+                      - generic [ref=e313]:
+                        - 'link "chore: monorepo (" [ref=e314] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/6aab683338477a095ca8a63cdfdcc00f07bce000
+                        - link "#1325" [ref=e315] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1325
+                        - link ")" [ref=e316] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/6aab683338477a095ca8a63cdfdcc00f07bce000
+                    - cell "Jan 23, 20265 months ago" [ref=e317]:
+                      - generic [ref=e318]: Jan 23, 20265 months ago
+                  - 'row ".npmignore, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e319]':
+                    - cell ".npmignore, (File)" [ref=e320]:
+                      - generic [ref=e321]:
+                        - img [ref=e322]
+                        - link ".npmignore, (File)" [ref=e327] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/.npmignore
+                          - text: .npmignore
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e328]':
+                      - generic [ref=e330]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e331] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e332] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e333] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e334]:
+                      - generic [ref=e335]: Apr 23, 20262 months ago
+                  - 'row "CLAUDE.md, (File) docs: update release-notes skill with full release workflow (#1606) May 7, 2026last month" [ref=e336]':
+                    - cell "CLAUDE.md, (File)" [ref=e337]:
+                      - generic [ref=e338]:
+                        - img [ref=e339]
+                        - link "CLAUDE.md, (File)" [ref=e344] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/CLAUDE.md
+                          - text: CLAUDE.md
+                    - 'cell "docs: update release-notes skill with full release workflow (#1606)" [ref=e345]':
+                      - generic [ref=e347]:
+                        - 'link "docs: update release-notes skill with full release workflow (" [ref=e348] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/f22c92438be9b27eb8fc755b1d91678b43e42f85
+                        - link "#1606" [ref=e349] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1606
+                        - link ")" [ref=e350] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/f22c92438be9b27eb8fc755b1d91678b43e42f85
+                    - cell "May 7, 2026last month" [ref=e351]:
+                      - generic [ref=e352]: May 7, 2026last month
+                  - 'row "CONTRIBUTING.md, (File) docs: update MCP contribution setup (#1660) Jun 24, 20263 days ago" [ref=e353]':
+                    - cell "CONTRIBUTING.md, (File)" [ref=e354]:
+                      - generic [ref=e355]:
+                        - img [ref=e356]
+                        - link "CONTRIBUTING.md, (File)" [ref=e361] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/CONTRIBUTING.md
+                          - text: CONTRIBUTING.md
+                    - 'cell "docs: update MCP contribution setup (#1660)" [ref=e362]':
+                      - generic [ref=e364]:
+                        - 'link "docs: update MCP contribution setup (" [ref=e365] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/511320db60d6774557243a32b2ff201f14ca4188
+                        - link "#1660" [ref=e366] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1660
+                        - link ")" [ref=e367] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/511320db60d6774557243a32b2ff201f14ca4188
+                    - cell "Jun 24, 20263 days ago" [ref=e368]:
+                      - generic [ref=e369]: Jun 24, 20263 days ago
+                  - 'row "Dockerfile, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e370]':
+                    - cell "Dockerfile, (File)" [ref=e371]:
+                      - generic [ref=e372]:
+                        - img [ref=e373]
+                        - link "Dockerfile, (File)" [ref=e378] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/Dockerfile
+                          - text: Dockerfile
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e379]':
+                      - generic [ref=e381]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e382] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e383] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e384] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e385]:
+                      - generic [ref=e386]: Apr 23, 20262 months ago
+                  - 'row "LICENSE, (File) chore: split mcp into mcp and cli (#1346) Jan 27, 20265 months ago" [ref=e387]':
+                    - cell "LICENSE, (File)" [ref=e388]:
+                      - generic [ref=e389]:
+                        - img [ref=e390]
+                        - link "LICENSE, (File)" [ref=e395] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/LICENSE
+                          - text: LICENSE
+                    - 'cell "chore: split mcp into mcp and cli (#1346)" [ref=e396]':
+                      - generic [ref=e398]:
+                        - 'link "chore: split mcp into mcp and cli (" [ref=e399] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/5e0ac89c28c7e74b9f81aba7280dde361d3c4a7d
+                        - link "#1346" [ref=e400] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1346
+                        - link ")" [ref=e401] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/5e0ac89c28c7e74b9f81aba7280dde361d3c4a7d
+                    - cell "Jan 27, 20265 months ago" [ref=e402]:
+                      - generic [ref=e403]: Jan 27, 20265 months ago
+                  - 'row "README.md, (File) docs: fix CDP header env name (#1661) Jun 25, 20262 days ago" [ref=e404]':
+                    - cell "README.md, (File)" [ref=e405]:
+                      - generic [ref=e406]:
+                        - img [ref=e407]
+                        - link "README.md, (File)" [ref=e412] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/README.md
+                          - text: README.md
+                    - 'cell "docs: fix CDP header env name (#1661)" [ref=e413]':
+                      - generic [ref=e415]:
+                        - 'link "docs: fix CDP header env name (" [ref=e416] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                        - link "#1661" [ref=e417] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1661
+                        - link ")" [ref=e418] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                    - cell "Jun 25, 20262 days ago" [ref=e419]:
+                      - generic [ref=e420]: Jun 25, 20262 days ago
+                  - row "SECURITY.md, (File) Adding Microsoft SECURITY.MD (#1) Mar 21, 2025last year" [ref=e421]:
+                    - cell "SECURITY.md, (File)" [ref=e422]:
+                      - generic [ref=e423]:
+                        - img [ref=e424]
+                        - link "SECURITY.md, (File)" [ref=e429] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/SECURITY.md
+                          - text: SECURITY.md
+                    - cell "Adding Microsoft SECURITY.MD (#1)" [ref=e430]:
+                      - generic [ref=e432]:
+                        - link "Adding Microsoft SECURITY.MD (" [ref=e433] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/624732b187101da304b1b7921f7b17143e0ae242
+                        - link "#1" [ref=e434] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1
+                        - link ")" [ref=e435] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/624732b187101da304b1b7921f7b17143e0ae242
+                    - cell "Mar 21, 2025last year" [ref=e436]:
+                      - generic [ref=e437]: Mar 21, 2025last year
+                  - 'row "cli.js, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e438]':
+                    - cell "cli.js, (File)" [ref=e439]:
+                      - generic [ref=e440]:
+                        - img [ref=e441]
+                        - link "cli.js, (File)" [ref=e446] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/cli.js
+                          - text: cli.js
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e447]':
+                      - generic [ref=e449]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e450] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e451] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e452] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e453]:
+                      - generic [ref=e454]: Apr 23, 20262 months ago
+                  - 'row "config.d.ts, (File) chore: roll Playwright to 1.61.0-alpha-1781023400000 (#1648) Jun 10, 20263 weeks ago" [ref=e455]':
+                    - cell "config.d.ts, (File)" [ref=e456]:
+                      - generic [ref=e457]:
+                        - img [ref=e458]
+                        - link "config.d.ts, (File)" [ref=e463] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/config.d.ts
+                          - text: config.d.ts
+                    - 'cell "chore: roll Playwright to 1.61.0-alpha-1781023400000 (#1648)" [ref=e464]':
+                      - generic [ref=e466]:
+                        - 'link "chore: roll Playwright to 1.61.0-alpha-1781023400000 (" [ref=e467] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/40de6198202a03e107aec13b5a46a1315ea6799c
+                        - link "#1648" [ref=e468] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1648
+                        - link ")" [ref=e469] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/40de6198202a03e107aec13b5a46a1315ea6799c
+                    - cell "Jun 10, 20263 weeks ago" [ref=e470]:
+                      - generic [ref=e471]: Jun 10, 20263 weeks ago
+                  - 'row "index.d.ts, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e472]':
+                    - cell "index.d.ts, (File)" [ref=e473]:
+                      - generic [ref=e474]:
+                        - img [ref=e475]
+                        - link "index.d.ts, (File)" [ref=e480] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/index.d.ts
+                          - text: index.d.ts
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e481]':
+                      - generic [ref=e483]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e484] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e485] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e486] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e487]:
+                      - generic [ref=e488]: Apr 23, 20262 months ago
+                  - 'row "index.js, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e489]':
+                    - cell "index.js, (File)" [ref=e490]:
+                      - generic [ref=e491]:
+                        - img [ref=e492]
+                        - link "index.js, (File)" [ref=e497] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/index.js
+                          - text: index.js
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e498]':
+                      - generic [ref=e500]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e501] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e502] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e503] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e504]:
+                      - generic [ref=e505]: Apr 23, 20262 months ago
+                  - 'row "package-lock.json, (File) chore(deps-dev): bump hono from 4.12.23 to 4.12.26 (#1658) Jun 23, 20265 days ago" [ref=e506]':
+                    - cell "package-lock.json, (File)" [ref=e507]:
+                      - generic [ref=e508]:
+                        - img [ref=e509]
+                        - link "package-lock.json, (File)" [ref=e514] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/package-lock.json
+                          - text: package-lock.json
+                    - 'cell "chore(deps-dev): bump hono from 4.12.23 to 4.12.26 (#1658)" [ref=e515]':
+                      - generic [ref=e517]:
+                        - 'link "chore(deps-dev): bump hono from 4.12.23 to 4.12.26 (" [ref=e518] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/0f4e6ff6be93c63af843c3d67894d83b37ae27a3
+                        - link "#1658" [ref=e519] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1658
+                        - link ")" [ref=e520] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/0f4e6ff6be93c63af843c3d67894d83b37ae27a3
+                    - cell "Jun 23, 20265 days ago" [ref=e521]:
+                      - generic [ref=e522]: Jun 23, 20265 days ago
+                  - 'row "package.json, (File) chore: mark v0.0.76 (#1649) Jun 10, 20263 weeks ago" [ref=e523]':
+                    - cell "package.json, (File)" [ref=e524]:
+                      - generic [ref=e525]:
+                        - img [ref=e526]
+                        - link "package.json, (File)" [ref=e531] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/package.json
+                          - text: package.json
+                    - 'cell "chore: mark v0.0.76 (#1649)" [ref=e532]':
+                      - generic [ref=e534]:
+                        - 'link "chore: mark v0.0.76 (" [ref=e535] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/b301c372ec741289eff1cf6aab9d3bec553f31e2
+                        - link "#1649" [ref=e536] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1649
+                        - link ")" [ref=e537] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/b301c372ec741289eff1cf6aab9d3bec553f31e2
+                    - cell "Jun 10, 20263 weeks ago" [ref=e538]:
+                      - generic [ref=e539]: Jun 10, 20263 weeks ago
+                  - 'row "playwright.config.ts, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e540]':
+                    - cell "playwright.config.ts, (File)" [ref=e541]:
+                      - generic [ref=e542]:
+                        - img [ref=e543]
+                        - link "playwright.config.ts, (File)" [ref=e548] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/playwright.config.ts
+                          - text: playwright.config.ts
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e549]':
+                      - generic [ref=e551]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e552] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e553] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e554] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e555]:
+                      - generic [ref=e556]: Apr 23, 20262 months ago
+                  - 'row "roll.js, (File) chore: flatten repo to single-package layout (#1567) Apr 23, 20262 months ago" [ref=e557]':
+                    - cell "roll.js, (File)" [ref=e558]:
+                      - generic [ref=e559]:
+                        - img [ref=e560]
+                        - link "roll.js, (File)" [ref=e565] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/roll.js
+                          - text: roll.js
+                    - 'cell "chore: flatten repo to single-package layout (#1567)" [ref=e566]':
+                      - generic [ref=e568]:
+                        - 'link "chore: flatten repo to single-package layout (" [ref=e569] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                        - link "#1567" [ref=e570] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1567
+                        - link ")" [ref=e571] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/9a1eaa6088d84d2ea0ddcc622dfe90924ec12e5f
+                    - cell "Apr 23, 20262 months ago" [ref=e572]:
+                      - generic [ref=e573]: Apr 23, 20262 months ago
+                  - 'row "server.json, (File) chore: mark v0.0.76 (#1649) Jun 10, 20263 weeks ago" [ref=e574]':
+                    - cell "server.json, (File)" [ref=e575]:
+                      - generic [ref=e576]:
+                        - img [ref=e577]
+                        - link "server.json, (File)" [ref=e582] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/server.json
+                          - text: server.json
+                    - 'cell "chore: mark v0.0.76 (#1649)" [ref=e583]':
+                      - generic [ref=e585]:
+                        - 'link "chore: mark v0.0.76 (" [ref=e586] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/b301c372ec741289eff1cf6aab9d3bec553f31e2
+                        - link "#1649" [ref=e587] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1649
+                        - link ")" [ref=e588] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/b301c372ec741289eff1cf6aab9d3bec553f31e2
+                    - cell "Jun 10, 20263 weeks ago" [ref=e589]:
+                      - generic [ref=e590]: Jun 10, 20263 weeks ago
+                  - 'row "update-readme.js, (File) docs: fix CDP header env name (#1661) Jun 25, 20262 days ago" [ref=e591]':
+                    - cell "update-readme.js, (File)" [ref=e592]:
+                      - generic [ref=e593]:
+                        - img [ref=e594]
+                        - link "update-readme.js, (File)" [ref=e599] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/blob/main/update-readme.js
+                          - text: update-readme.js
+                    - 'cell "docs: fix CDP header env name (#1661)" [ref=e600]':
+                      - generic [ref=e602]:
+                        - 'link "docs: fix CDP header env name (" [ref=e603] [cursor=pointer]':
+                          - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                        - link "#1661" [ref=e604] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-mcp/pull/1661
+                        - link ")" [ref=e605] [cursor=pointer]:
+                          - /url: /microsoft/playwright-mcp/commit/2d446f9e1b79886103c79406b81cc5408364487a
+                    - cell "Jun 25, 20262 days ago" [ref=e606]:
+                      - generic [ref=e607]: Jun 25, 20262 days ago
+            - generic [ref=e609]:
+              - generic [ref=e610]:
+                - heading "Repository files navigation" [level=2] [ref=e611]
+                - navigation "Repository files" [ref=e612]:
+                  - list [ref=e613]:
+                    - listitem [ref=e614]:
+                      - link "README" [ref=e615] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e617]
+                        - generic [ref=e619]: README
+                    - listitem [ref=e620]:
+                      - link "Code of conduct" [ref=e621] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e623]
+                        - generic [ref=e625]: Code of conduct
+                    - listitem [ref=e626]:
+                      - link "Contributing" [ref=e627] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e629]
+                        - generic [ref=e631]: Contributing
+                    - listitem [ref=e632]:
+                      - link "Apache-2.0 license" [ref=e633] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e635]
+                        - generic [ref=e637]: Apache-2.0 license
+                    - listitem [ref=e638]:
+                      - link "Security" [ref=e639] [cursor=pointer]:
+                        - /url: "#"
+                        - img [ref=e641]
+                        - generic [ref=e643]: Security
+                - button "Outline" [ref=e644] [cursor=pointer]:
+                  - img [ref=e645]
+              - article [ref=e648]:
+                - generic [ref=e649]:
+                  - heading "Playwright MCP" [level=2] [ref=e650]
+                  - 'link "Permalink: Playwright MCP" [ref=e651] [cursor=pointer]':
+                    - /url: "#playwright-mcp"
+                    - img [ref=e652]
+                - paragraph [ref=e654]:
+                  - text: A Model Context Protocol (MCP) server that provides browser automation capabilities using
+                  - link "Playwright" [ref=e655] [cursor=pointer]:
+                    - /url: https://playwright.dev
+                  - text: . This server enables LLMs to interact with web pages through structured accessibility snapshots, bypassing the need for screenshots or visually-tuned models.
+                - generic [ref=e656]:
+                  - heading "Playwright MCP vs Playwright CLI" [level=3] [ref=e657]
+                  - 'link "Permalink: Playwright MCP vs Playwright CLI" [ref=e658] [cursor=pointer]':
+                    - /url: "#playwright-mcp-vs-playwright-cli"
+                    - img [ref=e659]
+                - paragraph [ref=e661]:
+                  - text: This package provides MCP interface into Playwright. If you are using a
+                  - strong [ref=e662]: coding agent
+                  - text: ", you might benefit from using the"
+                  - link "CLI+SKILLS" [ref=e663] [cursor=pointer]:
+                    - /url: https://github.com/microsoft/playwright-cli
+                  - text: instead.
+                - list [ref=e664]:
+                  - listitem [ref=e665]:
+                    - paragraph [ref=e666]:
+                      - strong [ref=e667]: CLI
+                      - text: ": Modern"
+                      - strong [ref=e668]: coding agents
+                      - text: "increasingly favor CLI–based workflows exposed as SKILLs over MCP because CLI invocations are more token-efficient: they avoid loading large tool schemas and verbose accessibility trees into the model context, allowing agents to act through concise, purpose-built commands. This makes CLI + SKILLs better suited for high-throughput coding agents that must balance browser automation with large codebases, tests, and reasoning within limited context windows."
+                      - strong [ref=e669]:
+                        - text: Learn more about
+                        - link "Playwright CLI with SKILLS" [ref=e670] [cursor=pointer]:
+                          - /url: https://github.com/microsoft/playwright-cli
+                      - text: .
+                  - listitem [ref=e671]:
+                    - paragraph [ref=e672]:
+                      - strong [ref=e673]: MCP
+                      - text: ": MCP remains relevant for specialized agentic loops that benefit from persistent state, rich introspection, and iterative reasoning over page structure, such as exploratory automation, self-healing tests, or long-running autonomous workflows where maintaining continuous browser context outweighs token cost concerns."
+                - generic [ref=e674]:
+                  - heading "Key Features" [level=3] [ref=e675]
+                  - 'link "Permalink: Key Features" [ref=e676] [cursor=pointer]':
+                    - /url: "#key-features"
+                    - img [ref=e677]
+                - list [ref=e679]:
+                  - listitem [ref=e680]:
+                    - strong [ref=e681]: Fast and lightweight
+                    - text: . Uses Playwright's accessibility tree, not pixel-based input.
+                  - listitem [ref=e682]:
+                    - strong [ref=e683]: LLM-friendly
+                    - text: . No vision models needed, operates purely on structured data.
+                  - listitem [ref=e684]:
+                    - strong [ref=e685]: Deterministic tool application
+                    - text: . Avoids ambiguity common with screenshot-based approaches.
+                - generic [ref=e686]:
+                  - heading "Requirements" [level=3] [ref=e687]
+                  - 'link "Permalink: Requirements" [ref=e688] [cursor=pointer]':
+                    - /url: "#requirements"
+                    - img [ref=e689]
+                - list [ref=e691]:
+                  - listitem [ref=e692]: Node.js 18 or newer
+                  - listitem [ref=e693]: VS Code, Cursor, Windsurf, Claude Desktop, Goose, Junie or any other MCP client
+                - generic [ref=e694]:
+                  - heading "Getting started" [level=3] [ref=e695]
+                  - 'link "Permalink: Getting started" [ref=e696] [cursor=pointer]':
+                    - /url: "#getting-started"
+                    - img [ref=e697]
+                - paragraph [ref=e699]: First, install the Playwright MCP server with your client.
+                - paragraph [ref=e700]:
+                  - strong [ref=e701]: Standard config
+                  - text: "works in most of the tools:"
+                - generic [ref=e702]:
+                  - generic [ref=e703]: "{ \"mcpServers\": { \"playwright\": { \"command\": \"npx\", \"args\": [ \"@playwright/mcp@latest\" ] } } }"
+                  - button "Copy code to clipboard" [ref=e705] [cursor=pointer]:
+                    - img [ref=e706]
+                - paragraph [ref=e709]:
+                  - link "Install in VS Code" [ref=e710] [cursor=pointer]:
+                    - /url: https://insiders.vscode.dev/redirect?url=vscode%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D
+                    - img "Install in VS Code" [ref=e711]
+                  - link "Install in VS Code Insiders" [ref=e712] [cursor=pointer]:
+                    - /url: https://insiders.vscode.dev/redirect?url=vscode-insiders%3Amcp%2Finstall%3F%257B%2522name%2522%253A%2522playwright%2522%252C%2522command%2522%253A%2522npx%2522%252C%2522args%2522%253A%255B%2522%2540playwright%252Fmcp%2540latest%2522%255D%257D
+                    - img "Install in VS Code Insiders" [ref=e713]
+                - group [ref=e714]:
+                  - generic "Amp" [ref=e715] [cursor=pointer]
+                - group [ref=e716]:
+                  - generic "Antigravity" [ref=e717] [cursor=pointer]
+                - group [ref=e718]:
+                  - generic "Claude Code" [ref=e719] [cursor=pointer]
+                - group [ref=e720]:
+                  - generic "Claude Desktop" [ref=e721] [cursor=pointer]
+                - group [ref=e722]:
+                  - generic "Cline" [ref=e723] [cursor=pointer]
+                - group [ref=e724]:
+                  - generic "Codex" [ref=e725] [cursor=pointer]
+                - group [ref=e726]:
+                  - generic "Copilot" [ref=e727] [cursor=pointer]
+                - group [ref=e728]:
+                  - generic "Cursor" [ref=e729] [cursor=pointer]
+                - group [ref=e730]:
+                  - generic "Factory" [ref=e731] [cursor=pointer]
+                - group [ref=e732]:
+                  - generic "Gemini CLI" [ref=e733] [cursor=pointer]
+                - group [ref=e734]:
+                  - generic "Goose" [ref=e735] [cursor=pointer]
+                - group [ref=e736]:
+                  - generic "Junie" [ref=e737] [cursor=pointer]
+                - group [ref=e738]:
+                  - generic "Kiro" [ref=e739] [cursor=pointer]
+                - group [ref=e740]:
+                  - generic "LM Studio" [ref=e741] [cursor=pointer]
+                - group [ref=e742]:
+                  - generic "opencode" [ref=e743] [cursor=pointer]
+                - group [ref=e744]:
+                  - generic "Qodo Gen" [ref=e745] [cursor=pointer]
+                - group [ref=e746]:
+                  - generic "VS Code" [ref=e747] [cursor=pointer]
+                - group [ref=e748]:
+                  - generic "Warp" [ref=e749] [cursor=pointer]
+                - group [ref=e750]:
+                  - generic "Windsurf" [ref=e751] [cursor=pointer]
+                - generic [ref=e752]:
+                  - heading "Configuration" [level=3] [ref=e753]
+                  - 'link "Permalink: Configuration" [ref=e754] [cursor=pointer]':
+                    - /url: "#configuration"
+                    - img [ref=e755]
+                - paragraph [ref=e757]:
+                  - text: Playwright MCP server supports following arguments. They can be provided in the JSON configuration above, as a part of the
+                  - code [ref=e758]: "\"args\""
+                  - text: "list:"
+                - table [ref=e760]:
+                  - rowgroup [ref=e761]:
+                    - row "Option Description" [ref=e762]:
+                      - columnheader "Option" [ref=e763]
+                      - columnheader "Description" [ref=e764]
+                  - rowgroup [ref=e765]:
+                    - row "--allowed-hosts <hosts...> comma-separated list of hosts this server is allowed to serve from. Defaults to the host the server is bound to. Pass '*' to disable the host check. env PLAYWRIGHT_MCP_ALLOWED_HOSTS" [ref=e766]:
+                      - cell "--allowed-hosts <hosts...>" [ref=e767]
+                      - cell "comma-separated list of hosts this server is allowed to serve from. Defaults to the host the server is bound to. Pass '*' to disable the host check. env PLAYWRIGHT_MCP_ALLOWED_HOSTS" [ref=e768]:
+                        - text: comma-separated list of hosts this server is allowed to serve from. Defaults to the host the server is bound to. Pass '*' to disable the host check.
+                        - emphasis [ref=e769]: env
+                        - code [ref=e770]: PLAYWRIGHT_MCP_ALLOWED_HOSTS
+                    - 'row "--allowed-origins semicolon-separated list of TRUSTED origins to allow the browser to request. Default is to allow all. Important: does not serve as a security boundary and does not affect redirects. env PLAYWRIGHT_MCP_ALLOWED_ORIGINS" [ref=e771]':
+                      - cell "--allowed-origins" [ref=e772]
+                      - 'cell "semicolon-separated list of TRUSTED origins to allow the browser to request. Default is to allow all. Important: does not serve as a security boundary and does not affect redirects. env PLAYWRIGHT_MCP_ALLOWED_ORIGINS" [ref=e773]':
+                        - text: "semicolon-separated list of TRUSTED origins to allow the browser to request. Default is to allow all. Important:"
+                        - emphasis [ref=e774]: does not
+                        - text: serve as a security boundary and
+                        - emphasis [ref=e775]: does not
+                        - text: affect redirects.
+                        - emphasis [ref=e776]: env
+                        - code [ref=e777]: PLAYWRIGHT_MCP_ALLOWED_ORIGINS
+                    - row "--allow-unrestricted-file-access allow access to files outside of the workspace roots. Also allows unrestricted access to file:// URLs. By default access to file system is restricted to workspace root directories (or cwd if no roots are configured) only, and navigation to file:// URLs is blocked. env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS" [ref=e778]:
+                      - cell "--allow-unrestricted-file-access" [ref=e779]
+                      - cell "allow access to files outside of the workspace roots. Also allows unrestricted access to file:// URLs. By default access to file system is restricted to workspace root directories (or cwd if no roots are configured) only, and navigation to file:// URLs is blocked. env PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS" [ref=e780]:
+                        - text: allow access to files outside of the workspace roots. Also allows unrestricted access to file:// URLs. By default access to file system is restricted to workspace root directories (or cwd if no roots are configured) only, and navigation to file:// URLs is blocked.
+                        - emphasis [ref=e781]: env
+                        - code [ref=e782]: PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS
+                    - 'row "--blocked-origins semicolon-separated list of origins to block the browser from requesting. Blocklist is evaluated before allowlist. If used without the allowlist, requests not matching the blocklist are still allowed. Important: does not serve as a security boundary and does not affect redirects. env PLAYWRIGHT_MCP_BLOCKED_ORIGINS" [ref=e783]':
+                      - cell "--blocked-origins" [ref=e784]
+                      - 'cell "semicolon-separated list of origins to block the browser from requesting. Blocklist is evaluated before allowlist. If used without the allowlist, requests not matching the blocklist are still allowed. Important: does not serve as a security boundary and does not affect redirects. env PLAYWRIGHT_MCP_BLOCKED_ORIGINS" [ref=e785]':
+                        - text: "semicolon-separated list of origins to block the browser from requesting. Blocklist is evaluated before allowlist. If used without the allowlist, requests not matching the blocklist are still allowed. Important:"
+                        - emphasis [ref=e786]: does not
+                        - text: serve as a security boundary and
+                        - emphasis [ref=e787]: does not
+                        - text: affect redirects.
+                        - emphasis [ref=e788]: env
+                        - code [ref=e789]: PLAYWRIGHT_MCP_BLOCKED_ORIGINS
+                    - row "--block-service-workers block service workers env PLAYWRIGHT_MCP_BLOCK_SERVICE_WORKERS" [ref=e790]:
+                      - cell "--block-service-workers" [ref=e791]
+                      - cell "block service workers env PLAYWRIGHT_MCP_BLOCK_SERVICE_WORKERS" [ref=e792]:
+                        - text: block service workers
+                        - emphasis [ref=e793]: env
+                        - code [ref=e794]: PLAYWRIGHT_MCP_BLOCK_SERVICE_WORKERS
+                    - 'row "--browser browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge. env PLAYWRIGHT_MCP_BROWSER" [ref=e795]':
+                      - cell "--browser" [ref=e796]
+                      - 'cell "browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge. env PLAYWRIGHT_MCP_BROWSER" [ref=e797]':
+                        - text: "browser or chrome channel to use, possible values: chrome, firefox, webkit, msedge."
+                        - emphasis [ref=e798]: env
+                        - code [ref=e799]: PLAYWRIGHT_MCP_BROWSER
+                    - 'row "--caps comma-separated list of additional capabilities to enable, possible values: vision, pdf, devtools. env PLAYWRIGHT_MCP_CAPS" [ref=e800]':
+                      - cell "--caps" [ref=e801]
+                      - 'cell "comma-separated list of additional capabilities to enable, possible values: vision, pdf, devtools. env PLAYWRIGHT_MCP_CAPS" [ref=e802]':
+                        - text: "comma-separated list of additional capabilities to enable, possible values: vision, pdf, devtools."
+                        - emphasis [ref=e803]: env
+                        - code [ref=e804]: PLAYWRIGHT_MCP_CAPS
+                    - row "--cdp-endpoint CDP endpoint to connect to. env PLAYWRIGHT_MCP_CDP_ENDPOINT" [ref=e805]:
+                      - cell "--cdp-endpoint" [ref=e806]
+                      - cell "CDP endpoint to connect to. env PLAYWRIGHT_MCP_CDP_ENDPOINT" [ref=e807]:
+                        - text: CDP endpoint to connect to.
+                        - emphasis [ref=e808]: env
+                        - code [ref=e809]: PLAYWRIGHT_MCP_CDP_ENDPOINT
+                    - row "--cdp-header <headers...> CDP headers to send with the connect request, multiple can be specified. env PLAYWRIGHT_MCP_CDP_HEADERS" [ref=e810]:
+                      - cell "--cdp-header <headers...>" [ref=e811]
+                      - cell "CDP headers to send with the connect request, multiple can be specified. env PLAYWRIGHT_MCP_CDP_HEADERS" [ref=e812]:
+                        - text: CDP headers to send with the connect request, multiple can be specified.
+                        - emphasis [ref=e813]: env
+                        - code [ref=e814]: PLAYWRIGHT_MCP_CDP_HEADERS
+                    - row "--cdp-timeout timeout in milliseconds for connecting to CDP endpoint, defaults to 30000ms env PLAYWRIGHT_MCP_CDP_TIMEOUT" [ref=e815]:
+                      - cell "--cdp-timeout" [ref=e816]
+                      - cell "timeout in milliseconds for connecting to CDP endpoint, defaults to 30000ms env PLAYWRIGHT_MCP_CDP_TIMEOUT" [ref=e817]:
+                        - text: timeout in milliseconds for connecting to CDP endpoint, defaults to 30000ms
+                        - emphasis [ref=e818]: env
+                        - code [ref=e819]: PLAYWRIGHT_MCP_CDP_TIMEOUT
+                    - 'row "--codegen specify the language to use for code generation, possible values: \"typescript\", \"none\". Default is \"typescript\". env PLAYWRIGHT_MCP_CODEGEN" [ref=e820]':
+                      - cell "--codegen" [ref=e821]
+                      - 'cell "specify the language to use for code generation, possible values: \"typescript\", \"none\". Default is \"typescript\". env PLAYWRIGHT_MCP_CODEGEN" [ref=e822]':
+                        - text: "specify the language to use for code generation, possible values: \"typescript\", \"none\". Default is \"typescript\"."
+                        - emphasis [ref=e823]: env
+                        - code [ref=e824]: PLAYWRIGHT_MCP_CODEGEN
+                    - row "--config path to the configuration file. env PLAYWRIGHT_MCP_CONFIG" [ref=e825]:
+                      - cell "--config" [ref=e826]
+                      - cell "path to the configuration file. env PLAYWRIGHT_MCP_CONFIG" [ref=e827]:
+                        - text: path to the configuration file.
+                        - emphasis [ref=e828]: env
+                        - code [ref=e829]: PLAYWRIGHT_MCP_CONFIG
+                    - 'row "--console-level level of console messages to return: \"error\", \"warning\", \"info\", \"debug\". Each level includes the messages of more severe levels. env PLAYWRIGHT_MCP_CONSOLE_LEVEL" [ref=e830]':
+                      - cell "--console-level" [ref=e831]
+                      - 'cell "level of console messages to return: \"error\", \"warning\", \"info\", \"debug\". Each level includes the messages of more severe levels. env PLAYWRIGHT_MCP_CONSOLE_LEVEL" [ref=e832]':
+                        - text: "level of console messages to return: \"error\", \"warning\", \"info\", \"debug\". Each level includes the messages of more severe levels."
+                        - emphasis [ref=e833]: env
+                        - code [ref=e834]: PLAYWRIGHT_MCP_CONSOLE_LEVEL
+                    - 'row "--device device to emulate, for example: \"iPhone 15\" env PLAYWRIGHT_MCP_DEVICE" [ref=e835]':
+                      - cell "--device" [ref=e836]
+                      - 'cell "device to emulate, for example: \"iPhone 15\" env PLAYWRIGHT_MCP_DEVICE" [ref=e837]':
+                        - text: "device to emulate, for example: \"iPhone 15\""
+                        - emphasis [ref=e838]: env
+                        - code [ref=e839]: PLAYWRIGHT_MCP_DEVICE
+                    - row "--executable-path path to the browser executable. env PLAYWRIGHT_MCP_EXECUTABLE_PATH" [ref=e840]:
+                      - cell "--executable-path" [ref=e841]
+                      - cell "path to the browser executable. env PLAYWRIGHT_MCP_EXECUTABLE_PATH" [ref=e842]:
+                        - text: path to the browser executable.
+                        - emphasis [ref=e843]: env
+                        - code [ref=e844]: PLAYWRIGHT_MCP_EXECUTABLE_PATH
+                    - row "--extension Connect to a running browser instance (Edge/Chrome only). Requires the \"Playwright Extension\" to be installed. env PLAYWRIGHT_MCP_EXTENSION" [ref=e845]:
+                      - cell "--extension" [ref=e846]
+                      - cell "Connect to a running browser instance (Edge/Chrome only). Requires the \"Playwright Extension\" to be installed. env PLAYWRIGHT_MCP_EXTENSION" [ref=e847]:
+                        - text: Connect to a running browser instance (Edge/Chrome only). Requires the "Playwright Extension" to be installed.
+                        - emphasis [ref=e848]: env
+                        - code [ref=e849]: PLAYWRIGHT_MCP_EXTENSION
+                    - row "--endpoint Bound browser endpoint to connect to. env PLAYWRIGHT_MCP_ENDPOINT" [ref=e850]:
+                      - cell "--endpoint" [ref=e851]
+                      - cell "Bound browser endpoint to connect to. env PLAYWRIGHT_MCP_ENDPOINT" [ref=e852]:
+                        - text: Bound browser endpoint to connect to.
+                        - emphasis [ref=e853]: env
+                        - code [ref=e854]: PLAYWRIGHT_MCP_ENDPOINT
+                    - row "--grant-permissions <permissions...> List of permissions to grant to the browser context, for example \"geolocation\", \"clipboard-read\", \"clipboard-write\". env PLAYWRIGHT_MCP_GRANT_PERMISSIONS" [ref=e855]:
+                      - cell "--grant-permissions <permissions...>" [ref=e856]
+                      - cell "List of permissions to grant to the browser context, for example \"geolocation\", \"clipboard-read\", \"clipboard-write\". env PLAYWRIGHT_MCP_GRANT_PERMISSIONS" [ref=e857]:
+                        - text: List of permissions to grant to the browser context, for example "geolocation", "clipboard-read", "clipboard-write".
+                        - emphasis [ref=e858]: env
+                        - code [ref=e859]: PLAYWRIGHT_MCP_GRANT_PERMISSIONS
+                    - row "--headless run browser in headless mode, headed by default env PLAYWRIGHT_MCP_HEADLESS" [ref=e860]:
+                      - cell "--headless" [ref=e861]
+                      - cell "run browser in headless mode, headed by default env PLAYWRIGHT_MCP_HEADLESS" [ref=e862]:
+                        - text: run browser in headless mode, headed by default
+                        - emphasis [ref=e863]: env
+                        - code [ref=e864]: PLAYWRIGHT_MCP_HEADLESS
+                    - row "--host host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces. env PLAYWRIGHT_MCP_HOST" [ref=e865]:
+                      - cell "--host" [ref=e866]
+                      - cell "host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces. env PLAYWRIGHT_MCP_HOST" [ref=e867]:
+                        - text: host to bind server to. Default is localhost. Use 0.0.0.0 to bind to all interfaces.
+                        - emphasis [ref=e868]: env
+                        - code [ref=e869]: PLAYWRIGHT_MCP_HOST
+                    - row "--ignore-https-errors ignore https errors env PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS" [ref=e870]:
+                      - cell "--ignore-https-errors" [ref=e871]
+                      - cell "ignore https errors env PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS" [ref=e872]:
+                        - text: ignore https errors
+                        - emphasis [ref=e873]: env
+                        - code [ref=e874]: PLAYWRIGHT_MCP_IGNORE_HTTPS_ERRORS
+                    - row "--init-page <path...> path to TypeScript file to evaluate on Playwright page object env PLAYWRIGHT_MCP_INIT_PAGE" [ref=e875]:
+                      - cell "--init-page <path...>" [ref=e876]
+                      - cell "path to TypeScript file to evaluate on Playwright page object env PLAYWRIGHT_MCP_INIT_PAGE" [ref=e877]:
+                        - text: path to TypeScript file to evaluate on Playwright page object
+                        - emphasis [ref=e878]: env
+                        - code [ref=e879]: PLAYWRIGHT_MCP_INIT_PAGE
+                    - row "--init-script <path...> path to JavaScript file to add as an initialization script. The script will be evaluated in every page before any of the page's scripts. Can be specified multiple times. env PLAYWRIGHT_MCP_INIT_SCRIPT" [ref=e880]:
+                      - cell "--init-script <path...>" [ref=e881]
+                      - cell "path to JavaScript file to add as an initialization script. The script will be evaluated in every page before any of the page's scripts. Can be specified multiple times. env PLAYWRIGHT_MCP_INIT_SCRIPT" [ref=e882]:
+                        - text: path to JavaScript file to add as an initialization script. The script will be evaluated in every page before any of the page's scripts. Can be specified multiple times.
+                        - emphasis [ref=e883]: env
+                        - code [ref=e884]: PLAYWRIGHT_MCP_INIT_SCRIPT
+                    - row "--isolated keep the browser profile in memory, do not save it to disk. env PLAYWRIGHT_MCP_ISOLATED" [ref=e885]:
+                      - cell "--isolated" [ref=e886]
+                      - cell "keep the browser profile in memory, do not save it to disk. env PLAYWRIGHT_MCP_ISOLATED" [ref=e887]:
+                        - text: keep the browser profile in memory, do not save it to disk.
+                        - emphasis [ref=e888]: env
+                        - code [ref=e889]: PLAYWRIGHT_MCP_ISOLATED
+                    - row "--image-responses whether to send image responses to the client. Can be \"allow\" or \"omit\", Defaults to \"allow\". env PLAYWRIGHT_MCP_IMAGE_RESPONSES" [ref=e890]:
+                      - cell "--image-responses" [ref=e891]
+                      - cell "whether to send image responses to the client. Can be \"allow\" or \"omit\", Defaults to \"allow\". env PLAYWRIGHT_MCP_IMAGE_RESPONSES" [ref=e892]:
+                        - text: whether to send image responses to the client. Can be "allow" or "omit", Defaults to "allow".
+                        - emphasis [ref=e893]: env
+                        - code [ref=e894]: PLAYWRIGHT_MCP_IMAGE_RESPONSES
+                    - row "--no-sandbox disable the sandbox for all process types that are normally sandboxed. env PLAYWRIGHT_MCP_NO_SANDBOX" [ref=e895]:
+                      - cell "--no-sandbox" [ref=e896]
+                      - cell "disable the sandbox for all process types that are normally sandboxed. env PLAYWRIGHT_MCP_NO_SANDBOX" [ref=e897]:
+                        - text: disable the sandbox for all process types that are normally sandboxed.
+                        - emphasis [ref=e898]: env
+                        - code [ref=e899]: PLAYWRIGHT_MCP_NO_SANDBOX
+                    - row "--output-dir path to the directory for output files. env PLAYWRIGHT_MCP_OUTPUT_DIR" [ref=e900]:
+                      - cell "--output-dir" [ref=e901]
+                      - cell "path to the directory for output files. env PLAYWRIGHT_MCP_OUTPUT_DIR" [ref=e902]:
+                        - text: path to the directory for output files.
+                        - emphasis [ref=e903]: env
+                        - code [ref=e904]: PLAYWRIGHT_MCP_OUTPUT_DIR
+                    - row "--output-max-size Threshold for evicting old output files, in bytes. env PLAYWRIGHT_MCP_OUTPUT_MAX_SIZE" [ref=e905]:
+                      - cell "--output-max-size" [ref=e906]
+                      - cell "Threshold for evicting old output files, in bytes. env PLAYWRIGHT_MCP_OUTPUT_MAX_SIZE" [ref=e907]:
+                        - text: Threshold for evicting old output files, in bytes.
+                        - emphasis [ref=e908]: env
+                        - code [ref=e909]: PLAYWRIGHT_MCP_OUTPUT_MAX_SIZE
+                    - row "--output-mode whether to save snapshots, console messages, network logs to a file or to the standard output. Can be \"file\" or \"stdout\". Default is \"stdout\". env PLAYWRIGHT_MCP_OUTPUT_MODE" [ref=e910]:
+                      - cell "--output-mode" [ref=e911]
+                      - cell "whether to save snapshots, console messages, network logs to a file or to the standard output. Can be \"file\" or \"stdout\". Default is \"stdout\". env PLAYWRIGHT_MCP_OUTPUT_MODE" [ref=e912]:
+                        - text: whether to save snapshots, console messages, network logs to a file or to the standard output. Can be "file" or "stdout". Default is "stdout".
+                        - emphasis [ref=e913]: env
+                        - code [ref=e914]: PLAYWRIGHT_MCP_OUTPUT_MODE
+                    - row "--port port to listen on for SSE transport. env PLAYWRIGHT_MCP_PORT" [ref=e915]:
+                      - cell "--port" [ref=e916]
+                      - cell "port to listen on for SSE transport. env PLAYWRIGHT_MCP_PORT" [ref=e917]:
+                        - text: port to listen on for SSE transport.
+                        - emphasis [ref=e918]: env
+                        - code [ref=e919]: PLAYWRIGHT_MCP_PORT
+                    - row "--proxy-bypass comma-separated domains to bypass proxy, for example \".com,chromium.org,.domain.com\" env PLAYWRIGHT_MCP_PROXY_BYPASS" [ref=e920]:
+                      - cell "--proxy-bypass" [ref=e921]
+                      - cell "comma-separated domains to bypass proxy, for example \".com,chromium.org,.domain.com\" env PLAYWRIGHT_MCP_PROXY_BYPASS" [ref=e922]:
+                        - text: comma-separated domains to bypass proxy, for example ".com,chromium.org,.domain.com"
+                        - emphasis [ref=e923]: env
+                        - code [ref=e924]: PLAYWRIGHT_MCP_PROXY_BYPASS
+                    - row "--proxy-server specify proxy server, for example \"http://myproxy:3128\" or \"socks5://myproxy:8080\" env PLAYWRIGHT_MCP_PROXY_SERVER" [ref=e925]:
+                      - cell "--proxy-server" [ref=e926]
+                      - cell "specify proxy server, for example \"http://myproxy:3128\" or \"socks5://myproxy:8080\" env PLAYWRIGHT_MCP_PROXY_SERVER" [ref=e927]:
+                        - text: specify proxy server, for example "
+                        - link "http://myproxy:3128" [ref=e928] [cursor=pointer]:
+                          - /url: http://myproxy:3128
+                        - text: "\" or \"socks5://myproxy:8080\""
+                        - emphasis [ref=e929]: env
+                        - code [ref=e930]: PLAYWRIGHT_MCP_PROXY_SERVER
+                    - row "--sandbox enable the sandbox for all process types that are normally not sandboxed. env PLAYWRIGHT_MCP_SANDBOX" [ref=e931]:
+                      - cell "--sandbox" [ref=e932]
+                      - cell "enable the sandbox for all process types that are normally not sandboxed. env PLAYWRIGHT_MCP_SANDBOX" [ref=e933]:
+                        - text: enable the sandbox for all process types that are normally not sandboxed.
+                        - emphasis [ref=e934]: env
+                        - code [ref=e935]: PLAYWRIGHT_MCP_SANDBOX
+                    - row "--save-session Whether to save the Playwright MCP session into the output directory. env PLAYWRIGHT_MCP_SAVE_SESSION" [ref=e936]:
+                      - cell "--save-session" [ref=e937]
+                      - cell "Whether to save the Playwright MCP session into the output directory. env PLAYWRIGHT_MCP_SAVE_SESSION" [ref=e938]:
+                        - text: Whether to save the Playwright MCP session into the output directory.
+                        - emphasis [ref=e939]: env
+                        - code [ref=e940]: PLAYWRIGHT_MCP_SAVE_SESSION
+                    - row "--secrets path to a file containing secrets in the dotenv format env PLAYWRIGHT_MCP_SECRETS_FILE" [ref=e941]:
+                      - cell "--secrets" [ref=e942]
+                      - cell "path to a file containing secrets in the dotenv format env PLAYWRIGHT_MCP_SECRETS_FILE" [ref=e943]:
+                        - text: path to a file containing secrets in the dotenv format
+                        - emphasis [ref=e944]: env
+                        - code [ref=e945]: PLAYWRIGHT_MCP_SECRETS_FILE
+                    - row "--shared-browser-context reuse the same browser context between all connected HTTP clients. env PLAYWRIGHT_MCP_SHARED_BROWSER_CONTEXT" [ref=e946]:
+                      - cell "--shared-browser-context" [ref=e947]
+                      - cell "reuse the same browser context between all connected HTTP clients. env PLAYWRIGHT_MCP_SHARED_BROWSER_CONTEXT" [ref=e948]:
+                        - text: reuse the same browser context between all connected HTTP clients.
+                        - emphasis [ref=e949]: env
+                        - code [ref=e950]: PLAYWRIGHT_MCP_SHARED_BROWSER_CONTEXT
+                    - row "--snapshot-mode when taking snapshots for responses, specifies the mode to use. Can be \"full\" or \"none\". Default is \"full\". env PLAYWRIGHT_MCP_SNAPSHOT_MODE" [ref=e951]:
+                      - cell "--snapshot-mode" [ref=e952]
+                      - cell "when taking snapshots for responses, specifies the mode to use. Can be \"full\" or \"none\". Default is \"full\". env PLAYWRIGHT_MCP_SNAPSHOT_MODE" [ref=e953]:
+                        - text: when taking snapshots for responses, specifies the mode to use. Can be "full" or "none". Default is "full".
+                        - emphasis [ref=e954]: env
+                        - code [ref=e955]: PLAYWRIGHT_MCP_SNAPSHOT_MODE
+                    - row "--storage-state path to the storage state file for isolated sessions. env PLAYWRIGHT_MCP_STORAGE_STATE" [ref=e956]:
+                      - cell "--storage-state" [ref=e957]
+                      - cell "path to the storage state file for isolated sessions. env PLAYWRIGHT_MCP_STORAGE_STATE" [ref=e958]:
+                        - text: path to the storage state file for isolated sessions.
+                        - emphasis [ref=e959]: env
+                        - code [ref=e960]: PLAYWRIGHT_MCP_STORAGE_STATE
+                    - row "--test-id-attribute specify the attribute to use for test ids, defaults to \"data-testid\" env PLAYWRIGHT_MCP_TEST_ID_ATTRIBUTE" [ref=e961]:
+                      - cell "--test-id-attribute" [ref=e962]
+                      - cell "specify the attribute to use for test ids, defaults to \"data-testid\" env PLAYWRIGHT_MCP_TEST_ID_ATTRIBUTE" [ref=e963]:
+                        - text: specify the attribute to use for test ids, defaults to "data-testid"
+                        - emphasis [ref=e964]: env
+                        - code [ref=e965]: PLAYWRIGHT_MCP_TEST_ID_ATTRIBUTE
+                    - row "--timeout-action specify action timeout in milliseconds, defaults to 5000ms env PLAYWRIGHT_MCP_TIMEOUT_ACTION" [ref=e966]:
+                      - cell "--timeout-action" [ref=e967]
+                      - cell "specify action timeout in milliseconds, defaults to 5000ms env PLAYWRIGHT_MCP_TIMEOUT_ACTION" [ref=e968]:
+                        - text: specify action timeout in milliseconds, defaults to 5000ms
+                        - emphasis [ref=e969]: env
+                        - code [ref=e970]: PLAYWRIGHT_MCP_TIMEOUT_ACTION
+                    - row "--timeout-navigation specify navigation timeout in milliseconds, defaults to 60000ms env PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION" [ref=e971]:
+                      - cell "--timeout-navigation" [ref=e972]
+                      - cell "specify navigation timeout in milliseconds, defaults to 60000ms env PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION" [ref=e973]:
+                        - text: specify navigation timeout in milliseconds, defaults to 60000ms
+                        - emphasis [ref=e974]: env
+                        - code [ref=e975]: PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION
+                    - row "--user-agent specify user agent string env PLAYWRIGHT_MCP_USER_AGENT" [ref=e976]:
+                      - cell "--user-agent" [ref=e977]
+                      - cell "specify user agent string env PLAYWRIGHT_MCP_USER_AGENT" [ref=e978]:
+                        - text: specify user agent string
+                        - emphasis [ref=e979]: env
+                        - code [ref=e980]: PLAYWRIGHT_MCP_USER_AGENT
+                    - row "--user-data-dir path to the user data directory. If not specified, a temporary directory will be created. env PLAYWRIGHT_MCP_USER_DATA_DIR" [ref=e981]:
+                      - cell "--user-data-dir" [ref=e982]
+                      - cell "path to the user data directory. If not specified, a temporary directory will be created. env PLAYWRIGHT_MCP_USER_DATA_DIR" [ref=e983]:
+                        - text: path to the user data directory. If not specified, a temporary directory will be created.
+                        - emphasis [ref=e984]: env
+                        - code [ref=e985]: PLAYWRIGHT_MCP_USER_DATA_DIR
+                    - row "--viewport-size specify browser viewport size in pixels, for example \"1280x720\" env PLAYWRIGHT_MCP_VIEWPORT_SIZE" [ref=e986]:
+                      - cell "--viewport-size" [ref=e987]
+                      - cell "specify browser viewport size in pixels, for example \"1280x720\" env PLAYWRIGHT_MCP_VIEWPORT_SIZE" [ref=e988]:
+                        - text: specify browser viewport size in pixels, for example "1280x720"
+                        - emphasis [ref=e989]: env
+                        - code [ref=e990]: PLAYWRIGHT_MCP_VIEWPORT_SIZE
+                - generic [ref=e991]:
+                  - heading "User profile" [level=3] [ref=e992]
+                  - 'link "Permalink: User profile" [ref=e993] [cursor=pointer]':
+                    - /url: "#user-profile"
+                    - img [ref=e994]
+                - paragraph [ref=e996]: You can run Playwright MCP with persistent profile like a regular browser (default), in isolated contexts for testing sessions, or connect to your existing browser using the browser extension.
+                - paragraph [ref=e997]:
+                  - strong [ref=e998]: Persistent profile
+                - paragraph [ref=e999]:
+                  - text: All the logged in information will be stored in the persistent profile, you can delete it between sessions if you'd like to clear the offline state. Persistent profile is located at the following locations and you can override it with the
+                  - code [ref=e1000]: "--user-data-dir"
+                  - text: argument.
+                - generic [ref=e1001]:
+                  - generic [ref=e1002]:
+                    - generic [ref=e1003]: "# Windows"
+                    - text: "%USERPROFILE%\\AppData\\Local\\ms-playwright\\mcp-{channel}-{workspace-hash}"
+                    - generic [ref=e1004]: "# macOS"
+                    - text: "- ~/Library/Caches/ms-playwright/mcp-{channel}-{workspace-hash}"
+                    - generic [ref=e1005]: "# Linux"
+                    - text: "- ~/.cache/ms-playwright/mcp-{channel}-{workspace-hash}"
+                  - button "Copy code to clipboard" [ref=e1007] [cursor=pointer]:
+                    - img [ref=e1008]
+                - paragraph [ref=e1011]:
+                  - code [ref=e1012]: "{workspace-hash}"
+                  - text: is derived from the MCP client's workspace root, so different projects get separate profiles automatically.
+                - generic [ref=e1013]:
+                  - paragraph [ref=e1014]:
+                    - img [ref=e1015]
+                    - text: Important
+                  - paragraph [ref=e1017]:
+                    - text: A persistent profile can only be used by one browser instance at a time, so concurrent MCP clients sharing the same workspace will conflict. To run several clients in parallel, start each additional client with
+                    - code [ref=e1018]: "--isolated"
+                    - text: or point it at a distinct
+                    - code [ref=e1019]: "--user-data-dir"
+                    - text: .
+                - paragraph [ref=e1020]:
+                  - strong [ref=e1021]: Isolated
+                - paragraph [ref=e1022]:
+                  - text: In the isolated mode, each session is started in the isolated profile. Every time you ask MCP to close the browser, the session is closed and all the storage state for this session is lost. You can provide initial storage state to the browser via the config's
+                  - code [ref=e1023]: contextOptions
+                  - text: or via the
+                  - code [ref=e1024]: "--storage-state"
+                  - text: argument. Learn more about the storage state
+                  - link "here" [ref=e1025] [cursor=pointer]:
+                    - /url: https://playwright.dev/docs/auth
+                  - text: .
+                - generic [ref=e1026]:
+                  - generic [ref=e1027]: "{ \"mcpServers\": { \"playwright\": { \"command\": \"npx\", \"args\": [ \"@playwright/mcp@latest\", \"--isolated\", \"--storage-state={path/to/storage.json}\" ] } } }"
+                  - button "Copy code to clipboard" [ref=e1029] [cursor=pointer]:
+                    - img [ref=e1030]
+                - paragraph [ref=e1033]:
+                  - strong [ref=e1034]: Browser Extension
+                - paragraph [ref=e1035]:
+                  - text: The Playwright MCP Chrome Extension allows you to connect to existing browser tabs and leverage your logged-in sessions and browser state. See
+                  - link "microsoft/playwright › packages/extension" [ref=e1036] [cursor=pointer]:
+                    - /url: https://github.com/microsoft/playwright/tree/main/packages/extension#readme
+                  - text: for installation and setup instructions.
+                - generic [ref=e1037]:
+                  - heading "Initial state" [level=3] [ref=e1038]
+                  - 'link "Permalink: Initial state" [ref=e1039] [cursor=pointer]':
+                    - /url: "#initial-state"
+                    - img [ref=e1040]
+                - paragraph [ref=e1042]: There are multiple ways to provide the initial state to the browser context or a page.
+                - paragraph [ref=e1043]: "For the storage state, you can either:"
+                - list [ref=e1044]:
+                  - listitem [ref=e1045]:
+                    - text: Start with a user data directory using the
+                    - code [ref=e1046]: "--user-data-dir"
+                    - text: argument. This will persist all browser data between the sessions.
+                  - listitem [ref=e1047]:
+                    - text: Start with a storage state file using the
+                    - code [ref=e1048]: "--storage-state"
+                    - text: argument. This will load cookies and local storage from the file into an isolated browser context.
+                - paragraph [ref=e1049]: "For the page state, you can use:"
+                - list [ref=e1050]:
+                  - listitem [ref=e1051]:
+                    - code [ref=e1052]: "--init-page"
+                    - text: to point to a TypeScript file that will be evaluated on the Playwright page object. This allows you to run arbitrary code to set up the page.
+                - generic [ref=e1053]:
+                  - generic [ref=e1054]: "// init-page.ts export default async ({ page }) => { await page.context().grantPermissions(['geolocation']); await page.context().setGeolocation({ latitude: 37.7749, longitude: -122.4194 }); await page.setViewportSize({ width: 1280, height: 720 }); };"
+                  - button "Copy code to clipboard" [ref=e1056] [cursor=pointer]:
+                    - img [ref=e1057]
+                - list [ref=e1060]:
+                  - listitem [ref=e1061]:
+                    - code [ref=e1062]: "--init-script"
+                    - text: to point to a JavaScript file that will be added as an initialization script. The script will be evaluated in every page before any of the page's scripts. This is useful for overriding browser APIs or setting up the environment.
+                - generic [ref=e1063]:
+                  - generic [ref=e1064]: // init-script.js window.isPlaywrightMCP = true;
+                  - button "Copy code to clipboard" [ref=e1066] [cursor=pointer]:
+                    - img [ref=e1067]
+                - generic [ref=e1070]:
+                  - heading "Configuration file" [level=3] [ref=e1071]
+                  - 'link "Permalink: Configuration file" [ref=e1072] [cursor=pointer]':
+                    - /url: "#configuration-file"
+                    - img [ref=e1073]
+                - paragraph [ref=e1075]:
+                  - text: The Playwright MCP server can be configured using a JSON configuration file. You can specify the configuration file using the
+                  - code [ref=e1076]: "--config"
+                  - text: "command line option:"
+                - generic [ref=e1077]:
+                  - generic [ref=e1078]: npx @playwright/mcp@latest --config path/to/config.json
+                  - button "Copy code to clipboard" [ref=e1080] [cursor=pointer]:
+                    - img [ref=e1081]
+                - group [ref=e1084]:
+                  - generic "Configuration file schema" [ref=e1085] [cursor=pointer]
+                - generic [ref=e1086]:
+                  - heading "Standalone MCP server" [level=3] [ref=e1087]
+                  - 'link "Permalink: Standalone MCP server" [ref=e1088] [cursor=pointer]':
+                    - /url: "#standalone-mcp-server"
+                    - img [ref=e1089]
+                - paragraph [ref=e1091]:
+                  - text: When running headed browser on system w/o display or from worker processes of the IDEs, run the MCP server from environment with the DISPLAY and pass the
+                  - code [ref=e1092]: "--port"
+                  - text: flag to enable HTTP transport.
+                - generic [ref=e1093]:
+                  - generic [ref=e1094]: npx @playwright/mcp@latest --port 8931
+                  - button "Copy code to clipboard" [ref=e1096] [cursor=pointer]:
+                    - img [ref=e1097]
+                - paragraph [ref=e1100]:
+                  - text: And then in MCP client config, set the
+                  - code [ref=e1101]: url
+                  - text: "to the HTTP endpoint:"
+                - generic [ref=e1102]:
+                  - generic [ref=e1103]: "{ \"mcpServers\": { \"playwright\": { \"url\": \"http://localhost:8931/mcp\" } } }"
+                  - button "Copy code to clipboard" [ref=e1105] [cursor=pointer]:
+                    - img [ref=e1106]
+                - generic [ref=e1109]:
+                  - heading "Security" [level=2] [ref=e1110]
+                  - 'link "Permalink: Security" [ref=e1111] [cursor=pointer]':
+                    - /url: "#security"
+                    - img [ref=e1112]
+                - paragraph [ref=e1114]:
+                  - text: Playwright MCP is
+                  - strong [ref=e1115]: not
+                  - text: a security boundary. See
+                  - link "MCP Security Best Practices" [ref=e1116] [cursor=pointer]:
+                    - /url: https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices
+                  - text: for guidance on securing your deployment.
+                - group [ref=e1117]:
+                  - generic "Docker" [ref=e1118] [cursor=pointer]
+                - group [ref=e1119]:
+                  - generic "Programmatic usage" [ref=e1120] [cursor=pointer]
+                - generic [ref=e1121]:
+                  - heading "Tools" [level=3] [ref=e1122]
+                  - 'link "Permalink: Tools" [ref=e1123] [cursor=pointer]':
+                    - /url: "#tools"
+                    - img [ref=e1124]
+                - group [ref=e1126]:
+                  - generic "Core automation" [ref=e1127] [cursor=pointer]
+                - group [ref=e1128]:
+                  - generic "Tab management" [ref=e1129] [cursor=pointer]
+                - group [ref=e1130]:
+                  - generic "Browser installation" [ref=e1131] [cursor=pointer]
+                - group [ref=e1132]:
+                  - generic "Configuration (opt-in via --caps=config)" [ref=e1133] [cursor=pointer]
+                - group [ref=e1134]:
+                  - generic "Network (opt-in via --caps=network)" [ref=e1135] [cursor=pointer]
+                - group [ref=e1136]:
+                  - generic "Storage (opt-in via --caps=storage)" [ref=e1137] [cursor=pointer]
+                - group [ref=e1138]:
+                  - generic "DevTools (opt-in via --caps=devtools)" [ref=e1139] [cursor=pointer]
+                - group [ref=e1140]:
+                  - generic "Coordinate-based (opt-in via --caps=vision)" [ref=e1141] [cursor=pointer]
+                - group [ref=e1142]:
+                  - generic "PDF generation (opt-in via --caps=pdf)" [ref=e1143] [cursor=pointer]
+                - group [ref=e1144]:
+                  - generic "Test assertions (opt-in via --caps=testing)" [ref=e1145] [cursor=pointer]
+        - generic [ref=e1149]:
+          - generic [ref=e1152]:
+            - heading "About" [level=2] [ref=e1153]
+            - paragraph [ref=e1154]: Playwright MCP server
+            - generic [ref=e1155]:
+              - img [ref=e1156]
+              - link "www.npmjs.com/package/@playwright/mcp" [ref=e1159] [cursor=pointer]:
+                - /url: https://www.npmjs.com/package/@playwright/mcp
+            - heading "Topics" [level=3] [ref=e1160]
+            - generic [ref=e1162]:
+              - link "mcp" [ref=e1163] [cursor=pointer]:
+                - /url: /topics/mcp
+              - link "playwright" [ref=e1164] [cursor=pointer]:
+                - /url: /topics/playwright
+            - heading "Resources" [level=3] [ref=e1165]
+            - link "Readme" [ref=e1167] [cursor=pointer]:
+              - /url: "#readme-ov-file"
+              - img [ref=e1168]
+              - text: Readme
+            - heading "License" [level=3] [ref=e1170]
+            - link "Apache-2.0 license" [ref=e1172] [cursor=pointer]:
+              - /url: "#Apache-2.0-1-ov-file"
+              - img [ref=e1173]
+              - text: Apache-2.0 license
+            - heading "Code of conduct" [level=3] [ref=e1175]
+            - link "Code of conduct" [ref=e1177] [cursor=pointer]:
+              - /url: "#coc-ov-file"
+              - img [ref=e1178]
+              - text: Code of conduct
+            - heading "Contributing" [level=3] [ref=e1180]
+            - link "Contributing" [ref=e1182] [cursor=pointer]:
+              - /url: "#contributing-ov-file"
+              - img [ref=e1183]
+              - text: Contributing
+            - heading "Security policy" [level=3] [ref=e1185]
+            - link "Security policy" [ref=e1187] [cursor=pointer]:
+              - /url: "#security-ov-file"
+              - img [ref=e1188]
+              - text: Security policy
+            - link "Activity" [ref=e1191] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/activity
+              - img [ref=e1192]
+              - text: Activity
+            - link "Custom properties" [ref=e1195] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/custom-properties
+              - img [ref=e1196]
+              - text: Custom properties
+            - heading "Stars" [level=3] [ref=e1198]
+            - link "34.4k stars" [ref=e1200] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/stargazers
+              - img [ref=e1201]
+              - strong [ref=e1203]: 34.4k
+              - text: stars
+            - heading "Watchers" [level=3] [ref=e1204]
+            - link "133 watching" [ref=e1206] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/watchers
+              - img [ref=e1207]
+              - strong [ref=e1209]: "133"
+              - text: watching
+            - heading "Forks" [level=3] [ref=e1210]
+            - link "2.9k forks" [ref=e1212] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/forks
+              - img [ref=e1213]
+              - strong [ref=e1215]: 2.9k
+              - text: forks
+            - link "Report repository" [ref=e1217] [cursor=pointer]:
+              - /url: /contact/report-content?content_url=https%3A%2F%2Fgithub.com%2Fmicrosoft%2Fplaywright-mcp&report=microsoft+%28user%29
+          - generic [ref=e1219]:
+            - heading "Releases 66" [level=2] [ref=e1220]:
+              - link "Releases 66" [ref=e1221] [cursor=pointer]:
+                - /url: /microsoft/playwright-mcp/releases
+                - text: Releases
+                - generic "66" [ref=e1222]
+            - link "v0.0.76 Latest Jun 10, 20263 weeks ago" [ref=e1223] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/releases/tag/v0.0.76
+              - img [ref=e1224]
+              - generic [ref=e1226]:
+                - generic [ref=e1227]:
+                  - generic [ref=e1228]: v0.0.76
+                  - 'generic "Label: Latest" [ref=e1229]': Latest
+                - generic [ref=e1230]: Jun 10, 20263 weeks ago
+            - link "+ 65 releases" [ref=e1232] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/releases
+          - generic [ref=e1234]:
+            - heading "Contributors 66" [level=2] [ref=e1235]:
+              - link "Contributors 66" [ref=e1236] [cursor=pointer]:
+                - /url: /microsoft/playwright-mcp/graphs/contributors
+                - text: Contributors
+                - generic "66" [ref=e1237]
+            - list [ref=e1238]:
+              - listitem [ref=e1239]:
+                - link "@pavelfeldman" [ref=e1240] [cursor=pointer]:
+                  - /url: https://github.com/pavelfeldman
+                  - img "@pavelfeldman" [ref=e1241]
+              - listitem [ref=e1242]:
+                - link "@yury-s" [ref=e1243] [cursor=pointer]:
+                  - /url: https://github.com/yury-s
+                  - img "@yury-s" [ref=e1244]
+              - listitem [ref=e1245]:
+                - link "@Skn0tt" [ref=e1246] [cursor=pointer]:
+                  - /url: https://github.com/Skn0tt
+                  - img "@Skn0tt" [ref=e1247]
+              - listitem [ref=e1248]:
+                - link "@mxschmitt" [ref=e1249] [cursor=pointer]:
+                  - /url: https://github.com/mxschmitt
+                  - img "@mxschmitt" [ref=e1250]
+              - listitem [ref=e1251]:
+                - link "@dependabot[bot]" [ref=e1252] [cursor=pointer]:
+                  - /url: https://github.com/apps/dependabot
+                  - img "@dependabot[bot]" [ref=e1253]
+              - listitem [ref=e1254]:
+                - link "@dgozman" [ref=e1255] [cursor=pointer]:
+                  - /url: https://github.com/dgozman
+                  - img "@dgozman" [ref=e1256]
+              - listitem [ref=e1257]:
+                - link "@Copilot" [ref=e1258] [cursor=pointer]:
+                  - /url: https://github.com/apps/copilot-swe-agent
+                  - img "@Copilot" [ref=e1259]
+              - listitem [ref=e1260]:
+                - link "@zzxwill" [ref=e1261] [cursor=pointer]:
+                  - /url: https://github.com/zzxwill
+                  - img "@zzxwill" [ref=e1262]
+              - listitem [ref=e1263]:
+                - link "@oleksii-tumanov" [ref=e1264] [cursor=pointer]:
+                  - /url: https://github.com/oleksii-tumanov
+                  - img "@oleksii-tumanov" [ref=e1265]
+              - listitem [ref=e1266]:
+                - link "@ogadra" [ref=e1267] [cursor=pointer]:
+                  - /url: https://github.com/ogadra
+                  - img "@ogadra" [ref=e1268]
+              - listitem [ref=e1269]:
+                - link "@joelverhagen" [ref=e1270] [cursor=pointer]:
+                  - /url: https://github.com/joelverhagen
+                  - img "@joelverhagen" [ref=e1271]
+              - listitem [ref=e1272]:
+                - link "@yyoshiki41" [ref=e1273] [cursor=pointer]:
+                  - /url: https://github.com/yyoshiki41
+                  - img "@yyoshiki41" [ref=e1274]
+              - listitem [ref=e1275]:
+                - link "@lucamorettibuilds" [ref=e1276] [cursor=pointer]:
+                  - /url: https://github.com/lucamorettibuilds
+                  - img "@lucamorettibuilds" [ref=e1277]
+              - listitem [ref=e1278]:
+                - link "@digitarald" [ref=e1279] [cursor=pointer]:
+                  - /url: https://github.com/digitarald
+                  - img "@digitarald" [ref=e1280]
+            - link "+ 52 contributors" [ref=e1282] [cursor=pointer]:
+              - /url: /microsoft/playwright-mcp/graphs/contributors
+          - generic [ref=e1284]:
+            - heading "Languages" [level=2] [ref=e1285]
+            - list [ref=e1291]:
+              - listitem [ref=e1292]:
+                - link "TypeScript 62.0%" [ref=e1293] [cursor=pointer]:
+                  - /url: /microsoft/playwright-mcp/search?l=typescript
+                  - img [ref=e1294]
+                  - generic [ref=e1296]: TypeScript
+                  - generic [ref=e1297]: 62.0%
+              - listitem [ref=e1298]:
+                - link "JavaScript 32.2%" [ref=e1299] [cursor=pointer]:
+                  - /url: /microsoft/playwright-mcp/search?l=javascript
+                  - img [ref=e1300]
+                  - generic [ref=e1302]: JavaScript
+                  - generic [ref=e1303]: 32.2%
+              - listitem [ref=e1304]:
+                - link "Dockerfile 5.8%" [ref=e1305] [cursor=pointer]:
+                  - /url: /microsoft/playwright-mcp/search?l=dockerfile
+                  - img [ref=e1306]
+                  - generic [ref=e1308]: Dockerfile
+                  - generic [ref=e1309]: 5.8%
+  - contentinfo [ref=e1311]:
+    - heading "Footer" [level=2] [ref=e1312]
+    - generic [ref=e1313]:
+      - generic [ref=e1314]:
+        - link "GitHub Homepage" [ref=e1315] [cursor=pointer]:
+          - /url: https://github.com
+          - img [ref=e1316]
+        - generic [ref=e1318]: © 2026 GitHub, Inc.
+      - navigation "Footer" [ref=e1319]:
+        - heading "Footer navigation" [level=3] [ref=e1320]
+        - list "Footer navigation" [ref=e1321]:
+          - listitem [ref=e1322]:
+            - link "Terms" [ref=e1323] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/github-terms/github-terms-of-service
+          - listitem [ref=e1324]:
+            - link "Privacy" [ref=e1325] [cursor=pointer]:
+              - /url: https://docs.github.com/site-policy/privacy-policies/github-privacy-statement
+          - listitem [ref=e1326]:
+            - link "Security" [ref=e1327] [cursor=pointer]:
+              - /url: https://github.com/security
+          - listitem [ref=e1328]:
+            - link "Status" [ref=e1329] [cursor=pointer]:
+              - /url: https://www.githubstatus.com/
+          - listitem [ref=e1330]:
+            - link "Community" [ref=e1331] [cursor=pointer]:
+              - /url: https://github.community/
+          - listitem [ref=e1332]:
+            - link "Docs" [ref=e1333] [cursor=pointer]:
+              - /url: https://docs.github.com/
+          - listitem [ref=e1334]:
+            - link "Contact" [ref=e1335] [cursor=pointer]:
+              - /url: https://support.github.com?tags=dotcom-footer
+          - listitem [ref=e1336]:
+            - button "Manage cookies" [ref=e1338] [cursor=pointer]
+          - listitem [ref=e1339]:
+            - button "Do not share my personal information" [ref=e1341] [cursor=pointer]

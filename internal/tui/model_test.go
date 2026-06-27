@@ -264,6 +264,11 @@ func TestSubmitLongTaskAnchorsTimelineAtMessageBeginning(t *testing.T) {
 	if !strings.Contains(view, "BEGIN_NEW_TASK") {
 		t.Fatalf("new chat did not show beginning of submitted task:\n%s", view)
 	}
+	for _, want := range []string{"progress", "LLM отвечает", "ждём ответ"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("busy footer missing %q while timeline is anchored:\n%s", want, view)
+		}
+	}
 	for _, blocked := range []string{"END_NEW_TASK", "old event"} {
 		if strings.Contains(view, blocked) {
 			t.Fatalf("new chat viewport leaked %q instead of submitted task beginning:\n%s", blocked, view)
@@ -1149,6 +1154,60 @@ func TestTimelineWrapsStyledSummaryWithoutDroppingBeginning(t *testing.T) {
 	}
 }
 
+func TestTimelinePreservesMultilineCommandOutput(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 120
+	m.height = 40
+	m.resize()
+	m.timeline.Width = 92
+	m.appendEvent("command", app.StagePlanning, "/mcp", strings.Join([]string{
+		"mcp servers:",
+		"  github       enabled  stdio  cmd=github-mcp-server args=4",
+		"    search_repositories      read    auto",
+		"  context7     enabled  stdio  cmd=npx args=2",
+		"    get-library-docs         read    auto",
+	}, "\n"), "info")
+
+	rendered := strings.Join(m.renderTimelineLines(m.events), "\n")
+	if strings.Contains(rendered, "auto context7") {
+		t.Fatalf("multiline command output was collapsed:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "read    auto\n  context7") {
+		t.Fatalf("command output line breaks were not preserved:\n%s", rendered)
+	}
+}
+
+func TestTimelineUsesDistinctEventAndIdentifierColors(t *testing.T) {
+	eventKinds := []string{"user", "assistant", "command", "mcp", "files", "next", "progress", "warning", "error"}
+	seenEventColors := map[string]string{}
+	for _, kind := range eventKinds {
+		color := fmt.Sprint(eventKindStyle(kind).GetForeground())
+		if color == "" || color == "250" {
+			t.Fatalf("event kind %q uses default/empty color %q", kind, color)
+		}
+		if previous, ok := seenEventColors[color]; ok {
+			t.Fatalf("event kinds %q and %q share color %q", previous, kind, color)
+		}
+		seenEventColors[color] = kind
+	}
+
+	identifiers := []string{"github", "context7", "playwright", "filesystem"}
+	seenIdentifierColors := map[string]string{}
+	for _, identifier := range identifiers {
+		color := string(timelineIdentifierColor(identifier))
+		if previous, ok := seenIdentifierColors[color]; ok {
+			t.Fatalf("identifiers %q and %q share color %q", previous, identifier, color)
+		}
+		seenIdentifierColors[color] = identifier
+	}
+
+	line := "  github       enabled  stdio  cmd=github-mcp-server args=4"
+	rendered := renderEventSummaryLine(timelineEvent{Kind: "command"}, line)
+	if lipgloss.Width(rendered) != lipgloss.Width(line) {
+		t.Fatalf("color rendering changed visible width: got=%d want=%d line=%q", lipgloss.Width(rendered), lipgloss.Width(line), rendered)
+	}
+}
+
 func TestTimelineResizeClampsPastBottom(t *testing.T) {
 	m := NewModel(context.Background(), &fakeBackend{})
 	m.width = 80
@@ -1289,8 +1348,34 @@ func TestInputHeightExpandsForLongText(t *testing.T) {
 	}
 	m.input.SetValue(strings.Repeat("very long text ", 200))
 	m.resize()
-	if got := m.inputHeight(); got != 6 {
-		t.Fatalf("long input height=%d want max 6", got)
+	if got := m.inputHeight(); got != min(maxInputHeight, m.height-7) {
+		t.Fatalf("long input height=%d want terminal-capped max", got)
+	}
+}
+
+func TestInputShowsDay20DemoPromptWithoutClipping(t *testing.T) {
+	m := NewModel(context.Background(), &fakeBackend{})
+	m.width = 120
+	m.height = 32
+	prompt := strings.TrimSpace(`
+Собери Day 20 отчет о популярных MCP-серверах для coding agent.
+
+Нужны 4 типа evidence: репозитории, документация, браузерная проверка страницы проекта и сохраненный markdown-файл .data/day20/multi-mcp-report.md.
+
+В конце покажи путь к файлу и фактический порядок вызванных инструментов.
+`)
+	m.input.SetValue(prompt)
+	m.resize()
+	view := m.input.View()
+	for _, want := range []string{
+		"Собери Day 20 отчет",
+		"Нужны 4 типа evidence",
+		".data/day20/multi-mcp-report.md",
+		"фактический порядок",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("input view clipped %q:\n%s", want, view)
+		}
 	}
 }
 
