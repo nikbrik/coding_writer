@@ -281,7 +281,9 @@ function validateSharedLayer() {
     ".agents/rules/search.md",
     ".agents/rules/goal-loop.md",
     ".agents/rules/harness-evolution.md",
+    ".agents/rules/versioning.md",
   ]);
+  validateContains(".agents/rules/versioning.md", ["MAJOR.MINOR.PATCH", "scripts/build-cw.sh"]);
   validateContains(".kilo/kilo.jsonc", [".agents/rules/always.md", ".agents/skills"]);
   validateContains(".kilo/rules/ast-index.md", [".agents/rules/search.md"]);
   validateContains(".kilo/rules/keep_going_until_you_reach_the_goal.md", [
@@ -296,6 +298,8 @@ function validateSharedLayer() {
     "VALIDATOR",
     "Harness Value Test",
     "BUGS/",
+    "Краткое summary:",
+    "нумерованный список",
   ]);
   validateContains(".agents/skills/evolve/SKILL.md", [".agents/docs/evolve.md"]);
   validateContains(".agents/skills/consensus-orchestrator/SKILL.md", [
@@ -320,10 +324,18 @@ function validateSharedLayer() {
   ]);
 }
 
+function validateVersionFile() {
+  const text = readText("VERSION").trim();
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(text)) {
+    fail("VERSION: must be plain MAJOR.MINOR.PATCH without leading v, suffixes, metadata, or leading zeroes");
+  }
+}
+
 validateConfig();
 validateSkills();
 validateNoOpenRouterPlaceholderExports();
 validateSharedLayer();
+validateVersionFile();
 validateMarkers(".agents/learnings/LEARNINGS.md", [
   "<!-- LEARNINGS:START -->",
   "<!-- LEARNINGS:END -->",

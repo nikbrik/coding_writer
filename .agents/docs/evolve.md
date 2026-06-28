@@ -308,12 +308,23 @@ Apply controls:
   skip type:skill
   edit RULE-001
   n
+
+Краткое summary:
+1. [по-русски и простыми словами: какое улучшение предлагается и зачем]
+2. [следующее улучшение, если оно есть]
 ```
 
 Stable IDs:
 - prefix by type: `RULE`, `SKILL`, `LEARNING`, `ERROR`, `VALIDATOR`, `PRODUCT-BUG`, `DOC-BUG`, `PROMOTE`;
 - number from 001 in displayed order per type;
 - keep IDs stable while user edits the current proposal.
+
+В конце каждого `/evolve` proposal всегда добавляй `Краткое summary:` на
+русском языке. Формат — нумерованный список `1.`, `2.`, `3.` без вложенных
+bullets. Каждый пункт — одна короткая понятная фраза о предлагаемом улучшении
+и его пользе; не дублируй технические поля `target`, `pattern-key`,
+`priority`. Если proposals нет, всё равно добавь один пункт: `1. Новых
+улучшений не предлагаю: текущий harness уже покрывает найденные сигналы.`
 
 ---
 

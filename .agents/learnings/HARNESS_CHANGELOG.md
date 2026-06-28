@@ -100,4 +100,10 @@
 **Reason**: Captured unsafe OpenRouter placeholder export docs, stale MCP test-helper config failure, and reinforced LLM-only semantic validation decisions.
 
 ---
+## 2026-06-28 | versioning and cw build guardrails
+**Applied**: VALIDATOR-001, ERROR-001
+**Files**: scripts/validate-kilo-harness.mjs, .agents/learnings/ERRORS.md
+**Reason**: Enforced versioning rule wiring and captured Go cache behavior for `scripts/build-cw.sh`.
+
+---
 <!-- HARNESS-CHANGELOG:END -->

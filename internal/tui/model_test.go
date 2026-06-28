@@ -961,6 +961,27 @@ func TestTimelineScrollsAndKeepsManualPosition(t *testing.T) {
 	}
 }
 
+func TestTUIMouseEnabledDefaultsOnWithExplicitOptOut(t *testing.T) {
+	t.Setenv("CODINGWRITER_TUI_MOUSE", "")
+	if !tuiMouseEnabled() {
+		t.Fatal("mouse wheel support should be enabled by default")
+	}
+
+	for _, value := range []string{"0", "false", "no", "off"} {
+		t.Setenv("CODINGWRITER_TUI_MOUSE", value)
+		if tuiMouseEnabled() {
+			t.Fatalf("mouse wheel support should be disabled for %q", value)
+		}
+	}
+
+	for _, value := range []string{"1", "true", "yes", "on", "unexpected"} {
+		t.Setenv("CODINGWRITER_TUI_MOUSE", value)
+		if !tuiMouseEnabled() {
+			t.Fatalf("mouse wheel support should be enabled for %q", value)
+		}
+	}
+}
+
 func TestTimelineMouseWheelScrolls(t *testing.T) {
 	m := NewModel(context.Background(), &fakeBackend{})
 	m.width = 140

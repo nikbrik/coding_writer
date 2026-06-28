@@ -6,6 +6,7 @@ Load these canonical shared rule files before work:
 - `.agents/rules/goal-loop.md`
 - `.agents/rules/harness-evolution.md`
 - `.agents/rules/validation.md`
+- `.agents/rules/versioning.md`
 
 ## Search
 
@@ -19,6 +20,7 @@ Load these canonical shared rule files before work:
 
 - User-facing functionality and homework demos default to the real `cw` TUI. Do not substitute `cw chat --once`, `cw mcp ...`, direct storage edits, smoke scripts, or other CLI-only paths as acceptance proof unless the user explicitly asks for CLI/debug/smoke.
 - CLI commands are allowed for setup, deterministic tests, recovery, and diagnostics. The primary product proof must still go through TUI interactions such as normal text input and slash commands.
+- After changing repo code, run `scripts/build-cw.sh` to rebuild the `cw` binary exposed through the user's `PATH`, then verify the resolved `cw` command before reporting completion.
 
 ## Style
 

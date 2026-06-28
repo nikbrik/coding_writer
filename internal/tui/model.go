@@ -190,7 +190,14 @@ func Run(ctx context.Context, backend Backend, in io.Reader, out io.Writer) erro
 
 func tuiMouseEnabled() bool {
 	value := strings.ToLower(strings.TrimSpace(os.Getenv("CODINGWRITER_TUI_MOUSE")))
-	return value == "1" || value == "true" || value == "yes" || value == "on"
+	switch value {
+	case "", "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func NewModel(ctx context.Context, backend Backend) Model {

@@ -7,14 +7,16 @@
 
 <!-- ERRORS:START -->
 ## 2026-06-19 | go-build-cache-sandbox
-**Команда**: `go test ./...`
-**Симптом**: `operation not permitted` при записи в `~/Library/Caches/go-build`.
-**Причина**: sandbox не разрешает запись в системный Go build cache.
-**Fix**: rerun command with escalation или настроить writable Go cache для текущего workspace.
-**Статус**: resolved
+**Pattern-Key**: go-build-cache-sandbox
+**Команда**: `go test ./...` / `scripts/build-cw.sh`
+**Симптом**: `operation not permitted` при записи в `~/Library/Caches/go-build` или Go module stat/download cache.
+**Причина**: sandbox не разрешает запись в пользовательские Go build/module caches.
+**Fix**: rerun command with escalation; writable `GOCACHE`/`GOMODCACHE` допустим только когда dependencies уже доступны без network fetch.
+**Статус**: workaround
 
 ### Evidence
 - 2026-06-26 Day 18: sandboxed `go test ./internal/cli ./internal/mcp` failed writing `~/Library/Caches/go-build`; escalated rerun passed.
+- 2026-06-28 `scripts/build-cw.sh` in sandbox printed Go module cache `operation not permitted`; isolated temp `GOMODCACHE` then needed network, while escalated rebuild passed cleanly.
 
 ---
 
