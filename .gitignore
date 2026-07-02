@@ -45,6 +45,7 @@ manual_scratch/
 
 # Local storage
 .codingwriter/storage/
+.codingwriter/rag/
 
 # Compiled binaries
 .codingwriter/bin/*

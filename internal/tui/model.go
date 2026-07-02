@@ -71,6 +71,8 @@ const (
 	decisionReviewMemory
 	decisionSaveMemory
 	decisionDismissMemory
+	decisionApproveRAG
+	decisionCancelRAG
 )
 
 type decisionMenuItem struct {
@@ -118,6 +120,7 @@ type Model struct {
 	audit               []process.ProcessAuditEvent
 	warnings            []string
 	appliedArtifacts    []string
+	ragContext          app.RAGContext
 	contextExpanded     bool
 	timelineAnchorTop   bool
 	timelineAnchorEvent int
@@ -126,6 +129,7 @@ type Model struct {
 	err                 *app.Error
 	modelPicker         *modelPickerState
 	contextPicker       *contextPickerState
+	pendingRAG          *RAGPendingAction
 	slashCursor         int
 	decisionCursor      int
 	dismissedProposalID string
@@ -299,6 +303,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slashFinishedMsg:
 		m.busy = false
 		m.busyLabel = ""
+		if strings.HasPrefix(msg.line, "/rag ") {
+			m.pendingRAG = nil
+		}
 		m.input.SetValue("")
 		m.input.Focus()
 		if msg.err != nil {
@@ -744,9 +751,14 @@ func (m Model) sidebarView(width int) string {
 		m.nextActionView(width),
 		m.planView(width),
 		m.evidenceView(width),
-		m.memoryView(width),
-		m.filesView(width),
 	}
+	if rag := m.ragView(width); strings.TrimSpace(rag) != "" {
+		sections = append(sections, rag)
+	}
+	if m.proposal != nil && len(m.proposal.Records) > 0 {
+		sections = append(sections, m.memoryView(width))
+	}
+	sections = append(sections, m.filesView(width))
 	return strings.Join(sections, "\n")
 }
 
@@ -828,6 +840,16 @@ func (m Model) decisionMenu() (decisionMenuState, bool) {
 			},
 		}, true
 	}
+	if m.pendingRAG != nil {
+		return decisionMenuState{
+			Title:  "RAG approval",
+			Detail: m.pendingRAG.Detail,
+			Items: []decisionMenuItem{
+				{Label: "Approve", Detail: m.pendingRAG.Title, Action: decisionApproveRAG},
+				{Label: "Cancel", Detail: "leave RAG unchanged", Action: decisionCancelRAG},
+			},
+		}, true
+	}
 	return decisionMenuState{}, false
 }
 
@@ -835,11 +857,15 @@ func (m Model) decisionMenuActive() bool {
 	if m.busy || m.modelPicker != nil || m.contextPicker != nil || m.slashMenuActive() {
 		return false
 	}
-	if strings.TrimSpace(m.input.Value()) != "" {
+	if strings.TrimSpace(m.input.Value()) != "" && !m.waitingForTypedRAGConfirm() {
 		return false
 	}
 	_, ok := m.decisionMenu()
 	return ok
+}
+
+func (m Model) waitingForTypedRAGConfirm() bool {
+	return m.pendingRAG != nil && strings.TrimSpace(m.pendingRAG.Confirm) != ""
 }
 
 func (m Model) decisionMenuView() string {
@@ -870,6 +896,8 @@ func (m Model) decisionMenuView() string {
 	hint := "↑/↓ select | Enter confirm"
 	if menu.Optional {
 		hint += " | Esc hide"
+	} else if m.waitingForTypedRAGConfirm() {
+		hint += " | type " + m.pendingRAG.Confirm
 	} else {
 		hint += " | type changes"
 	}
@@ -894,7 +922,11 @@ func (m Model) updateDecisionMenu(msg tea.KeyMsg) (Model, tea.Cmd, bool) {
 		next, cmd := m.executeDecision(menu.Items[cursor].Action)
 		return next, cmd, true
 	case "esc":
-		if menu.Optional {
+		if m.pendingRAG != nil {
+			m.appendEvent("rag", stageOfTask(m.task), "RAG action canceled", firstNonEmpty(m.pendingRAGTitle(), "canceled"), "info")
+			m.pendingRAG = nil
+			m.input.SetValue("")
+		} else if menu.Optional {
 			m.dismissMemoryProposal()
 		}
 		return m, nil, true
@@ -937,9 +969,35 @@ func (m Model) executeDecision(action decisionAction) (Model, tea.Cmd) {
 	case decisionDismissMemory:
 		m.dismissMemoryProposal()
 		return m, nil
+	case decisionApproveRAG:
+		if m.pendingRAG == nil {
+			return m, nil
+		}
+		if confirm := strings.TrimSpace(m.pendingRAG.Confirm); confirm != "" && strings.TrimSpace(m.input.Value()) != confirm {
+			m.appendEvent("rag", stageOfTask(m.task), "RAG confirmation required", "type "+confirm+" to confirm", "warning")
+			m.input.Focus()
+			return m, nil
+		}
+		m.busy = true
+		m.busyLabel = "выполняю RAG action"
+		m.input.SetValue("")
+		m.input.Blur()
+		return m, m.confirmRAGAction(*m.pendingRAG)
+	case decisionCancelRAG:
+		m.appendEvent("rag", stageOfTask(m.task), "RAG action canceled", firstNonEmpty(m.pendingRAGTitle(), "canceled"), "info")
+		m.pendingRAG = nil
+		m.input.SetValue("")
+		return m, nil
 	default:
 		return m, nil
 	}
+}
+
+func (m Model) pendingRAGTitle() string {
+	if m.pendingRAG == nil {
+		return ""
+	}
+	return m.pendingRAG.Title
 }
 
 func (m *Model) dismissMemoryProposal() {
@@ -976,7 +1034,7 @@ func (m Model) slashHelpView() string {
 		return boxed(m.width, lines)
 	}
 	cursor := clampIndex(m.slashCursor, len(items))
-	limit := min(len(items), max(4, m.height-8))
+	limit := min(len(items), max(4, m.height-2))
 	visible := visibleSlashCommands(items, cursor, limit)
 	for _, visibleItem := range visible {
 		item := visibleItem.Item
@@ -1183,6 +1241,17 @@ func slashCommandCatalog() []slashCommandItem {
 		{Command: "/mcp remove <server>", Description: "remove MCP server"},
 		{Command: "/mcp tools <server>", Description: "list MCP tools"},
 		{Command: "/mcp call <server> <tool>", Description: "call MCP tool"},
+		{Command: "/rag status", Description: "show local RAG state"},
+		{Command: "/rag setup", Description: "install embeddings, index workspace, enable RAG"},
+		{Command: "/rag index", Description: "rebuild workspace RAG index"},
+		{Command: "/rag report", Description: "compare fixed/structural chunking"},
+		{Command: "/rag chunks", Description: "show chunk metadata samples"},
+		{Command: "/rag search <query>", Description: "search local RAG index"},
+		{Command: "/rag reset index", Description: "delete workspace RAG index"},
+		{Command: "/rag reset model", Description: "remove local embedding model"},
+		{Command: "/rag delete", Description: "delete local RAG stack"},
+		{Command: "/rag on", Description: "enable automatic RAG context"},
+		{Command: "/rag off", Description: "disable automatic RAG context"},
 		{Command: "/memory <short|work|long>", Description: "show memory layer"},
 		{Command: "/memory propose", Description: "propose memory from latest exchange"},
 		{Command: "/memory apply", Description: "apply pending memory"},
@@ -1346,6 +1415,28 @@ func (m Model) evidenceView(width int) string {
 		if ev.OutputPreview != "" {
 			lines = append(lines, safe(ev.OutputPreview))
 		}
+	}
+	return boxed(width, lines)
+}
+
+func (m Model) ragView(width int) string {
+	if strings.TrimSpace(m.ragContext.Mode) == "" {
+		return ""
+	}
+	lines := []string{section("RAG Context")}
+	lines = append(lines, fmt.Sprintf("mode: %s strategy: %s model: %s", emptyDash(m.ragContext.Mode), emptyDash(m.ragContext.Strategy), emptyDash(m.ragContext.Model)))
+	if m.ragContext.Warning != "" {
+		lines = append(lines, "warning: "+safe(m.ragContext.Warning))
+	}
+	if len(m.ragContext.Chunks) == 0 {
+		lines = append(lines, "no chunks")
+		return boxed(width, lines)
+	}
+	for i, ch := range m.ragContext.Chunks {
+		if i >= 5 {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("- %s / %s / %s %.2f", safe(ch.Path), safe(ch.Section), shortID(ch.ChunkID), ch.Score))
 	}
 	return boxed(width, lines)
 }
@@ -1540,6 +1631,11 @@ func (m *Model) applySlashResponse(resp SlashResponse) {
 	} else {
 		m.contextPicker = nil
 	}
+	if resp.PendingRAG != nil {
+		m.pendingRAG = resp.PendingRAG
+		m.contextExpanded = true
+		m.appendEvent("rag", stageOfTask(m.task), resp.PendingRAG.Title, resp.PendingRAG.Detail, "warning")
+	}
 }
 
 func (m Model) approvePlan() tea.Cmd {
@@ -1555,6 +1651,14 @@ func (m Model) rejectPlan() tea.Cmd {
 	return func() tea.Msg {
 		resp, err := m.backend.RejectPlanning(m.ctx, sessionID)
 		return exchangeFinishedMsg{input: "reject planning", resp: resp, err: err}
+	}
+}
+
+func (m Model) confirmRAGAction(action RAGPendingAction) tea.Cmd {
+	sessionID := m.sessionID
+	return func() tea.Msg {
+		resp, err := m.backend.ConfirmRAGAction(m.ctx, sessionID, action)
+		return slashFinishedMsg{line: "/rag " + action.Action, resp: resp, err: err}
 	}
 }
 
@@ -1597,6 +1701,7 @@ func (m *Model) applyResponse(resp ChatResponse) {
 		m.proposal = resp.Proposal
 	}
 	m.audit = resp.AuditEvents
+	m.ragContext = resp.RAGContext
 	m.warnings = append(m.warnings, resp.Warnings...)
 	m.appliedArtifacts = appendUnique(m.appliedArtifacts, resp.AppliedArtifacts...)
 	m.appendResponseMCPEvents(resp.AuditEvents)
@@ -1606,6 +1711,16 @@ func (m *Model) applyResponse(resp ChatResponse) {
 	}
 	for _, warning := range resp.Warnings {
 		m.appendEvent("warning", stageOfTask(m.task), "warning", warning, "warning")
+	}
+	if strings.TrimSpace(resp.RAGContext.Mode) != "" {
+		detail := resp.RAGContext.Mode
+		if len(resp.RAGContext.Chunks) > 0 {
+			detail = fmt.Sprintf("%s, chunks=%d", detail, len(resp.RAGContext.Chunks))
+		}
+		if resp.RAGContext.Warning != "" {
+			detail += ", " + resp.RAGContext.Warning
+		}
+		m.appendEvent("rag", stageOfTask(m.task), "rag retrieval", detail, "info")
 	}
 	for _, file := range resp.AppliedArtifacts {
 		m.appendEvent("files", stageOfTask(m.task), "applied file", file, "info")

@@ -32,6 +32,7 @@ type Backend interface {
 	ApplyMemory(ctx context.Context, req MemoryApplyRequest) (memory.ApplyResult, error)
 	ApprovePlanning(ctx context.Context, sessionID string) (ChatResponse, error)
 	RejectPlanning(ctx context.Context, sessionID string) (ChatResponse, error)
+	ConfirmRAGAction(ctx context.Context, sessionID string, action RAGPendingAction) (SlashResponse, error)
 	PauseTask() (app.TaskState, error)
 	ResumeTask() (app.TaskState, error)
 	Evidence(ctx context.Context, taskID, sessionID string, refs []string) ([]EvidenceView, error)
@@ -70,6 +71,7 @@ type ChatResponse struct {
 	SessionID        string
 	Answer           string
 	Model            string
+	RAGContext       app.RAGContext
 	Proposal         *app.MemoryProposal
 	Transition       *process.TransitionResult
 	AppliedArtifacts []string
@@ -94,7 +96,15 @@ type SlashResponse struct {
 	ActiveProfile   *app.UserProfile
 	ActiveConfig    *app.AppConfig
 	Picker          *PickerPayload
+	PendingRAG      *RAGPendingAction
 	PendingBlocked  string
+}
+
+type RAGPendingAction struct {
+	Action  string `json:"action"`
+	Title   string `json:"title"`
+	Detail  string `json:"detail"`
+	Confirm string `json:"confirm,omitempty"`
 }
 
 type PickerPayload struct {

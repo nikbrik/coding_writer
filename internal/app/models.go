@@ -226,6 +226,33 @@ type AppConfig struct {
 	MemoryModel               string            `json:"memory_model,omitempty"`
 	FavoriteModels            []string          `json:"favorite_models,omitempty"`
 	MCPServers                []MCPServerConfig `json:"mcp_servers,omitempty"`
+	RAG                       RAGConfig         `json:"rag,omitempty"`
+}
+
+type RAGConfig struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Model   string `json:"model,omitempty"`
+}
+
+type RAGContext struct {
+	Mode       string     `json:"mode"`
+	Strategy   string     `json:"strategy,omitempty"`
+	Model      string     `json:"model,omitempty"`
+	Warning    string     `json:"warning,omitempty"`
+	DurationMS int64      `json:"duration_ms,omitempty"`
+	Chunks     []RAGChunk `json:"chunks,omitempty"`
+}
+
+type RAGChunk struct {
+	ChunkID   string  `json:"chunk_id"`
+	Source    string  `json:"source"`
+	Path      string  `json:"path"`
+	Title     string  `json:"title"`
+	Section   string  `json:"section"`
+	StartLine int     `json:"start_line"`
+	EndLine   int     `json:"end_line"`
+	Score     float64 `json:"score"`
+	Text      string  `json:"text,omitempty"`
 }
 
 type MCPServerConfig struct {

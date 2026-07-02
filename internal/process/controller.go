@@ -49,6 +49,7 @@ type ExchangeInput struct {
 	RenderOnly            bool
 	ActionKind            ActionKind
 	TrustedEvidence       []string
+	RAGContext            app.RAGContext
 	RequireMemoryProposal bool
 	SkipSemanticIntent    bool
 	SkipPromptImprovement bool
@@ -457,6 +458,7 @@ func (c *ProcessController) RunExchange(ctx context.Context, input ExchangeInput
 		Task:       promptTask,
 		Memory:     bundle,
 		Invariants: activeInvariants,
+		RAG:        input.RAGContext,
 		Query:      input.Input,
 		Stage:      promptStage,
 		ActionKind: action,

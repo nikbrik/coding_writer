@@ -184,6 +184,7 @@ func (b *ChatBackend) Exchange(ctx context.Context, req tui.ChatRequest) (tui.Ch
 		SessionID:        result.SessionID,
 		Answer:           result.Answer,
 		Model:            result.Model,
+		RAGContext:       result.RAGContext,
 		Proposal:         result.Proposal,
 		Transition:       result.Transition,
 		AppliedArtifacts: result.AppliedArtifacts,
@@ -233,6 +234,9 @@ func toTUISlashResponse(result slashContextResult) tui.SlashResponse {
 		ActiveConfig:    result.ActiveConfig,
 		PendingBlocked:  result.PendingBlocked,
 	}
+	if result.PendingRAG != nil {
+		resp.PendingRAG = result.PendingRAG
+	}
 	if result.Picker != nil {
 		resp.Picker = &tui.PickerPayload{Kind: result.Picker.Kind}
 		for _, session := range result.Picker.Sessions {
@@ -264,6 +268,21 @@ func toTUISlashResponse(result slashContextResult) tui.SlashResponse {
 		}
 	}
 	return resp
+}
+
+func (b *ChatBackend) ConfirmRAGAction(ctx context.Context, sessionID string, action tui.RAGPendingAction) (tui.SlashResponse, error) {
+	var diag bytes.Buffer
+	result, err := runRAGPendingAction(ctx, &diag, b.rt, action)
+	resp := toTUISlashResponse(result)
+	text := strings.TrimSpace(resp.Output)
+	if diag.Len() > 0 {
+		if text != "" {
+			text += "\n"
+		}
+		text += strings.TrimSpace(diag.String())
+	}
+	resp.Output = text
+	return resp, err
 }
 
 func (b *ChatBackend) ApplyMemory(ctx context.Context, req tui.MemoryApplyRequest) (memory.ApplyResult, error) {

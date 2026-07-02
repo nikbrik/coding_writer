@@ -64,6 +64,43 @@ func TestPromptBuilderOrderAndUntrustedTags(t *testing.T) {
 	}
 }
 
+func TestPromptBuilderIncludesRAGContextBeforeMemory(t *testing.T) {
+	profile := profiles.DefaultProfiles(time.Now().UTC())[0]
+	messages, err := NewBuilder().Build(BuildInput{
+		Profile: profile,
+		RAG: app.RAGContext{
+			Mode:     "semantic",
+			Strategy: "structural",
+			Model:    "bge-m3",
+			Chunks: []app.RAGChunk{{
+				ChunkID: "chunk_1",
+				Source:  "workspace",
+				Path:    "RAG.md",
+				Title:   "RAG.md",
+				Section: "Embeddings",
+				Score:   0.91,
+				Text:    "Embedding text with <unsafe> markup.",
+			}},
+		},
+		Memory: app.MemoryBundle{Short: []app.MemoryRecord{{Layer: app.LayerShort, Content: "short memory"}}},
+		Query:  "query",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := RenderMessages(messages)
+	ragIdx := strings.Index(rendered, `id="rag.workspace"`)
+	memIdx := strings.Index(rendered, `id="memory.short"`)
+	if ragIdx < 0 || memIdx < 0 || ragIdx > memIdx {
+		t.Fatalf("RAG context should render before memory:\n%s", rendered)
+	}
+	for _, want := range []string{`trust="untrusted"`, `"chunk_id": "chunk_1"`, `"source": "workspace"`, `"title": "RAG.md"`, `"section": "Embeddings"`, `\u003cunsafe\u003e`} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("RAG prompt missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestPromptBuilderNilFactoryUsesDefault(t *testing.T) {
 	profile := profiles.DefaultProfiles(time.Now().UTC())[0]
 	b := &Builder{}

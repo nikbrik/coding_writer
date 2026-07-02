@@ -29,6 +29,7 @@ import (
 	"github.com/nikbrik/coding_writer/internal/profiles"
 	"github.com/nikbrik/coding_writer/internal/prompting"
 	"github.com/nikbrik/coding_writer/internal/providers"
+	"github.com/nikbrik/coding_writer/internal/rag"
 	"github.com/nikbrik/coding_writer/internal/storage"
 	"github.com/nikbrik/coding_writer/internal/tasks"
 	"github.com/nikbrik/coding_writer/internal/tui"
@@ -574,6 +575,7 @@ type chatResult struct {
 	SessionID        string                      `json:"session_id"`
 	Answer           string                      `json:"answer,omitempty"`
 	Model            string                      `json:"model,omitempty"`
+	RAGContext       app.RAGContext              `json:"rag_context,omitempty"`
 	RenderedPromptID string                      `json:"rendered_prompt_id,omitempty"`
 	RenderedPrompt   string                      `json:"rendered_prompt,omitempty"`
 	Messages         []app.ChatMessage           `json:"messages,omitempty"`
@@ -597,6 +599,71 @@ func runChatExchange(ctx context.Context, rt *runtime, sessionID, input string, 
 		return result, err
 	}
 	return runChatExchangeLocked(ctx, rt, sessionID, input, renderOnly, requireMemoryProposal, verifyCommand, ignoreTask)
+}
+
+func retrieveRAGForChat(ctx context.Context, rt *runtime, input string, renderOnly bool) (app.RAGContext, []string) {
+	if rt == nil || !rt.Config.RAG.Enabled || strings.TrimSpace(input) == "" {
+		return app.RAGContext{}, nil
+	}
+	_ = renderOnly
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return app.RAGContext{Mode: rag.ModeSkipped, Warning: "RAG skipped: workspace unavailable"}, []string{"RAG skipped: workspace unavailable"}
+	}
+	model := strings.TrimSpace(rt.Config.RAG.Model)
+	if model == "" {
+		model = rag.DefaultModel
+	}
+	store := rag.Store{Root: filepath.Join(workspaceRoot, ".codingwriter")}
+	stale, staleReason := store.IsStale(workspaceRoot)
+	searchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	retrieval, err := store.Search(searchCtx, workspaceRoot, rag.DefaultStrategy, input, newRAGEmbedder(model), rag.DefaultSearchTopK)
+	if err != nil {
+		return app.RAGContext{Mode: rag.ModeSkipped, Strategy: rag.DefaultStrategy, Model: model, Warning: "RAG skipped: " + app.AsError(err).Message}, []string{"RAG skipped: " + app.AsError(err).Code}
+	}
+	out := app.RAGContext{
+		Mode:       retrieval.Mode,
+		Strategy:   retrieval.Strategy,
+		Model:      retrieval.Model,
+		Warning:    retrieval.Warning,
+		DurationMS: retrieval.DurationMS,
+	}
+	for _, result := range retrieval.Results {
+		out.Chunks = append(out.Chunks, app.RAGChunk{
+			ChunkID:   result.Chunk.ChunkID,
+			Source:    result.Chunk.Source,
+			Path:      result.Chunk.Path,
+			Title:     result.Chunk.Title,
+			Section:   result.Chunk.Section,
+			StartLine: result.Chunk.StartLine,
+			EndLine:   result.Chunk.EndLine,
+			Score:     result.Score,
+			Text:      result.Chunk.Text,
+		})
+	}
+	warnings := []string{}
+	if retrieval.Warning != "" {
+		warnings = append(warnings, "RAG "+retrieval.Mode+": "+retrieval.Warning)
+	}
+	if stale {
+		if staleReason == "" {
+			staleReason = "workspace changed after indexing"
+		}
+		staleWarning := "stale index: " + staleReason
+		if out.Warning != "" {
+			out.Warning += "; " + staleWarning
+		} else {
+			out.Warning = staleWarning
+		}
+		warnings = append(warnings, "RAG stale: "+staleReason+"; next: /rag index")
+	}
+	if len(out.Chunks) == 0 {
+		out.Mode = rag.ModeSkipped
+		out.Warning = firstNonEmpty(out.Warning, "RAG skipped: no matching chunks")
+		warnings = append(warnings, out.Warning)
+	}
+	return out, warnings
 }
 
 func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input string, renderOnly bool, requireMemoryProposal bool, verifyCommand string, ignoreCurrentTask bool) (chatResult, error) {
@@ -632,8 +699,11 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 	if err != nil {
 		return chatResult{OK: false, SessionID: sessionID, Model: rt.Config.ActiveModel}, err
 	}
-	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal, TrustedEvidence: trustedEvidence, IgnoreCurrentTask: ignoreCurrentTask})
+	ragContext, ragWarnings := retrieveRAGForChat(ctx, rt, input, renderOnly)
+	procResult, err := pc.RunExchange(ctx, process.ExchangeInput{SessionID: sessionID, Input: input, RenderOnly: renderOnly, RequireMemoryProposal: requireMemoryProposal, TrustedEvidence: trustedEvidence, RAGContext: ragContext, IgnoreCurrentTask: ignoreCurrentTask})
 	result := chatResult{OK: true, SessionID: sessionID, Model: rt.Config.ActiveModel, RenderedPromptID: app.NewID("prompt")}
+	result.RAGContext = ragContext
+	result.Warnings = append(result.Warnings, ragWarnings...)
 	if procResult != nil {
 		result.Answer = procResult.Answer
 		result.Model = procResult.Model
@@ -644,7 +714,7 @@ func runChatExchangeLocked(ctx context.Context, rt *runtime, sessionID, input st
 		result.Messages = procResult.Messages
 		result.Proposal = procResult.Proposal
 		result.Transition = procResult.Transition
-		result.Warnings = procResult.Warnings
+		result.Warnings = append(result.Warnings, procResult.Warnings...)
 	}
 	if materialized, matErr := materializeExecutionDeliverable(procResult, currentTask); matErr != nil {
 		result.Warnings = append(result.Warnings, "artifact materialization skipped: "+app.AsError(matErr).Code)
@@ -1411,6 +1481,7 @@ type slashContextResult struct {
 	ActiveProfile   *app.UserProfile
 	ActiveConfig    *app.AppConfig
 	Picker          *slashPicker
+	PendingRAG      *tui.RAGPendingAction
 	PendingBlocked  string
 }
 
@@ -3659,6 +3730,352 @@ func mcpCommandLabel(command string) string {
 	return command
 }
 
+type commandRunner interface {
+	LookPath(file string) (string, error)
+	Run(ctx context.Context, name string, args ...string) (string, error)
+}
+
+type osCommandRunner struct{}
+
+func (osCommandRunner) LookPath(file string) (string, error) { return exec.LookPath(file) }
+
+func (osCommandRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(cctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if len(out) > 64*1024 {
+		out = out[:64*1024]
+	}
+	return string(out), err
+}
+
+var ragRunner commandRunner = osCommandRunner{}
+
+var newRAGEmbedder = func(model string) rag.Embedder {
+	return &rag.OllamaEmbedder{ModelID: model}
+}
+
+func handleRAGSlashResult(ctx context.Context, rt *runtime, parts []string) (slashContextResult, error) {
+	if len(parts) == 1 || parts[1] == "status" {
+		return slashContextResult{Output: ragStatusText(ctx, rt)}, nil
+	}
+	switch parts[1] {
+	case "setup":
+		return slashContextResult{PendingRAG: &tui.RAGPendingAction{Action: "setup", Title: "Install embeddings and index workspace", Detail: "Install/check Ollama, pull bge-m3, run smoke test, index workspace, enable RAG."}, Output: "RAG setup requires approval"}, nil
+	case "index":
+		out, err := runRAGIndex(ctx, rt, rt.Config.RAG.Enabled)
+		return slashContextResult{Output: out, ActiveConfig: &rt.Config}, err
+	case "report":
+		return slashContextResult{Output: ragReportText(rt)}, nil
+	case "chunks":
+		return slashContextResult{Output: ragChunksText(rt)}, nil
+	case "search":
+		query := strings.TrimSpace(strings.Join(parts[2:], " "))
+		if query == "" {
+			return slashContextResult{Output: "usage: /rag search <query>"}, nil
+		}
+		out, err := ragSearchText(ctx, rt, query)
+		return slashContextResult{Output: out}, err
+	case "reset":
+		if len(parts) < 3 {
+			return slashContextResult{Output: "usage: /rag reset index|model"}, nil
+		}
+		switch parts[2] {
+		case "index":
+			return slashContextResult{PendingRAG: &tui.RAGPendingAction{Action: "reset index", Title: "Delete RAG index for this workspace", Detail: "Remove .codingwriter/rag/<workspace-id>/; keep Ollama, model, chat, task, and memory state."}, Output: "RAG index reset requires approval"}, nil
+		case "model":
+			return slashContextResult{PendingRAG: &tui.RAGPendingAction{Action: "reset model", Title: "Remove bge-m3", Detail: "Remove local Ollama embedding model bge-m3. This may affect other apps using Ollama."}, Output: "RAG model reset requires approval"}, nil
+		default:
+			return slashContextResult{Output: "usage: /rag reset index|model"}, nil
+		}
+	case "delete":
+		return slashContextResult{PendingRAG: &tui.RAGPendingAction{Action: "delete", Title: "Delete local RAG stack", Detail: "Type DELETE RAG to confirm. Delete workspace index/config/model and uninstall Homebrew Ollama only when Homebrew owns it. This may affect other apps.", Confirm: "DELETE RAG"}, Output: "RAG delete requires typed confirmation"}, nil
+	case "on":
+		if reason, next := ragEnableProblem(ctx, rt); reason != "" {
+			return slashContextResult{Output: "RAG cannot turn on\nreason: " + reason + "\nnext: " + next}, nil
+		}
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			cfg.RAG.Enabled = true
+			if cfg.RAG.Model == "" {
+				cfg.RAG.Model = rag.DefaultModel
+			}
+			return nil
+		})
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		rt.Config = cfg
+		return slashContextResult{Output: "RAG: on", ActiveConfig: &rt.Config}, nil
+	case "off":
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			cfg.RAG.Enabled = false
+			return nil
+		})
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		rt.Config = cfg
+		return slashContextResult{Output: "RAG: off", ActiveConfig: &rt.Config}, nil
+	default:
+		return slashContextResult{Output: "usage: /rag status|setup|index|report|chunks|search|reset|delete|on|off"}, nil
+	}
+}
+
+func runRAGPendingAction(ctx context.Context, diag io.Writer, rt *runtime, action tui.RAGPendingAction) (slashContextResult, error) {
+	switch action.Action {
+	case "setup":
+		if out, err := ensureRAGSetup(ctx); err != nil {
+			return slashContextResult{Output: strings.TrimSpace(out)}, err
+		}
+		out, err := runRAGIndex(ctx, rt, true)
+		return slashContextResult{Output: "RAG setup complete\n" + out, ActiveConfig: &rt.Config}, err
+	case "reset index":
+		workspaceRoot, _ := os.Getwd()
+		if err := (rag.Store{Root: filepath.Join(workspaceRoot, ".codingwriter")}).DeleteIndex(workspaceRoot); err != nil {
+			return slashContextResult{}, err
+		}
+		return slashContextResult{Output: "RAG index deleted"}, nil
+	case "reset model":
+		out, err := ragRunner.Run(ctx, "ollama", "rm", rag.DefaultModel)
+		if err != nil {
+			return slashContextResult{Output: strings.TrimSpace(out)}, err
+		}
+		return slashContextResult{Output: "RAG model removed: " + rag.DefaultModel}, nil
+	case "delete":
+		workspaceRoot, _ := os.Getwd()
+		warnings := []string{}
+		if err := (rag.Store{Root: filepath.Join(workspaceRoot, ".codingwriter")}).DeleteIndex(workspaceRoot); err != nil {
+			warnings = append(warnings, "index delete failed: "+err.Error())
+		}
+		if out, err := ragRunner.Run(ctx, "ollama", "rm", rag.DefaultModel); err != nil {
+			warnings = append(warnings, "model delete failed: "+strings.TrimSpace(firstNonEmpty(out, err.Error())))
+		}
+		if _, err := ragRunner.LookPath("brew"); err == nil {
+			if out, err := ragRunner.Run(ctx, "brew", "list", "--versions", "ollama"); err == nil && strings.TrimSpace(out) != "" {
+				if out, err := ragRunner.Run(ctx, "brew", "uninstall", "ollama"); err != nil {
+					warnings = append(warnings, "ollama uninstall failed: "+strings.TrimSpace(firstNonEmpty(out, err.Error())))
+				}
+			} else {
+				warnings = append(warnings, "Ollama is not owned by Homebrew; manual Ollama uninstall required if you want to remove the app")
+			}
+		}
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			cfg.RAG = app.RAGConfig{}
+			return nil
+		})
+		if err != nil {
+			return slashContextResult{}, err
+		}
+		rt.Config = cfg
+		lines := []string{"RAG stack deleted"}
+		for _, warning := range warnings {
+			if warning != "" {
+				lines = append(lines, "warning: "+warning)
+			}
+		}
+		return slashContextResult{Output: strings.Join(lines, "\n"), ActiveConfig: &rt.Config}, nil
+	default:
+		_, _ = fmt.Fprintln(diag, "unknown RAG action: "+action.Action)
+		return slashContextResult{Output: "unknown RAG action"}, nil
+	}
+}
+
+func ensureRAGSetup(ctx context.Context) (string, error) {
+	var b strings.Builder
+	if _, err := ragRunner.LookPath("ollama"); err != nil {
+		if _, brewErr := ragRunner.LookPath("brew"); brewErr != nil {
+			return b.String(), app.NewError(app.CategoryCLI, "homebrew_missing", "Homebrew is required to install Ollama automatically", brewErr)
+		}
+		out, err := ragRunner.Run(ctx, "brew", "install", "ollama")
+		b.WriteString(out)
+		if err != nil {
+			return b.String(), err
+		}
+	}
+	out, err := ragRunner.Run(ctx, "ollama", "pull", rag.DefaultModel)
+	b.WriteString(out)
+	if err != nil {
+		return b.String(), err
+	}
+	smokeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if _, err := newRAGEmbedder(rag.DefaultModel).Embed(smokeCtx, []string{"smoke test"}); err != nil {
+		return b.String(), err
+	}
+	return b.String(), nil
+}
+
+func runRAGIndex(ctx context.Context, rt *runtime, enable bool) (string, error) {
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	model := firstNonEmpty(rt.Config.RAG.Model, rag.DefaultModel)
+	indexCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
+	defer cancel()
+	result, err := rag.BuildIndex(indexCtx, rag.IndexOptions{
+		WorkspaceRoot: workspaceRoot,
+		StorageRoot:   filepath.Join(workspaceRoot, ".codingwriter"),
+		Model:         model,
+		Provider:      rag.DefaultProvider,
+	}, newRAGEmbedder(model))
+	if err != nil {
+		return "", err
+	}
+	if enable {
+		cfg, err := rt.ConfigMgr.Update(func(cfg *app.AppConfig) error {
+			cfg.RAG.Enabled = true
+			cfg.RAG.Model = model
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+		rt.Config = cfg
+	}
+	return fmt.Sprintf("RAG index ready\ndocuments: %d\nfixed chunks: %d\nstructural chunks: %d\nstore: .codingwriter/rag/%s", result.Manifest.Documents, result.Report.Fixed.Chunks, result.Report.Structural.Chunks, result.Manifest.WorkspaceID), nil
+}
+
+func ragStoreForCWD() (rag.Store, string, error) {
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return rag.Store{}, "", err
+	}
+	return rag.Store{Root: filepath.Join(workspaceRoot, ".codingwriter")}, workspaceRoot, nil
+}
+
+func ragEnableProblem(ctx context.Context, rt *runtime) (string, string) {
+	store, workspaceRoot, err := ragStoreForCWD()
+	if err != nil {
+		return "workspace unavailable: " + err.Error(), "/rag setup"
+	}
+	if _, err := store.LoadManifest(workspaceRoot); err != nil {
+		return "index missing", "/rag index"
+	}
+	model := firstNonEmpty(rt.Config.RAG.Model, rag.DefaultModel)
+	if _, err := ragRunner.LookPath("ollama"); err != nil {
+		return "Ollama unavailable", "/rag setup"
+	}
+	listCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	out, err := ragRunner.Run(listCtx, "ollama", "list")
+	if err != nil || !strings.Contains(out, model) {
+		return "model missing: " + model, "/rag setup"
+	}
+	return "", ""
+}
+
+func ragStatusText(ctx context.Context, rt *runtime) string {
+	store, workspaceRoot, err := ragStoreForCWD()
+	if err != nil {
+		return "RAG: error\nreason: " + err.Error()
+	}
+	model := firstNonEmpty(rt.Config.RAG.Model, rag.DefaultModel)
+	manifest, manifestErr := store.LoadManifest(workspaceRoot)
+	stale, staleReason := store.IsStale(workspaceRoot)
+	ollamaState := "missing"
+	if _, err := ragRunner.LookPath("ollama"); err == nil {
+		ollamaState = "available"
+	}
+	modelReady := false
+	if ollamaState == "available" {
+		listCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if out, err := ragRunner.Run(listCtx, "ollama", "list"); err == nil && strings.Contains(out, model) {
+			modelReady = true
+		}
+	}
+	lines := []string{
+		"RAG: " + mapBool(rt.Config.RAG.Enabled, "on", "off"),
+		"Ollama: " + ollamaState,
+		"model: " + model + " " + mapBool(modelReady, "ready", "missing"),
+	}
+	if manifestErr != nil {
+		lines = append(lines, "index: missing", "next: /rag setup")
+	} else {
+		lines = append(lines,
+			"index: "+mapBool(stale, "stale", "ready"),
+			fmt.Sprintf("documents: %d", manifest.Documents),
+			fmt.Sprintf("fixed chunks: %d", manifest.Strategies[rag.StrategyFixed].Chunks),
+			fmt.Sprintf("structural chunks: %d", manifest.Strategies[rag.StrategyStructural].Chunks),
+			"default strategy: "+manifest.DefaultStrategy,
+		)
+		if staleReason != "" {
+			lines = append(lines, "reason: "+staleReason)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func ragReportText(rt *runtime) string {
+	store, workspaceRoot, err := ragStoreForCWD()
+	if err != nil {
+		return "RAG report unavailable: " + err.Error()
+	}
+	report, err := store.LoadReport(workspaceRoot)
+	if err != nil {
+		return "RAG report unavailable: index missing"
+	}
+	return fmt.Sprintf("Chunking comparison\n\nfixed:\n  chunks: %d\n  avg tokens: %.1f\n  min tokens: %d\n  max tokens: %d\n  overlap: %d\n  files covered: %d\n\nstructural:\n  chunks: %d\n  avg tokens: %.1f\n  min tokens: %d\n  max tokens: %d\n  sections: %d\n  files covered: %d\n\n%s",
+		report.Fixed.Chunks, report.Fixed.AvgTokens, report.Fixed.MinTokens, report.Fixed.MaxTokens, report.Fixed.OverlapTokens, report.Fixed.FilesCovered,
+		report.Structural.Chunks, report.Structural.AvgTokens, report.Structural.MinTokens, report.Structural.MaxTokens, report.Structural.Sections, report.Structural.FilesCovered,
+		strings.Join(report.Summary, "\n"))
+}
+
+func ragChunksText(rt *runtime) string {
+	store, workspaceRoot, err := ragStoreForCWD()
+	if err != nil {
+		return "RAG chunks unavailable: " + err.Error()
+	}
+	chunks, err := store.LoadChunks(workspaceRoot, rag.DefaultStrategy)
+	if err != nil || len(chunks) == 0 {
+		return "RAG chunks unavailable: index missing"
+	}
+	limit := 3
+	if len(chunks) < limit {
+		limit = len(chunks)
+	}
+	lines := []string{"Chunks sample"}
+	for i := 0; i < limit; i++ {
+		ch := chunks[i]
+		lines = append(lines, "", "chunk_id: "+ch.ChunkID, "strategy: "+ch.Strategy, "source: "+ch.Source, "title/file: "+ch.Title, "section: "+ch.Section, "path: "+ch.Path, fmt.Sprintf("lines: %d-%d", ch.StartLine, ch.EndLine), "embedding: present")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func ragSearchText(ctx context.Context, rt *runtime, query string) (string, error) {
+	store, workspaceRoot, err := ragStoreForCWD()
+	if err != nil {
+		return "", err
+	}
+	model := firstNonEmpty(rt.Config.RAG.Model, rag.DefaultModel)
+	searchCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	result, err := store.Search(searchCtx, workspaceRoot, rag.DefaultStrategy, query, newRAGEmbedder(model), rag.DefaultSearchTopK)
+	if err != nil {
+		return "", err
+	}
+	lines := []string{"RAG search", "mode: " + result.Mode, "strategy: " + result.Strategy}
+	if result.Model != "" {
+		lines = append(lines, "model: "+result.Model)
+	}
+	if result.Warning != "" {
+		lines = append(lines, "warning: "+result.Warning)
+	}
+	for i, res := range result.Results {
+		lines = append(lines, fmt.Sprintf("%d. %s / %s / %s / score %.2f", i+1, res.Chunk.Path, res.Chunk.Section, res.Chunk.ChunkID, res.Score))
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func mapBool(ok bool, yes, no string) string {
+	if ok {
+		return yes
+	}
+	return no
+}
+
 func purgePrivacyData(storageDir string, purgeAudit, purgeTranscripts bool) (int, error) {
 	if !purgeAudit && !purgeTranscripts {
 		return 0, app.NewError(app.CategoryCLI, "missing_purge_target", "choose --audit and/or --transcripts", nil)
@@ -3812,6 +4229,8 @@ func handleSlashResult(ctx context.Context, diag io.Writer, rt *runtime, session
 		return handleProfileSlashResult(rt, parts)
 	case "/mcp":
 		return handleMCPSlashResult(ctx, rt, parts)
+	case "/rag":
+		return handleRAGSlashResult(ctx, rt, parts)
 	default:
 		var out bytes.Buffer
 		done, err := handleSlashLegacy(ctx, &out, diag, rt, sessionID, line)
@@ -3974,6 +4393,17 @@ MCP:
   /mcp remove <server>         remove configured MCP server
   /mcp tools [server]          list tools from configured server
   /mcp call <server> <tool> key=value ...
+RAG:
+  /rag status                  show local RAG state
+  /rag setup                   install Ollama/model, index workspace, enable RAG
+  /rag index                   rebuild workspace RAG index
+  /rag report                  compare fixed and structural chunking
+  /rag chunks                  show chunk metadata samples
+  /rag search <query>          search local RAG index
+  /rag reset index             delete current workspace RAG index
+  /rag reset model             remove local embedding model after approval
+  /rag delete                  remove local RAG stack after approval
+  /rag on|off                  enable or disable automatic RAG context
 Utility:
   /model <id>                  set active model
   /memory <short|work|long>    list memory layer

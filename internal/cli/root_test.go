@@ -19,6 +19,7 @@ import (
 	"github.com/nikbrik/coding_writer/internal/memory"
 	"github.com/nikbrik/coding_writer/internal/process"
 	"github.com/nikbrik/coding_writer/internal/providers"
+	"github.com/nikbrik/coding_writer/internal/rag"
 )
 
 func moveRuntimeTaskToDone(t *testing.T, rt *runtime) app.TaskState {
@@ -93,6 +94,91 @@ func (p *blockingChatProvider) ChatCalls() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.chatCalls
+}
+
+type fakeCommandRunner struct {
+	paths map[string]bool
+	runs  []string
+}
+
+func (r *fakeCommandRunner) LookPath(file string) (string, error) {
+	if r.paths[file] {
+		return "/fake/bin/" + file, nil
+	}
+	return "", os.ErrNotExist
+}
+
+func (r *fakeCommandRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	r.runs = append(r.runs, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+	if name == "ollama" && len(args) > 0 && args[0] == "list" {
+		return rag.DefaultModel + ":latest\n", nil
+	}
+	return "ok\n", nil
+}
+
+type fakeRAGEmbedder struct {
+	model string
+}
+
+func (e fakeRAGEmbedder) Provider() string { return "fake" }
+func (e fakeRAGEmbedder) Model() string    { return e.model }
+func (e fakeRAGEmbedder) Embed(ctx context.Context, texts []string) ([][]float64, error) {
+	out := make([][]float64, 0, len(texts))
+	for _, text := range texts {
+		normalized := strings.ToLower(text)
+		vec := []float64{1, 0, 0}
+		if strings.Contains(normalized, "embedding") || strings.Contains(normalized, "vector") {
+			vec = []float64{0, 1, 0}
+		}
+		if strings.Contains(normalized, "chunk") || strings.Contains(normalized, "section") {
+			vec = []float64{0, 0, 1}
+		}
+		out = append(out, vec)
+	}
+	return out, nil
+}
+
+type deadlineCheckingRAGRunner struct {
+	sawList bool
+}
+
+func (r *deadlineCheckingRAGRunner) LookPath(file string) (string, error) {
+	if file == "ollama" {
+		return "/fake/bin/ollama", nil
+	}
+	return "", os.ErrNotExist
+}
+
+func (r *deadlineCheckingRAGRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	if name == "ollama" && len(args) > 0 && args[0] == "list" {
+		r.sawList = true
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 3*time.Second {
+			return "", fmt.Errorf("ollama list missing short deadline")
+		}
+		return rag.DefaultModel + ":latest\n", nil
+	}
+	return "", nil
+}
+
+type nonHomebrewOllamaRunner struct {
+	runs []string
+}
+
+func (r *nonHomebrewOllamaRunner) LookPath(file string) (string, error) {
+	if file == "ollama" || file == "brew" {
+		return "/fake/bin/" + file, nil
+	}
+	return "", os.ErrNotExist
+}
+
+func (r *nonHomebrewOllamaRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	run := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	r.runs = append(r.runs, run)
+	if run == "brew list --versions ollama" {
+		return "", fmt.Errorf("not installed by Homebrew")
+	}
+	return "ok\n", nil
 }
 
 func TestChatTurnsSerializeAndBlockStaleStateMutation(t *testing.T) {
@@ -229,6 +315,257 @@ func TestSlashHelpNewResumeAndPendingGuard(t *testing.T) {
 	}
 	if resumed.ActiveSessionID != "session_old" || resumed.ActiveTask == nil || resumed.ActiveTask.LastSessionID != "session_old" {
 		t.Fatalf("/resume did not switch session only: %+v", resumed)
+	}
+}
+
+func TestRAGSetupRequiresApprovalThenIndexesWorkspace(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	if err := os.WriteFile(filepath.Join(workspace, "notes.md"), []byte("# RAG\n\nEmbeddings power vector search.\n\n## Chunking\n\nSections keep metadata."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunner := ragRunner
+	oldEmbedder := newRAGEmbedder
+	fakeRunner := &fakeCommandRunner{paths: map[string]bool{"ollama": true, "brew": true}}
+	ragRunner = fakeRunner
+	newRAGEmbedder = func(model string) rag.Embedder { return fakeRAGEmbedder{model: model} }
+	t.Cleanup(func() {
+		ragRunner = oldRunner
+		newRAGEmbedder = oldEmbedder
+	})
+
+	pending, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "setup"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.PendingRAG == nil || pending.PendingRAG.Action != "setup" {
+		t.Fatalf("/rag setup should require interactive approval: %+v", pending)
+	}
+
+	confirmed, err := runRAGPendingAction(context.Background(), io.Discard, rt, *pending.PendingRAG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(confirmed.Output, "RAG setup complete") || !strings.Contains(confirmed.Output, "RAG index ready") {
+		t.Fatalf("unexpected setup output:\n%s", confirmed.Output)
+	}
+	if !rt.Config.RAG.Enabled || rt.Config.RAG.Model != rag.DefaultModel {
+		t.Fatalf("setup should enable RAG config: %+v", rt.Config.RAG)
+	}
+	manifest, err := (rag.Store{Root: filepath.Join(workspace, ".codingwriter")}).LoadManifest(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Documents != 1 || manifest.Strategies[rag.StrategyFixed].Chunks == 0 || manifest.Strategies[rag.StrategyStructural].Chunks == 0 {
+		t.Fatalf("bad manifest: %+v", manifest)
+	}
+	joinedRuns := strings.Join(fakeRunner.runs, "\n")
+	if !strings.Contains(joinedRuns, "ollama pull "+rag.DefaultModel) {
+		t.Fatalf("setup did not pull model, runs=%v", fakeRunner.runs)
+	}
+}
+
+func TestRAGIndexPreservesDisabledState(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	if err := os.WriteFile(filepath.Join(workspace, "notes.md"), []byte("# RAG\n\nEmbeddings power vector search."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Config.RAG.Enabled = false
+	rt.Config.RAG.Model = rag.DefaultModel
+
+	oldEmbedder := newRAGEmbedder
+	newRAGEmbedder = func(model string) rag.Embedder { return fakeRAGEmbedder{model: model} }
+	t.Cleanup(func() { newRAGEmbedder = oldEmbedder })
+
+	indexed, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "index"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexed.Output, "RAG index ready") {
+		t.Fatalf("unexpected index output:\n%s", indexed.Output)
+	}
+	if rt.Config.RAG.Enabled {
+		t.Fatalf("/rag index should preserve disabled automatic retrieval: %+v", rt.Config.RAG)
+	}
+	if _, err := (rag.Store{Root: filepath.Join(workspace, ".codingwriter")}).LoadManifest(workspace); err != nil {
+		t.Fatalf("/rag index should still write an index: %v", err)
+	}
+}
+
+func TestRAGStatusUsesShortOllamaListTimeout(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunner := ragRunner
+	fakeRunner := &deadlineCheckingRAGRunner{}
+	ragRunner = fakeRunner
+	t.Cleanup(func() { ragRunner = oldRunner })
+
+	out := ragStatusText(context.Background(), rt)
+	if !fakeRunner.sawList {
+		t.Fatal("status should query ollama list when ollama is available")
+	}
+	if !strings.Contains(out, "model: bge-m3 ready") {
+		t.Fatalf("unexpected status output:\n%s", out)
+	}
+}
+
+func TestRAGResetIndexRequiresApprovalThenDeletes(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	if err := os.WriteFile(filepath.Join(workspace, "notes.md"), []byte("# RAG\n\nChunk metadata and embeddings."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeRoot := filepath.Join(workspace, ".codingwriter")
+	if _, err := rag.BuildIndex(context.Background(), rag.IndexOptions{WorkspaceRoot: workspace, StorageRoot: storeRoot}, fakeRAGEmbedder{model: rag.DefaultModel}); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "reset", "index"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.PendingRAG == nil || pending.PendingRAG.Action != "reset index" {
+		t.Fatalf("/rag reset index should require approval: %+v", pending)
+	}
+	if _, err := (rag.Store{Root: storeRoot}).LoadManifest(workspace); err != nil {
+		t.Fatalf("index should still exist before approval: %v", err)
+	}
+
+	if _, err := runRAGPendingAction(context.Background(), io.Discard, rt, *pending.PendingRAG); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (rag.Store{Root: storeRoot}).LoadManifest(workspace); err == nil {
+		t.Fatal("index should be deleted after approval")
+	}
+}
+
+func TestRAGOnRequiresUsableIndexAndModel(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunner := ragRunner
+	fakeRunner := &fakeCommandRunner{paths: map[string]bool{"ollama": true}}
+	ragRunner = fakeRunner
+	t.Cleanup(func() { ragRunner = oldRunner })
+
+	blocked, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "on"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(blocked.Output, "RAG cannot turn on") || !strings.Contains(blocked.Output, "index missing") {
+		t.Fatalf("/rag on should reject missing index:\n%s", blocked.Output)
+	}
+	if rt.Config.RAG.Enabled {
+		t.Fatalf("/rag on should keep RAG disabled without usable index: %+v", rt.Config.RAG)
+	}
+
+	if err := os.WriteFile(filepath.Join(workspace, "notes.md"), []byte("# RAG\n\nEmbeddings power vector search."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rag.BuildIndex(context.Background(), rag.IndexOptions{WorkspaceRoot: workspace, StorageRoot: filepath.Join(workspace, ".codingwriter")}, fakeRAGEmbedder{model: rag.DefaultModel}); err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "on"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Output != "RAG: on" || !rt.Config.RAG.Enabled {
+		t.Fatalf("/rag on should enable with usable model and index: output=%q config=%+v", enabled.Output, rt.Config.RAG)
+	}
+}
+
+func TestRAGDeleteDoesNotUninstallNonHomebrewOllama(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	oldRunner := ragRunner
+	fakeRunner := &nonHomebrewOllamaRunner{}
+	ragRunner = fakeRunner
+	t.Cleanup(func() { ragRunner = oldRunner })
+
+	pending, err := handleRAGSlashResult(context.Background(), rt, []string{"/rag", "delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.PendingRAG == nil || pending.PendingRAG.Confirm != "DELETE RAG" {
+		t.Fatalf("/rag delete should require typed confirmation: %+v", pending.PendingRAG)
+	}
+	confirmed, err := runRAGPendingAction(context.Background(), io.Discard, rt, *pending.PendingRAG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(fakeRunner.runs, "\n"), "brew uninstall ollama") {
+		t.Fatalf("delete should not uninstall non-Homebrew Ollama, runs=%v", fakeRunner.runs)
+	}
+	if !strings.Contains(confirmed.Output, "manual Ollama uninstall required") {
+		t.Fatalf("delete should warn about manual Ollama uninstall:\n%s", confirmed.Output)
+	}
+}
+
+func TestRetrieveRAGForChatWarnsOnStaleIndex(t *testing.T) {
+	storageDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	notePath := filepath.Join(workspace, "notes.md")
+	if err := os.WriteFile(notePath, []byte("# RAG\n\nEmbeddings power vector search."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rt, err := newRuntime(context.Background(), &globalOptions{StorageDir: storageDir, Model: "fake/model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Config.RAG.Enabled = true
+	rt.Config.RAG.Model = rag.DefaultModel
+	if _, err := rag.BuildIndex(context.Background(), rag.IndexOptions{WorkspaceRoot: workspace, StorageRoot: filepath.Join(workspace, ".codingwriter")}, fakeRAGEmbedder{model: rag.DefaultModel}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notePath, []byte("# RAG\n\nChanged after indexing."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldEmbedder := newRAGEmbedder
+	newRAGEmbedder = func(model string) rag.Embedder { return fakeRAGEmbedder{model: model} }
+	t.Cleanup(func() { newRAGEmbedder = oldEmbedder })
+
+	ctx, warnings := retrieveRAGForChat(context.Background(), rt, "embedding search", false)
+	if !strings.Contains(ctx.Warning, "stale index") {
+		t.Fatalf("RAG context should warn about stale index: %+v", ctx)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "next: /rag index") {
+		t.Fatalf("timeline warnings should suggest reindex: %v", warnings)
 	}
 }
 

@@ -75,6 +75,9 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 		}
 		messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: taskBlock, CreatedAt: now})
 	}
+	if strings.TrimSpace(input.RAG.Mode) != "" && len(input.RAG.Chunks) > 0 {
+		messages = append(messages, app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderRAGBlock(input.RAG), CreatedAt: now})
+	}
 	messages = append(messages,
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderMemoryBlock("memory.working", "working_memory", input.Memory.Work), CreatedAt: now},
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: renderMemoryBlock("memory.long", "long_memory", input.Memory.Long), CreatedAt: now},
@@ -82,6 +85,43 @@ func (b *Builder) Build(input process.PromptBuildInput) ([]app.ChatMessage, erro
 		app.ChatMessage{ID: app.NewID("msg"), Role: app.RoleUser, Content: `<context_block id="query.current" type="user_query" source="user" trust="untrusted">` + "\n" + validation.EscapeUntrusted(input.Query) + "\n</context_block>", CreatedAt: now},
 	)
 	return messages, nil
+}
+
+type promptRAGChunk struct {
+	ChunkID   string  `json:"chunk_id"`
+	Source    string  `json:"source"`
+	Path      string  `json:"path"`
+	Title     string  `json:"title"`
+	Section   string  `json:"section"`
+	StartLine int     `json:"start_line"`
+	EndLine   int     `json:"end_line"`
+	Score     float64 `json:"score"`
+	Text      string  `json:"text"`
+}
+
+func renderRAGBlock(ctx app.RAGContext) string {
+	compact := struct {
+		Mode     string           `json:"mode"`
+		Strategy string           `json:"strategy"`
+		Model    string           `json:"model,omitempty"`
+		Warning  string           `json:"warning,omitempty"`
+		Chunks   []promptRAGChunk `json:"chunks"`
+	}{Mode: ctx.Mode, Strategy: ctx.Strategy, Model: ctx.Model, Warning: ctx.Warning}
+	for _, ch := range ctx.Chunks {
+		compact.Chunks = append(compact.Chunks, promptRAGChunk{
+			ChunkID:   ch.ChunkID,
+			Source:    ch.Source,
+			Path:      ch.Path,
+			Title:     ch.Title,
+			Section:   ch.Section,
+			StartLine: ch.StartLine,
+			EndLine:   ch.EndLine,
+			Score:     ch.Score,
+			Text:      ch.Text,
+		})
+	}
+	data, _ := json.MarshalIndent(compact, "", "  ")
+	return `<context_block id="rag.workspace" type="retrieved_context" source="rag_index" trust="untrusted">` + "\n" + validation.EscapeUntrusted(string(data)) + "\n</context_block>"
 }
 
 func RenderMessages(messages []app.ChatMessage) string {

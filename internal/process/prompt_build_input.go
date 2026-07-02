@@ -8,6 +8,7 @@ type PromptBuildInput struct {
 	Task       *app.TaskState
 	Memory     app.MemoryBundle
 	Invariants []app.Invariant
+	RAG        app.RAGContext
 	Query      string
 	Stage      app.TaskStage
 	ActionKind ActionKind

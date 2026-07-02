@@ -37,6 +37,7 @@ flowchart TD
 - `internal/tasks` - сохранённое состояние задачи.
 - `internal/invariants` - устойчивые правила проекта.
 - `internal/process` - этапы работы, проверки, обсуждение плана, переходы, доказательства и журнал.
+- `internal/rag` - локальная индексация workspace, чанки, embeddings, JSONL-индекс и поиск для TUI.
 - `internal/storage` - безопасное JSON/JSONL-хранилище с блокировками.
 
 ## Состояние задачи

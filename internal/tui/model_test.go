@@ -28,6 +28,7 @@ type fakeBackend struct {
 	responses  []ChatResponse
 	requests   []ChatRequest
 	applied    []MemoryApplyRequest
+	ragActions []RAGPendingAction
 	models     []string
 	badModels  map[string]bool
 }
@@ -138,6 +139,10 @@ func (f *fakeBackend) Slash(ctx context.Context, sessionID, line string) (SlashR
 		return SlashResponse{Picker: &PickerPayload{Kind: "profiles", Profiles: []ProfileSummary{{ID: "student", DisplayName: "Student", Active: true}}}}, nil
 	}
 	return SlashResponse{Output: "ok"}, nil
+}
+func (f *fakeBackend) ConfirmRAGAction(ctx context.Context, sessionID string, action RAGPendingAction) (SlashResponse, error) {
+	f.ragActions = append(f.ragActions, action)
+	return SlashResponse{Output: "RAG setup complete"}, nil
 }
 func (f *fakeBackend) ApplyMemory(ctx context.Context, req MemoryApplyRequest) (memory.ApplyResult, error) {
 	f.applied = append(f.applied, req)
@@ -773,7 +778,7 @@ func TestSlashCommandsShowWhileTypingSlash(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(Model)
 	view := m.View()
-	for _, want := range []string{"Slash commands", "/new", "/resume", "/profile", "/model", "/process audit", "/exit"} {
+	for _, want := range []string{"Slash commands", "/new", "/resume", "/profile", "/model", "/rag setup", "/process audit", "/exit"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("slash help missing %q:\n%s", want, view)
 		}
@@ -787,6 +792,85 @@ func TestSlashCommandsShowWhileTypingSlash(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "/profile") || !strings.Contains(view, "/process audit") {
 		t.Fatalf("slash filter missing profile/process:\n%s", view)
+	}
+}
+
+func TestRAGSlashPendingActionUsesDecisionMenu(t *testing.T) {
+	fake := &fakeBackend{config: app.AppConfig{ActiveModel: "fake/model", ActiveProfileID: "student"}}
+	m := NewModel(context.Background(), fake)
+	m.width = 120
+	m.height = 40
+
+	m.applySlashResponse(SlashResponse{PendingRAG: &RAGPendingAction{
+		Action: "setup",
+		Title:  "Install embeddings and index workspace",
+		Detail: "Install/check Ollama, pull bge-m3, run smoke test, index workspace, enable RAG.",
+	}})
+
+	view := m.View()
+	for _, want := range []string{"RAG approval", "Install/check Ollama", "Approve", "Cancel"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("RAG approval view missing %q:\n%s", want, view)
+		}
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("approving RAG action should enter busy state and call backend")
+	}
+	msg := messageFromCmd[slashFinishedMsg](t, cmd)
+	next, _ = m.Update(msg)
+	m = next.(Model)
+	if len(fake.ragActions) != 1 || fake.ragActions[0].Action != "setup" {
+		t.Fatalf("RAG action not confirmed: %+v", fake.ragActions)
+	}
+	if m.pendingRAG != nil {
+		t.Fatalf("pending RAG action should clear after completion: %+v", m.pendingRAG)
+	}
+}
+
+func TestRAGDeleteRequiresTypedConfirmation(t *testing.T) {
+	fake := &fakeBackend{config: app.AppConfig{ActiveModel: "fake/model", ActiveProfileID: "student"}}
+	m := NewModel(context.Background(), fake)
+	m.width = 120
+	m.height = 40
+
+	m.applySlashResponse(SlashResponse{PendingRAG: &RAGPendingAction{
+		Action:  "delete",
+		Title:   "Delete local RAG stack",
+		Detail:  "Type DELETE RAG to confirm.",
+		Confirm: "DELETE RAG",
+	}})
+
+	view := m.View()
+	if !strings.Contains(view, "type DELETE RAG") {
+		t.Fatalf("typed confirmation hint missing:\n%s", view)
+	}
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if cmd != nil || m.busy || len(fake.ragActions) != 0 {
+		t.Fatalf("delete should not run without typed confirmation: busy=%v cmd=%v actions=%v", m.busy, cmd, fake.ragActions)
+	}
+	if m.pendingRAG == nil {
+		t.Fatal("pending RAG delete should remain after missing confirmation")
+	}
+
+	m.input.SetValue("DELETE RAG")
+	next, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if !m.busy || cmd == nil {
+		t.Fatal("typed confirmation should execute RAG delete")
+	}
+	msg := messageFromCmd[slashFinishedMsg](t, cmd)
+	next, _ = m.Update(msg)
+	m = next.(Model)
+	if len(fake.ragActions) != 1 || fake.ragActions[0].Action != "delete" {
+		t.Fatalf("RAG delete not confirmed: %+v", fake.ragActions)
+	}
+	if m.pendingRAG != nil {
+		t.Fatalf("pending RAG delete should clear after completion: %+v", m.pendingRAG)
 	}
 }
 
